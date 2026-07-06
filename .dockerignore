@@ -1,0 +1,19 @@
+.git
+.github
+.venv
+**/__pycache__
+*.py[cod]
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.idea
+.vscode
+.DS_Store
+*.egg-info
+**/runs
+# build outputs
+dist
+site
+# large artifacts (not in the wheel; the [ml] path mounts them instead)
+models
+# NOTE: docs/ is kept — Dockerfile.docs needs it.

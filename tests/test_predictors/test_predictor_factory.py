@@ -1,0 +1,242 @@
+"""Tests for the predictor factory wiring.
+
+Covers the string-keyed factory that maps a config / name to a concrete
+performance (throughput) or energy (power) predictor:
+
+  * ``PolicyFactory.throughput_predictor`` / ``PolicyFactory.power_predictor``
+    (``recommender/recommendation_policies/__init__.py``) — the canonical factory used by the
+    strategy layer (performance: intelligent / cache / kavier / named-ML;
+    energy: kavier_power / opendc).
+  * ``create_physics_driven`` (``recommender/predictor_factory.py``) — the
+    low-level physics-predictor constructor the above delegates to.
+  * ``coastline.sdk.pipeline.workflow._create_throughput_predictor`` /
+    ``_create_power_predictor`` — the workflow's near-twin of the above.
+
+Scope / segfault avoidance
+--------------------------
+These tests assert the *type / wiring* of the returned predictor only. They
+never call ``.predict()`` on a data-driven (ML) predictor: all of them lazy-load
+their pickled model on first ``predict``, and unpickling xgboost (and friends)
+in-process segfaults on the host. Constructing them is safe, so we assert the
+returned class without touching the model.
+
+The ``opendc`` energy path constructs an ``OpenDCRunner`` in ``__init__`` that
+requires the OpenDC binary to exist (it may be absent on CI / other machines).
+We patch ``OpenDCEnergyPredictor`` with a lightweight fake so the opendc-path
+assertions are deterministic everywhere and we can verify the calibration_factor
+is forwarded.
+
+The ``intelligent`` performance path is a cache→physics composite: an exact
+cache match (a measured past run) when one exists, else the Kavier analytical
+predictor.
+"""
+
+import pytest
+
+import coastline.sdk.predictors.energy.opendc as opendc_module
+from coastline.sdk.pipeline import workflow as wf
+from coastline.sdk.policies import PolicyFactory, _build_named_ml_predictor
+from coastline.sdk.predictors.base import BasePredictor
+from coastline.sdk.predictors.energy import KavierPowerPredictor
+from coastline.sdk.predictors.factory import create_physics_driven
+from coastline.sdk.predictors.performance.composite import CacheThenPhysicsPredictor
+from coastline.sdk.predictors.performance.physics import KavierPredictor
+from coastline.sdk.predictors.performance.retrieval.cache_predictor import RetrievalPredictor
+
+# ---------------------------------------------------------------------------
+# Fixtures / helpers
+# ---------------------------------------------------------------------------
+
+
+class _FakeOpenDC(BasePredictor):
+    """Stand-in for OpenDCEnergyPredictor that does not need the OpenDC binary.
+
+    Records the calibration_factor so tests can assert the factory forwards it.
+    """
+
+    def __init__(self, calibration_factor: float = 1.0, **kwargs):
+        self.calibration_factor = calibration_factor
+        self.kwargs = kwargs
+
+    def predict(self, workload, context):  # pragma: no cover - never called
+        return None
+
+    def get_name(self) -> str:
+        return "fake-opendc"
+
+
+@pytest.fixture
+def mock_opendc(monkeypatch):
+    """Replace OpenDCEnergyPredictor with a binary-free fake at its import site.
+
+    Both factories use a function-local
+    ``from coastline.sdk.predictors.energy.opendc import OpenDCEnergyPredictor``,
+    so patching the attribute on that module covers every call path.
+    """
+    monkeypatch.setattr(opendc_module, "OpenDCEnergyPredictor", _FakeOpenDC)
+    return _FakeOpenDC
+
+
+# ---------------------------------------------------------------------------
+# PredictorFactory (low-level: physics / power / data-driven)
+# ---------------------------------------------------------------------------
+
+
+class TestPredictorFactory:
+    def test_create_physics_driven_returns_kavier(self):
+        predictor = create_physics_driven()
+        assert isinstance(predictor, KavierPredictor)
+
+
+# ---------------------------------------------------------------------------
+# PolicyFactory.throughput_predictor (performance: string-keyed)
+# ---------------------------------------------------------------------------
+
+
+class TestThroughputPredictorFactory:
+    def test_kavier_returns_kavier_predictor(self):
+        predictor = PolicyFactory.throughput_predictor({"performance": "kavier"})
+        assert isinstance(predictor, KavierPredictor)
+
+    def test_cache_returns_retrieval_predictor(self):
+        predictor = PolicyFactory.throughput_predictor({"performance": "cache"})
+        assert isinstance(predictor, RetrievalPredictor)
+
+    def test_intelligent_wires_cache_first_then_physics(self):
+        # Contract of "intelligent" (CLAUDE.md): exact cache hit of a real past run,
+        # ELSE Kavier physics. The cascade ORDER is the spec, so pin both slots:
+        # a bug that swapped them (physics tried first) or wired two physics
+        # predictors would pass a bare isinstance check but is caught here.
+        predictor = PolicyFactory.throughput_predictor({"performance": "intelligent"})
+        assert isinstance(predictor, CacheThenPhysicsPredictor)
+        assert isinstance(predictor._cache, RetrievalPredictor)  # tried first
+        assert isinstance(predictor._physics, KavierPredictor)  # fallback
+
+    @pytest.mark.parametrize(
+        "name, expected_cls",
+        [
+            ("xgboost", "XGBoostPredictor"),
+            ("catboost", "CatBoostPredictor"),
+        ],
+    )
+    def test_named_ml_model_routes_to_its_own_predictor(self, name, expected_cls):
+        # Oracle = the documented model catalog (CLAUDE.md lists catboost/xgboost/…).
+        # Two DISTINCT names => two DISTINCT classes: this varies behavior and would
+        # catch the regression noted in workflow.py where every named model silently
+        # collapsed to CatBoost. Constructing is safe; we never call .predict.
+        predictor = PolicyFactory.throughput_predictor({"performance": name})
+        assert type(predictor).__name__ == expected_cls
+        # Named models must reach the ML branch, NOT fall through to the intelligent
+        # default composite (that fallback is reserved for UNKNOWN names).
+        assert not isinstance(predictor, CacheThenPhysicsPredictor)
+
+    def test_unknown_name_falls_back_to_intelligent_default(self):
+        # Unknown performance names log a warning and fall back to the intelligent
+        # default rather than raising (lenient by design).
+        predictor = PolicyFactory.throughput_predictor({"performance": "totally-bogus"})
+        assert isinstance(predictor, CacheThenPhysicsPredictor)
+
+
+# ---------------------------------------------------------------------------
+# _build_named_ml_predictor (name -> individual ML predictor or None)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildNamedMlPredictor:
+    # Oracle = the documented data-driven model library (CLAUDE.md / _build_named_ml_predictor
+    # map). Parametrized over the whole catalog so behavior varies name-by-name, not just a
+    # number. Constructing is safe (models unpickle lazily on first .predict, which we never call).
+    @pytest.mark.parametrize(
+        "name, expected_cls",
+        [
+            ("catboost", "CatBoostPredictor"),
+            ("xgboost", "XGBoostPredictor"),
+            ("lightgbm", "LightGBMPredictor"),
+            ("random_forest", "RandomForestPredictor"),
+            ("tabpfn", "TabPFNPredictor"),
+        ],
+    )
+    def test_known_name_builds_its_own_predictor(self, name, expected_cls):
+        predictor = _build_named_ml_predictor(name)
+        assert type(predictor).__name__ == expected_cls
+
+    def test_distinct_names_build_distinct_classes(self):
+        # Regression guard for the bug called out in workflow.py: an earlier duplicate
+        # resolver "silently collapsed every named model — e.g. tabpfn — to CatBoost".
+        # Independent oracle: N distinct catalog names must yield N distinct classes.
+        names = ["catboost", "xgboost", "lightgbm", "random_forest", "tabpfn"]
+        classes = {type(_build_named_ml_predictor(n)).__name__ for n in names}
+        assert len(classes) == len(names)  # 5 names -> 5 different predictor classes
+
+    def test_unknown_name_returns_none(self):
+        assert _build_named_ml_predictor("not-a-real-model") is None
+
+
+# ---------------------------------------------------------------------------
+# PolicyFactory.power_predictor (energy: string-keyed)
+# ---------------------------------------------------------------------------
+
+
+class TestPowerPredictorFactory:
+    def test_kavier_power_returns_kavier_power_predictor(self):
+        predictor = PolicyFactory.power_predictor({"energy": "kavier_power"})
+        assert isinstance(predictor, KavierPowerPredictor)
+
+    def test_default_when_energy_key_missing_is_kavier_power(self):
+        predictor = PolicyFactory.power_predictor({})
+        assert isinstance(predictor, KavierPowerPredictor)
+
+    def test_opendc_returns_opendc_predictor_and_forwards_calibration(self, mock_opendc):
+        predictor = PolicyFactory.power_predictor({"energy": "opendc", "opendc_calibration_factor": 2.5})
+        assert isinstance(predictor, mock_opendc)
+        assert predictor.calibration_factor == 2.5
+
+    def test_unknown_energy_raises_value_error(self):
+        with pytest.raises(ValueError, match="Unknown energy predictor"):
+            PolicyFactory.power_predictor({"energy": "totally-bogus"})
+
+
+# ---------------------------------------------------------------------------
+# workflow module-level factory functions (the near-twin used by the pipeline)
+# ---------------------------------------------------------------------------
+
+
+class TestWorkflowThroughputFactory:
+    @pytest.mark.parametrize("alias", ["kavier", "physics", "physics_driven"])
+    def test_physics_aliases_all_map_to_kavier(self, alias):
+        # All three spelling aliases (CLAUDE.md config map) resolve to the physics engine.
+        predictor = wf._create_throughput_predictor({"performance": alias})
+        assert isinstance(predictor, KavierPredictor)
+
+    @pytest.mark.parametrize("name", ["kavier", "cache", "intelligent", "xgboost", "tabpfn"])
+    def test_workflow_never_diverges_from_policyfactory(self, name):
+        # The workflow factory is documented as delegating to PolicyFactory so the two
+        # "can never diverge on what performance resolves to" — the old copy here
+        # silently collapsed every named model (e.g. tabpfn) to CatBoost.
+        # Independent oracle: for each name the workflow's class == PolicyFactory's class.
+        # Reintroducing a private resolver in workflow.py breaks this parity.
+        via_workflow = type(wf._create_throughput_predictor({"performance": name}))
+        via_factory = type(PolicyFactory.throughput_predictor({"performance": name}))
+        assert via_workflow is via_factory
+
+    def test_default_is_the_intelligent_composite_not_a_bare_engine(self):
+        # Empty config => "intelligent" default. The anti-twin guard: the default must be
+        # the cache→physics COMPOSITE, never a bare Kavier/Retrieval (which is what the old
+        # divergent workflow copy produced). Falsifiable: return KavierPredictor() and it reds.
+        predictor = wf._create_throughput_predictor({})
+        assert isinstance(predictor, CacheThenPhysicsPredictor)
+        assert not isinstance(predictor, (KavierPredictor, RetrievalPredictor))
+
+
+class TestWorkflowPowerFactory:
+    # kavier_power + missing-key default mirror TestPowerPredictorFactory exactly
+    # (both delegate to the same wiring); only the opendc + error paths of this
+    # separate workflow function are exercised here.
+    def test_opendc_returns_opendc_predictor_and_forwards_calibration(self, mock_opendc):
+        predictor = wf._create_power_predictor({"energy": "opendc", "opendc_calibration_factor": 3.0})
+        assert isinstance(predictor, mock_opendc)
+        assert predictor.calibration_factor == 3.0
+
+    def test_unknown_energy_raises_value_error(self):
+        with pytest.raises(ValueError, match="Unknown energy predictor"):
+            wf._create_power_predictor({"energy": "totally-bogus"})

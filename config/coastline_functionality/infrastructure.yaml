@@ -1,0 +1,12 @@
+# SYSTEM — the API loads + enforces these cluster caps. Edit with care: wrong values change what's allowed.
+
+total_gpus: 32                # cluster-wide GPU budget
+max_nodes: 4                  # maximum number of nodes
+max_gpus_per_node: 8          # maximum GPUs per node
+
+# GPU types physically present in cluster (UI picker uses these).
+gpu_models:
+  - NVIDIA-A100-SXM4-80GB
+  - NVIDIA-A100-80GB-PCIe
+  - NVIDIA-H100-PCIe
+  - L40S

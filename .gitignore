@@ -1,0 +1,41 @@
+# build / cache / OS cruft
+__pycache__/
+*.py[cod]
+.DS_Store
+.ruff_cache/
+.pytest_cache/
+.ipynb_checkpoints/
+*.egg-info/
+build/
+dist/
+.venv/
+.idea/
+.vscode/
+
+# uv
+.uv/
+
+# MkDocs build output
+site/
+
+.data6model/
+
+# recommender run artifacts (config-driven CLI output; git-ignored)
+recommender/runs/
+
+# build-time vendored wheels (autoconf OOM model) — never committed
+vendor/*.whl
+
+# generated benchmark outputs
+dev/benchmark/results/*.csv
+
+# local-only trace data
+daniele_data/
+
+# Trained ML model artifacts are TRACKED here (this repo is PRIVATE; the 3 largest ride via Git
+# LFS — see .gitattributes). They are NOT bundled into the uv_build wheel (models/ lives at the
+# repo root, outside src/coastline), and the default Kavier physics path needs none.
+
+# Stray generated doc artifacts (the docs live under docs/ as MkDocs Markdown).
+/USAGE.html
+/cluster_timeline*.pdf

@@ -1,0 +1,126 @@
+"""Config-driven recommender CLI entry point (``python -m coastline.cli.run``)."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import os
+import sys
+from collections.abc import Sequence
+from datetime import datetime, timezone
+from pathlib import Path
+
+import yaml
+
+from coastline.sdk.io.interface.json_output import save_recommendation_to_json
+from coastline.sdk.io.run_config import load_strategy_config
+from coastline.sdk.logging import setup_logging
+from coastline.sdk.models.context import SystemContext
+from coastline.sdk.models.workload import WorkloadSpec
+from coastline.sdk.policies import PolicyFactory
+
+# 3.8+ timezone alias
+UTC = timezone.utc
+
+logger = logging.getLogger(__name__)
+
+_DEFAULT_WORKLOAD = {
+    "llm_model": "llama3.1-70b",
+    "fine_tuning_method": "lora",
+    "tokens_per_sample": 1024,
+    "batch_size": 32,
+    "gpus_per_node": 8,
+    "number_of_nodes": 1,
+}
+
+
+def _workload_and_context(config_path: Path, raw: dict) -> tuple[WorkloadSpec, SystemContext]:
+    workload_cfg = raw.get("workload") or {}
+    system_cfg = raw.get("system") or {}
+    grid_cfg = raw.get("grid") or {}
+
+    gpu_model = system_cfg.get("default_gpu") or "NVIDIA-A100-SXM4-80GB"
+    if grid_cfg.get("gpu_models"):
+        gpu_model = grid_cfg["gpu_models"][0]
+
+    wl = {**_DEFAULT_WORKLOAD, **{k: v for k, v in workload_cfg.items() if k in WorkloadSpec.model_fields}}
+    workload = WorkloadSpec(
+        llm_model=wl.get("llm_model", _DEFAULT_WORKLOAD["llm_model"]),
+        fine_tuning_method=wl.get("fine_tuning_method", _DEFAULT_WORKLOAD["fine_tuning_method"]),
+        gpu_model=gpu_model,
+        # `... or default` (not dict.get default) so an explicit YAML null/0 falls
+        # back to the default instead of crashing int(None) (e.g. config/coastline_functionality/experiment.yaml).
+        tokens_per_sample=int(wl.get("tokens_per_sample") or _DEFAULT_WORKLOAD["tokens_per_sample"]),
+        batch_size=int(wl.get("batch_size") or _DEFAULT_WORKLOAD["batch_size"]),
+        gpus_per_node=int(wl.get("gpus_per_node") or _DEFAULT_WORKLOAD["gpus_per_node"]),
+        number_of_nodes=int(wl.get("number_of_nodes") or _DEFAULT_WORKLOAD["number_of_nodes"]),
+    )
+
+    max_gpus = max(grid_cfg.get("total_gpus") or [16])
+    context = SystemContext.for_gpus(
+        grid_cfg.get("gpu_models") or [gpu_model],
+        max_gpus=max_gpus,
+        gpus_per_node=8,
+        max_nodes=4,
+    )
+    return workload, context
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    setup_logging()
+    parser = argparse.ArgumentParser(prog="coastline run", description="GPU Recommendation Engine")
+    parser.add_argument(
+        "--config", default=os.environ.get("CONFIG_FILE", "./config/coastline_functionality/default.yaml")
+    )
+    parser.add_argument("--input", help="JSON input file (overrides workload/context)")
+    parser.add_argument("--output-dir", default=None, help="Output directory")
+    args = parser.parse_args(argv)
+
+    config_path = Path(args.config)
+    if not config_path.is_file():
+        logger.error("Config not found: %s", config_path)
+        sys.exit(1)
+
+    with open(config_path, encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
+
+    strategy_config = load_strategy_config(config_path)
+    run_id = os.environ.get("RUN_ID", datetime.now(UTC).strftime("%Y_%m_%d_%H_%M_%S"))
+    # Output is decoupled from DATA_DIR (trace-archive is read-only inputs); run
+    # artifacts go to OUTPUT_DIR (default recommender/runs — a tracked directory;
+    # a couple of sample runs are deliberately committed there).
+    output_root = Path(os.environ.get("OUTPUT_DIR", "recommender/runs"))
+    output_dir = Path(args.output_dir) if args.output_dir else output_root / run_id
+
+    logger.info("Recommender starting | run_id=%s | config=%s", run_id, config_path)
+
+    if args.input:
+        with open(args.input, encoding="utf-8") as f:
+            payload = json.load(f)
+        workload = WorkloadSpec(**payload["workload"])
+        context = SystemContext(**payload["context"])
+    else:
+        workload, context = _workload_and_context(config_path, raw)
+
+    strategy_name = strategy_config.get("strategy", {}).get("name", "min_gpu")
+    preset = strategy_config.get("strategy", {}).get("preset")
+    strategy = PolicyFactory.create_strategy(
+        strategy_name=strategy_name,
+        preset=preset,
+        config=strategy_config,
+    )
+    recs = strategy.recommend(workload, context)
+    if not recs:
+        logger.error("No recommendation generated")
+        sys.exit(1)
+
+    result = recs[0]
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out_path = output_dir / "recommendation.json"
+    save_recommendation_to_json(result, out_path)
+    logger.info("Recommendation written to %s", out_path)
+
+
+if __name__ == "__main__":
+    main()

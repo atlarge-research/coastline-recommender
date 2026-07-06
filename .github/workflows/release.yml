@@ -1,0 +1,115 @@
+name: Release
+
+# One tag-triggered pipeline. Bump the version in pyproject.toml (`uv version --bump minor`), commit,
+# tag `vX.Y.Z`, and push the tag. Then:
+#   guard (tag == pyproject version) -> gates (reuse ci.yml) -> build the wheel once
+#     -> PyPI (OIDC) + Docker Hub (cli & ui) in parallel -> GitHub release.
+# The version lives ONLY in pyproject.toml; __version__ is read from installed metadata, and the docs
+# and Dockerfile carry no hardcoded version — so a single bump propagates everywhere.
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  # 8. The tag must equal pyproject's version — the single source of truth.
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag must equal pyproject.toml version
+        run: |
+          VERSION="$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
+          TAG="${GITHUB_REF_NAME#v}"
+          echo "pyproject=$VERSION  tag=$TAG"
+          [ "$VERSION" = "$TAG" ] || { echo "::error::tag v$TAG != pyproject version $VERSION"; exit 1; }
+
+  # 1-4. Reuse the full CI suite (lint + mypy + tests + wheel-smoke + docker-build + docs) as the gate.
+  gates:
+    needs: guard
+    uses: ./.github/workflows/ci.yml
+
+  # Build the wheel + sdist ONCE; PyPI and the GitHub release consume this exact artifact.
+  build:
+    needs: gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*
+          if-no-files-found: error
+
+  # 6. Publish to PyPI via Trusted Publishing (OIDC) — no API token. Configure a PyPI Trusted
+  #    Publisher for this repo with workflow file `release.yml`.
+  pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  # 5. Build + push the cli and ui images to Docker Hub — ONLY if configured. Set the secrets
+  #    DOCKERHUB_USERNAME + DOCKERHUB_TOKEN and the repo variable DOCKERHUB_NAMESPACE; if that
+  #    variable is unset, this job skips and the release proceeds with PyPI + notes only.
+  docker:
+    needs: gates
+    if: ${{ vars.DOCKERHUB_NAMESPACE != '' }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [cli, ui]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/coastline-recommender-${{ matrix.target }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: ${{ matrix.target }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  # 7. Cut the GitHub release (auto notes + artifacts) once PyPI has published. Runs even when the
+  #    Docker job was skipped (Docker Hub not configured), as long as the PyPI publish succeeded.
+  github-release:
+    needs: [pypi, docker]
+    if: ${{ !cancelled() && needs.pypi.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/*

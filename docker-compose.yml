@@ -1,0 +1,62 @@
+name: coastline
+
+# Two runtime services off one multi-stage build (Dockerfile targets `cli` and `ui`) — the image
+# installs the built wheel, so there is no source bind-mount and no PYTHONPATH. Plus a `docs` service
+# serving the MkDocs site.
+#     docker compose run --rm recommender run --config /config/coastline_functionality/config.yaml
+#     docker compose up api            # dashboard on :8000
+#     docker compose up docs           # docs on :8080
+#
+# config/ and the curated trace-archive are bind-mounted read-only (they are not in the wheel).
+
+services:
+  # The recommender CLI — `coastline` (see the Dockerfile `cli` target).
+  recommender:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: cli
+    image: coastline-recommender:cli
+    environment:
+      - DATA_DIR=/trace-archive
+      - OUTPUT_DIR=/runs
+      # The 5 parametric models ship IN the image (bundled in the wheel); mounting ./models adds the
+      # large / instance-based ones (tabpfn, random_forest, …) that are too big for the public wheel.
+      - PORTFOLIO_DIR=/models
+      # Kavier physics path is the lean default; set COASTLINE_ALLOW_RULES_FALLBACK=1 if you build
+      # without the [autoconf] extra and still want the (divisibility-only) rules feasibility path.
+      - COASTLINE_ALLOW_RULES_FALLBACK=1
+    volumes:
+      - ./config:/config:ro
+      - ./recommender/runs:/runs
+      - ./models:/models:ro
+      - ../trace-archive:/trace-archive:ro
+    command: ["run", "--config", "/config/coastline_functionality/config.yaml"]
+
+  # The FastAPI dashboard — `coastline-ui` (see the Dockerfile `ui` target).
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: ui
+    image: coastline-recommender:ui
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      - DATA_DIR=/trace-archive
+      - STRATEGY_CONFIG=/config/coastline_functionality/config.yaml
+      - PORTFOLIO_DIR=/models
+      - COASTLINE_ALLOW_RULES_FALLBACK=1
+    volumes:
+      - ./config:/config:ro
+      - ./models:/models:ro
+      - ../trace-archive:/trace-archive:ro
+
+  # The MkDocs documentation site (see Dockerfile.docs).
+  docs:
+    build:
+      context: .
+      dockerfile: Dockerfile.docs
+    image: coastline-recommender:docs
+    ports:
+      - "${DOCS_PORT:-8080}:80"

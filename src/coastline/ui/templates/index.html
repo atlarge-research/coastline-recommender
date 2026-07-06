@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Coastline — LLM fine-tuning recommender</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/css/coastline.css">
+</head>
+<body>
+<div id="toast" aria-live="polite"></div>
+
+<div class="shell">
+  <header class="masthead">
+    <div class="brand">
+      <span class="mark" aria-hidden="true"></span>
+      <span class="wordmark">COASTLINE</span>
+      <span class="tagline">Context-aware recommender for LLM fine-tuning workloads · VU Amsterdam · IBM Research</span>
+    </div>
+    {% if infra %}
+    <div class="readout">
+      <span class="kv"><span class="k">cluster</span><span class="v">{{ infra.total_gpus }} GPUs</span></span>
+      <span class="kv"><span class="k">nodes</span><span class="v">{{ infra.max_nodes }} max</span></span>
+      <span class="kv"><span class="k">per-node</span><span class="v">{{ infra.max_gpus_per_node }}</span></span>
+      <span class="kv"><span class="k">types</span><span class="v">{{ infra.gpu_models | length }}</span></span>
+    </div>
+    {% endif %}
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="recommend" role="tab">Recommend</button>
+    <button class="tab" data-tab="playground" role="tab">Playground</button>
+    <button class="tab" data-tab="usage" role="tab">Usage</button>
+  </nav>
+
+  <!-- ══ RECOMMEND ═══════════════════════════════════ -->
+  <section class="tab-panel active" id="panel-recommend">
+    <div class="workbench workbench-with-stack">
+      <aside class="panel config">
+        <form id="recForm" novalidate>
+          <fieldset class="group">
+            <legend>Workload</legend>
+            <div class="field span-2">
+              <label for="rec_llm_model">Model</label>
+              <select id="rec_llm_model">
+                {% for m in options.models %}<option value="{{ m }}" {% if m == 'mistral-7b-v0.1' %}selected{% endif %}>{{ m }}</option>{% endfor %}
+              </select>
+            </div>
+            <div class="field">
+              <label for="rec_method">Method</label>
+              <select id="rec_method">
+                {% for m in options.methods %}<option value="{{ m }}" {% if m == 'lora' %}selected{% endif %}>{{ m | upper }}</option>{% endfor %}
+              </select>
+            </div>
+            <div class="field">
+              <label for="rec_tokens">Tokens</label>
+              <select id="rec_tokens">
+                {% for t in options.tokens_per_sample %}<option value="{{ t }}" {% if t == 1024 %}selected{% endif %}>{{ t }}</option>{% endfor %}
+              </select>
+            </div>
+            <div class="field">
+              <label for="rec_batch">Batch</label>
+              <select id="rec_batch">
+                {% for b in options.batch_sizes %}<option value="{{ b }}" {% if b == 4 %}selected{% endif %}>{{ b }}</option>{% endfor %}
+              </select>
+            </div>
+            <div class="field">
+              <label for="rec_epochs">Epochs</label>
+              <input type="number" id="rec_epochs" min="1" max="100" value="3">
+            </div>
+            <div class="field span-2">
+              <label for="rec_dataset">Dataset <span class="unit">samples</span></label>
+              <input type="number" id="rec_dataset" min="1" step="1" value="10000">
+            </div>
+          </fieldset>
+
+          <fieldset class="group">
+            <legend>Hardware</legend>
+            <div class="field span-2">
+              <label for="rec_gpu_model">GPU model</label>
+              <select id="rec_gpu_model">
+                {% for g in options.gpus %}<option value="{{ g }}" {% if g == 'NVIDIA-A100-SXM4-80GB' %}selected{% endif %}>{{ g }}</option>{% endfor %}
+              </select>
+            </div>
+            <div class="field span-2">
+              <div class="segmented" id="hwMode" role="tablist">
+                <button type="button" class="seg active" data-mode="total">Total GPUs</button>
+                <button type="button" class="seg" data-mode="nodes">Nodes × per-node</button>
+              </div>
+            </div>
+            <div class="field span-2" data-hw="total">
+              <label for="rec_total_gpus">GPUs available <span class="unit">≤ {{ infra.total_gpus if infra else 1024 }}</span></label>
+              <input type="number" id="rec_total_gpus" min="1" max="{{ infra.total_gpus if infra else 1024 }}" step="1" value="16">
+            </div>
+            <div class="field" data-hw="nodes" hidden>
+              <label for="rec_num_nodes">Nodes <span class="unit">≤ {{ infra.max_nodes if infra else 128 }}</span></label>
+              <input type="number" id="rec_num_nodes" min="1" max="{{ infra.max_nodes if infra else 128 }}" step="1" value="2">
+            </div>
+            <div class="field" data-hw="nodes" hidden>
+              <label for="rec_gpus_per_node">GPUs / node <span class="unit">≤ {{ infra.max_gpus_per_node if infra else 8 }}</span></label>
+              <input type="number" id="rec_gpus_per_node" min="1" max="{{ infra.max_gpus_per_node if infra else 8 }}" step="1" value="8">
+            </div>
+          </fieldset>
+
+          <fieldset class="group">
+            <legend>Policy</legend>
+            <div class="field span-2">
+              <label for="rec_model">Prediction model</label>
+              <select id="rec_model">
+                {% for p in options.predictors %}<option value="{{ p.id }}" {% if p.id == 'kavier' %}selected{% endif %}>{{ p.name }}</option>{% endfor %}
+              </select>
+            </div>
+            <div class="field span-2">
+              <label for="rec_strategy">Strategy</label>
+              <select id="rec_strategy">
+                <option value="multi_objective" selected>Multi-objective — throughput vs. power</option>
+                <option value="min_gpu">Minimum GPUs</option>
+              </select>
+            </div>
+            <div class="field span-2" id="presetField">
+              <label for="rec_preset">Preset</label>
+              <select id="rec_preset">
+                <option value="balanced" selected>Balanced · 0.5 / 0.5</option>
+                <option value="performance">Performance · 0.2 / 0.8</option>
+                <option value="energy">Energy-saver · 0.8 / 0.2</option>
+              </select>
+            </div>
+            <p class="policy-note span-2" id="policyNote"></p>
+          </fieldset>
+
+          <button type="submit" class="run" id="recBtn">Recommend configuration</button>
+        </form>
+      </aside>
+
+      <div class="right-stack">
+      <section class="panel results" aria-live="polite">
+        <div class="results-head">
+          <h2>Recommendations</h2>
+          <span class="results-sub" id="recSub">Ranked by the selected policy</span>
+        </div>
+        <div class="state empty show" id="recEmpty">
+          <div class="empty-glyph" aria-hidden="true"></div>
+          <p>Define a workload and run the recommender.</p>
+          <span>Coastline simulates feasible GPU configurations and ranks them by the selected policy.</span>
+        </div>
+        <div class="state loading" id="recLoading" hidden>
+          <div class="bars" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+          <p>Simulating &amp; ranking…</p>
+        </div>
+        <div class="state data" id="recData" hidden>
+          <div class="summary" id="recSummary"></div>
+          <div class="table-wrap">
+            <table class="rec-table">
+              <thead><tr>
+                <th class="rank-col">#</th><th>Layout</th><th class="r">Batch</th>
+                <th class="r">Throughput</th><th class="r">Est. time</th><th class="r">Energy</th><th></th>
+              </tr></thead>
+              <tbody id="recRows"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── Queue + admin — stacked under the Recommendations panel ── -->
+      <section class="queue-section">
+        <div class="panel queue-panel">
+        <div class="results-head">
+          <h2>Workload queue</h2>
+          <span class="count" id="queueCount">empty</span>
+        </div>
+        <form id="queueForm" class="queue-add" novalidate>
+          <div class="field">
+            <label for="q_model">Model</label>
+            <select id="q_model" required>
+              {% for m in options.models %}<option value="{{ m }}" {% if m == 'mistral-7b-v0.1' %}selected{% endif %}>{{ m }}</option>{% endfor %}
+            </select>
+          </div>
+          <div class="field">
+            <label for="q_method">Method</label>
+            <select id="q_method" required>
+              {% for m in options.methods %}<option value="{{ m }}" {% if m == 'lora' %}selected{% endif %}>{{ m | upper }}</option>{% endfor %}
+            </select>
+          </div>
+          <div class="field">
+            <label for="q_gpu_model">GPU</label>
+            <select id="q_gpu_model" required>
+              {% for g in options.gpus %}<option value="{{ g }}" {% if g == 'NVIDIA-A100-SXM4-80GB' %}selected{% endif %}>{{ g }}</option>{% endfor %}
+            </select>
+          </div>
+          <div class="field">
+            <label for="q_tokens">Tokens</label>
+            <select id="q_tokens" required>
+              {% for t in options.tokens_per_sample %}<option value="{{ t }}" {% if t == 2048 %}selected{% endif %}>{{ t }}</option>{% endfor %}
+            </select>
+          </div>
+          <div class="field">
+            <label for="q_batch">Batch</label>
+            <select id="q_batch" required>
+              {% for b in options.batch_sizes %}<option value="{{ b }}" {% if b == 8 %}selected{% endif %}>{{ b }}</option>{% endfor %}
+            </select>
+          </div>
+          <div class="field">
+            <label for="q_num_gpus">GPUs</label>
+            <input type="number" id="q_num_gpus" min="1" max="{{ infra.total_gpus if infra else 1024 }}" step="1" value="8" required>
+          </div>
+          <div class="field">
+            <label for="q_dataset">Dataset <span class="unit">samples</span></label>
+            <input type="number" id="q_dataset" min="1" step="1" value="10000" required>
+          </div>
+          <div class="field">
+            <label for="q_epochs">Epochs</label>
+            <input type="number" id="q_epochs" min="1" step="1" value="3" required>
+          </div>
+          <div class="field">
+            <label for="q_duration">Duration <span class="unit">override · s</span></label>
+            <input type="number" id="q_duration" min="1" step="1" placeholder="Kavier predicts">
+          </div>
+          <div class="queue-bar" style="grid-column: 1 / -1;">
+            <button type="submit" class="btn-mini primary">Add to queue</button>
+            <button type="button" id="queueRefresh" class="btn-mini">Refresh</button>
+            <button type="button" id="queueClear" class="btn-mini danger">Clear all</button>
+            <span class="spacer"></span>
+            <button type="button" id="adminToggle" class="btn-mini">🔑 Admin</button>
+          </div>
+        </form>
+        <div class="table-wrap">
+          <table class="rec-table queue-table">
+            <thead><tr>
+              <th>ID</th><th>Model</th><th class="r">GPUs</th><th class="r">Batch</th><th class="r">Epochs</th><th class="r">Duration</th><th class="r">Power</th><th class="r">Arrival</th><th></th>
+            </tr></thead>
+            <tbody id="queueRows"><tr class="queue-empty"><td colspan="9">Queue is empty — add a job above, or import a CSV in admin mode.</td></tr></tbody>
+          </table>
+        </div>
+        <div id="adminPanel" class="admin-block" hidden>
+          <div class="admin-head">
+            <h3>Admin · FIFO scheduler</h3>
+          </div>
+          <p class="note">Runs the queue on the sysadmin-declared cluster and reports per-job + cluster metrics. CSV import accepts multiple trace schemas (flexible column aliases).</p>
+          <div class="queue-bar no-divider">
+            <button type="button" id="adminRun" class="btn-mini primary">Run cluster (FIFO)</button>
+            <label class="btn-mini" for="csvFile" style="cursor:pointer;">Import CSV</label>
+            <input type="file" id="csvFile" accept=".csv,text/csv" hidden>
+          </div>
+          <div id="adminResults"></div>
+        </div>
+        </div>
+      </section>
+      </div><!-- /right-stack -->
+    </div>
+  </section>
+
+  <!-- ══ PLAYGROUND ══════════════════════════════════ -->
+  <section class="tab-panel" id="panel-playground" hidden>
+    <div class="workbench">
+      <aside class="panel config">
+        <form id="pgForm" novalidate>
+          <fieldset class="group">
+            <legend>Workload</legend>
+            <div class="field span-2">
+              <label for="pg_llm_model">Model</label>
+              <select id="pg_llm_model">
+                {% for m in options.models %}<option value="{{ m }}" {% if m == 'mistral-7b-v0.1' %}selected{% endif %}>{{ m }}</option>{% endfor %}
+              </select>
+            </div>
+            <div class="field">
+              <label for="pg_method">Method</label>
+              <select id="pg_method">
+                {% for m in options.methods %}<option value="{{ m }}" {% if m == 'lora' %}selected{% endif %}>{{ m | upper }}</option>{% endfor %}
+              </select>
+            </div>
+            <div class="field">
+              <label for="pg_tokens">Tokens</label>
+              <select id="pg_tokens">
+                {% for t in options.tokens_per_sample %}<option value="{{ t }}" {% if t == 1024 %}selected{% endif %}>{{ t }}</option>{% endfor %}
+              </select>
+            </div>
+            <div class="field span-2">
+              <label for="pg_batch">Batch</label>
+              <select id="pg_batch">
+                {% for b in options.batch_sizes %}<option value="{{ b }}" {% if b == 8 %}selected{% endif %}>{{ b }}</option>{% endfor %}
+              </select>
+            </div>
+            <div class="field">
+              <label for="pg_dataset">Dataset <span class="unit">samples</span></label>
+              <input type="number" id="pg_dataset" min="1" step="1" value="10000">
+            </div>
+            <div class="field">
+              <label for="pg_epochs">Epochs</label>
+              <input type="number" id="pg_epochs" min="1" max="100" value="3">
+            </div>
+          </fieldset>
+
+          <fieldset class="group">
+            <legend>Configuration</legend>
+            <div class="field span-2">
+              <label for="pg_gpu_model">GPU model</label>
+              <select id="pg_gpu_model">
+                {% for g in options.gpus %}<option value="{{ g }}" {% if g == 'NVIDIA-A100-SXM4-80GB' %}selected{% endif %}>{{ g }}</option>{% endfor %}
+              </select>
+            </div>
+            <div class="field">
+              <label for="pg_nodes">Nodes</label>
+              <select id="pg_nodes">
+                <option value="1" selected>1</option><option value="2">2</option><option value="4">4</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="pg_gpus_per_node">GPUs / node</label>
+              <select id="pg_gpus_per_node">
+                <option value="1">1</option><option value="2">2</option><option value="4">4</option><option value="8" selected>8</option>
+              </select>
+            </div>
+          </fieldset>
+
+          <fieldset class="group">
+            <legend>Models to compare</legend>
+            <div class="checks" id="pgModels">
+              {% for p in options.predictors %}
+              <label class="check"><input type="checkbox" value="{{ p.id }}" {% if p.id in ['kavier', 'catboost'] %}checked{% endif %}><span>{{ p.name }}</span></label>
+              {% endfor %}
+            </div>
+          </fieldset>
+
+          <button type="submit" class="run" id="pgBtn">Compare predictions</button>
+        </form>
+      </aside>
+
+      <section class="panel results" aria-live="polite">
+        <div class="results-head">
+          <h2>Prediction comparison</h2>
+          <span class="results-sub" id="pgSub">One configuration, several models</span>
+        </div>
+        <div class="state empty show" id="pgEmpty">
+          <div class="empty-glyph" aria-hidden="true"></div>
+          <p>Pick a configuration and one or more models.</p>
+          <span>Each model predicts the same config so you can compare them directly.</span>
+        </div>
+        <div class="state loading" id="pgLoading" hidden>
+          <div class="bars" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+          <p>Running each model…</p>
+        </div>
+        <div class="state data" id="pgData" hidden>
+          <div class="summary" id="pgSummary"></div>
+          <div class="table-wrap">
+            <table class="rec-table">
+              <thead><tr>
+                <th>Model</th><th class="r">Throughput</th><th class="r">Est. time</th>
+                <th class="r">Power/GPU</th><th class="r">Energy</th>
+              </tr></thead>
+              <tbody id="pgRows"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </div>
+  </section>
+
+  <!-- ══ USAGE / MANUAL ══════════════════════════════ -->
+  <section class="tab-panel" id="panel-usage" hidden>
+    <div class="panel" style="padding: 16px 24px 22px;">
+      <div class="results-head">
+        <h2>Usage</h2>
+        <span class="results-sub">A quick map of every panel and what it does</span>
+      </div>
+      <div class="usage-body">
+        <h3>Recommend</h3>
+        <p>Pick a workload — model, fine-tuning method, sequence length, batch, epochs, dataset size. Set the hardware budget (either a single <em>Total GPUs</em> number, or <em>Nodes × GPUs / node</em>). Pick a policy: <b>Multi-objective</b> ranks candidates by a weighted mix of throughput and power (Balanced / Performance / Energy-saver presets), <b>Minimum GPUs</b> returns the fewest GPUs that still satisfy feasibility.</p>
+        <p>The <em>Prediction model</em> controls which simulator estimates throughput + power for each candidate: <b>Kavier</b> (analytical, fast, calibrated on the 4-model set) or one of 10 data-driven ML models. <em>Cache lookup</em> returns exact-match historical runs (~0% MdAPE when the workload is in the dataset; nothing otherwise).</p>
+        <p>Click <b>Recommend configuration</b>. Coastline generates a feasibility-filtered grid of candidates, simulates each one, ranks them, and shows the top results.</p>
+
+        <h3>Schedule</h3>
+        <p>Each row in the Recommendations table has a small <b>Schedule</b> button that appends that configuration to the workload queue. Kavier's per-GPU power for the workload is captured at scheduling time so the cluster-wide energy summary reflects the real workload.</p>
+
+        <h3>Workload queue</h3>
+        <p>The queue stores the four fields a FIFO scheduler needs: <em>request ID</em>, <em>arrival</em>, <em>num_gpus</em>, <em>predicted duration</em>. Use the inline form to add a single job, or click <b>Admin → Import CSV</b> to bulk-load a trace. Column aliases tolerated: <code>submission_time</code> or <code>arrival_time</code> for arrival; <code>num_gpus</code> or <code>number_gpus</code> for GPU count; <code>duration_ms</code>, <code>duration_s</code>, or <code>predicted_duration_s</code> for duration. Optional columns: <code>request_id</code>, <code>llm_model</code>, <code>fine_tuning_method</code>, <code>batch_size</code>, <code>power_watts_per_gpu</code>.</p>
+
+        <h3>Admin · FIFO scheduler</h3>
+        <p><b>Run cluster (FIFO)</b> simulates the queue running on the sysadmin-declared cluster (see the masthead readout). Strict head-of-line FIFO; oversized jobs (more GPUs than the cluster has) are skipped defensively. Per-job: start / end / wait / completion time + energy. Cluster-wide: total runtime, average wait, average JCT, total energy. Per-GPU power comes from Kavier when the job's full workload config is known, otherwise a 350 W/GPU placeholder.</p>
+        <p>The run also draws a <b>Cluster timeline</b> — GPUs allocated over time (against the dashed capacity ceiling) above jobs-in-queue over time, on a shared axis. Hover or focus the chart and use the arrow keys to read GPUs in use and queue depth at any moment.</p>
+
+        <h3>Playground</h3>
+        <p>Pick one concrete configuration (model + method + GPU + tokens + batch + layout) and check the predictors you want to compare. Each runs the same config in an isolated subprocess and reports throughput / runtime / power / energy. Used to compare data-driven vs analytical predictors on the same workload (the thesis Exp1 comparison, one row at a time).</p>
+
+        <h3>Activity</h3>
+        <p>Every action — recommend, schedule, queue add/remove/run, errors — is logged at the bottom of the page with timestamp + level (<b>info</b> / <b>ok</b> / <b>err</b>). Capped at 50 entries; the Clear button resets it. Toast banners fade after 5 seconds, but the log keeps a permanent record so failures are never lost.</p>
+
+        <h3>Endpoints (REST API)</h3>
+        <p>
+          <code>GET /api/health</code> · <code>GET /api/infrastructure</code> ·
+          <code>POST /api/recommend</code> · <code>POST /api/predict</code> ·
+          <code>GET|POST /api/queue</code> · <code>DELETE /api/queue/{id}</code> ·
+          <code>POST /api/admin/run</code> · <code>POST /api/admin/import</code> ·
+          <code>POST /api/admin/clear</code>
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── Activity log (terminal-style, persistent) ── -->
+  <aside class="activity">
+    <div class="activity-head">
+      <h3>Activity</h3>
+      <button type="button" id="activityClear" class="btn-mini">Clear</button>
+    </div>
+    <div class="activity-list" id="activityList">
+      <div class="activity-empty">No activity yet.</div>
+    </div>
+  </aside>
+</div>
+
+<script src="/static/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,36 @@
+# Tunable — changes recommendations, won't break the API.
+# Coastline: context-aware recommender for LLM fine-tuning configs.
+# Given workload (LLM, method, tokens, batch, GPUs) predicts throughput/energy.
+# See config/coastline_functionality/experiment.yaml for full schema; legacy orchestrator: auto-translated.
+
+# WORKLOAD — fixed inputs; grid sweeps batch_size and total_gpus.
+workload:
+  llm_model: "mistral-7b-v0.1"        # model to fine-tune
+  fine_tuning_method: "lora"          # PEFT: full, lora, gptq-lora
+  tokens_per_sample: 2048             # sequence length
+  batch_size: 8                       # seed per-device batch
+  gpus_per_node: 8                    # GPUs per node
+  number_of_nodes: 1                  # node count
+
+# SYSTEM — infrastructure. CLI derives GPU from grid.gpu_models[0].
+system:
+  default_gpu: "NVIDIA-A100-SXM4-80GB"  # fallback GPU if grid.gpu_models is empty
+
+# STRATEGY — how candidates are ranked into a recommendation.
+strategy:
+  name: "multi_objective"   # or min_gpu
+  preset: "balanced"        # throughput-vs-energy weighting
+
+# PREDICTORS — throughput / energy / feasibility engines.
+predictors:
+  performance: "intelligent"   # ML with Kavier fallback; alt: kavier, cache, or model name
+  energy: "kavier_power"       # analytical power model
+  feasibility: "autoconf"      # OOM-aware AutoConf checker
+
+# GRID — search space: batch_size × total_gpus. gpu_models[0] is the primary GPU.
+grid:
+  gpu_models:
+    - "NVIDIA-A100-SXM4-80GB"
+  batch_sizes: [4, 8, 16, 32, 64]
+  total_gpus: [1, 2, 4, 8, 16]
+  top_k: 3

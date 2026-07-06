@@ -1,0 +1,62 @@
+"""`coastline enrich-trace` — enrich a fine-tuning trace CSV with coastline recommendations."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Optional, Sequence
+
+from coastline.cli._args import add_trace_layout_args
+from coastline.cli._shared import FriendlyParser
+from coastline.sdk.trace.enrich import enrich_trace
+
+
+def _build_parser() -> FriendlyParser:
+    p = FriendlyParser(
+        prog="coastline enrich-trace",
+        description="Enrich a fine-tuning trace with coastline recommendations.",
+        example="coastline enrich-trace --input trace.csv --output enriched.csv --method kavier",
+    )
+    p.add_argument("--input", required=True, help="Input trace CSV.")
+    p.add_argument("--output", required=True, help="Output (enriched) CSV.")
+    p.add_argument(
+        "--goal",
+        default="min_gpu",
+        choices=["min_gpu", "performance"],
+        help="Optimisation goal for recommendations (default: min_gpu).",
+    )
+    p.add_argument(
+        "--feasibility",
+        default="autoconf",
+        help="Feasibility checker: autoconf (default, real OOM check via AutoConf) "
+        "| rules (divisibility-only, works without AutoConf).",
+    )
+    p.add_argument(
+        "--visual",
+        action="store_true",
+        help="Also render the operational cluster timeline (GPUs in use + jobs queued over "
+        "time) by FIFO-scheduling the recommendations onto a fixed cluster.",
+    )
+    p.add_argument(
+        "--visual-output", default=None, help="Path for the --visual figure (default: --output with a .pdf suffix)."
+    )
+    add_trace_layout_args(p)
+    return p
+
+
+def main(argv: Optional[Sequence[str]] = None) -> None:
+    args = _build_parser().parse_args(argv)
+    df = enrich_trace(args.input, args.output, method=args.method, goal=args.goal, feasibility=args.feasibility)
+    n = df[f"metadata.estimated_duration_{args.method}"].notna().sum()
+    print(f"wrote {args.output}: {len(df)} rows, {n} with an estimated_duration_{args.method}")
+    if args.visual:
+        from coastline.sdk.trace.plot import plot_trace_timeline
+
+        viz = args.visual_output or str(Path(args.output).with_suffix(".pdf"))
+        stats = plot_trace_timeline(
+            args.output, viz, method=args.method, cluster_gpus=args.cluster_gpus, node_gpus=args.node_gpus
+        )
+        print(f"wrote {viz}: cluster timeline ({stats})")
+
+
+if __name__ == "__main__":
+    main()

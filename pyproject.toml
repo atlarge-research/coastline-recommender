@@ -1,0 +1,174 @@
+[build-system]
+requires = ["uv_build>=0.11.7,<0.12"]
+build-backend = "uv_build"
+
+[project]
+name = "coastline-recommender"
+version = "0.2.0"
+description = "Context-aware GPU/datacenter configuration recommender for LLM fine-tuning"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Radu Nicolae" },
+    { name = "AtLarge Research", email = "info@atlarge-research.com" },
+]
+requires-python = ">=3.13"
+keywords = [
+    "llm",
+    "fine-tuning",
+    "gpu",
+    "datacenter",
+    "recommender",
+    "throughput",
+    "energy-efficiency",
+    "carbon",
+    "sustainability",
+    "mlops",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    # The interactive `coastline interactive` REPL drives the terminal via termios/tty,
+    # so the distribution is POSIX-first; the one-shot subcommands run anywhere.
+    "Operating System :: POSIX",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "pydantic>=2.0.0",
+    "pandas>=2.0.0,<3",      # <3: pandas 3 breaks xgboost 3.1.3 feature-name checks; ado-autoconf pins <3 too
+    "pyarrow>=13.0.0",
+    "numpy>=1.24.0",
+    "pyyaml>=6.0.0",
+    "rich>=13.0.0",
+    "typer>=0.9.0",
+    "tqdm>=4.66.0",
+    "cachetools>=5.3.0",
+    # FastAPI dashboard ships by default — the single `coastline-ui` entrypoint.
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "jinja2>=3.1.0",
+    # Kavier — the physics throughput/power engine (first-class dependency, on PyPI).
+    # 0.5 exposes the engines under kavier.sdk.* (library / io / training) plus the top-level
+    # kavier.inference / kavier.training verbs — which is what coastline imports.
+    "kavier>=0.5,<0.6",
+]
+
+[project.optional-dependencies]
+# Heavy native ML backends + the pinned scikit-learn that matches the serialized
+# featv3 model pickles. The default Kavier (physics) path needs none of these.
+# Trained pickles are NOT bundled in the wheel: retrain with the trainer, or point
+# the predictors at your own artifacts (TABPFN_MODEL_PATH, ...).
+ml = [
+    "scikit-learn==1.7.2",   # pinned to match the serialized model pickles (no version skew)
+    "xgboost==3.1.3",
+    "lightgbm==4.6.0",
+    "catboost==1.2.10",
+    "torch>=2.0.0",
+    "tabpfn==8.0.3",
+]
+# AutoConf OOM-feasibility safeguard (IBM's open-source `ado`, on public PyPI).
+# Required for the default `feasibility: autoconf` memory-safety check.
+autoconf = ["ado-autoconf>=1.7,<2"]
+# Plotting: needed by `coastline plot-trace`. matplotlib is imported lazily inside
+# the plot functions so the core stays importable without it.
+plot = ["matplotlib>=3.5"]
+# OpenDC energy path shells out to an external Java runner (see sdk/io/odc_runner);
+# no extra pip dependency — kept as a documented capability marker.
+opendc = []
+
+# PEP 735 dev group — synced by default with `uv sync`; not part of the published wheel.
+[dependency-groups]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov",
+    "ruff==0.15.15",
+    "mypy>=1.10",
+    "pandas-stubs>=2.2",
+    "types-PyYAML",
+    "types-tqdm",
+    "types-cachetools",
+    "httpx2>=2.0.0",   # FastAPI/starlette TestClient HTTP backend (test-only)
+]
+# Documentation site (MkDocs Material). Synced on demand: `uv sync --group docs`.
+docs = [
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.5",
+    "pymdown-extensions>=10.7",
+]
+
+[project.scripts]
+coastline = "coastline.cli:main"
+coastline-ui = "coastline.ui:main"
+
+[project.urls]
+Homepage = "https://github.com/atlarge-research/coastline-recommender"
+Repository = "https://github.com/atlarge-research/coastline-recommender"
+Issues = "https://github.com/atlarge-research/coastline-recommender/issues"
+
+# ------------------------------------------------------------------
+#  uv resolver
+# ------------------------------------------------------------------
+[tool.uv]
+# kavier requires pyarrow>=23.0.1 (Arrow-IPC security GHSA); autogluon — pulled ONLY
+# by the optional `autoconf` extra — caps pyarrow<21. The default install already runs
+# pyarrow>=23 for kavier, so override autogluon's stale cap to let the lock resolve.
+# autoconf installs (Docker/OOM path) accept the newer pyarrow.
+override-dependencies = ["pyarrow>=23.0.1"]
+
+# ------------------------------------------------------------------
+#  Build backend
+# ------------------------------------------------------------------
+# uv_build ships the entire src/coastline/ tree into the wheel — the bundled
+# sample_raw_trace.csv, the FastAPI templates/ + static/, and the py.typed marker
+# all ride along automatically (no package-data map). Excludes only strip cache noise.
+[tool.uv.build-backend]
+# The distribution is `coastline-recommender` but the import package is `coastline`.
+module-name = "coastline"
+# The co-located trainer tests are the only tests inside the package tree; keep them
+# (and cache noise) out of the built wheel. The bundled parametric models under
+# sdk/predictors/performance/data_driven/portfolio/ (the only .pkl/.pth under src) DO ship.
+wheel-exclude = ["**/__pycache__/**", "**/*.pyc", "**/.gitignore", "**/tests/**"]
+source-exclude = ["**/__pycache__/**", "**/*.pyc"]
+
+# ------------------------------------------------------------------
+#  Tooling
+# ------------------------------------------------------------------
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+# The HTML report builder embeds template whitespace inside string literals — the
+# trailing spaces are intentional markup, not code style.
+"src/coastline/sdk/io/interface/html_visualizer.py" = ["W291", "W293"]
+# Data-driven ML predictors + trainer carry long feature/spec lines (feature lists,
+# label maps, calibration constants) where wrapping hurts readability; and dev tooling
+# is not part of the shipped surface. Line-length stays enforced everywhere else.
+"src/coastline/sdk/predictors/performance/data_driven/**" = ["E501"]
+"dev/**" = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Native-ML predictor tests co-load libomp-bundling backends that can crash in one
+# interpreter, so they carry the `ml_isolated` marker and are deselected by default;
+# run them in their own process: `uv run pytest -m ml_isolated -p no:cacheprovider`.
+addopts = "-q -m 'not ml_isolated'"
+markers = [
+    "ml_isolated: native-ML predictor tests; run in their own pytest process",
+]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+mypy_path = "src"
+plugins = ["pydantic.mypy"]
+# Strict-clean packages (the full tree is gated incrementally).
+packages = ["coastline.sdk.models"]
+exclude = ["tests/", "dev/"]

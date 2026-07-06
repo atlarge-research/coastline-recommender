@@ -1,0 +1,31 @@
+# Coastline batch recommender — config for: config + input CSV -> output CSV.
+#
+#   coastline recommend --config config/batch_config.yaml \
+#                       --input docs/workloads.csv --output recommendations.csv
+#
+# or from Python:  coastline.recommend_csv(config, input_csv, output_csv)
+
+strategy:
+  name: multi_objective    # how candidates are ranked; alt: min_gpu (fewest feasible GPUs)
+  preset: balanced         # throughput-vs-energy weighting; alt: performance, energy
+  max_slowdown: 2.0        # SAFEGUARD: never recommend a config slower than 2x the
+                           # fastest feasible one. Omit for no slowdown cap.
+
+predictors:
+  performance: kavier      # analytical engine; alt: tabpfn/catboost/... (needs the [ml] extra)
+  energy: kavier_power
+  feasibility: rules       # divisibility-only; keeps this example runnable without extras.
+                           # Production default is `autoconf` (OOM-aware; needs coastline[autoconf]).
+
+grid:                      # search space swept per workload row
+  gpu_models: ["NVIDIA-A100-SXM4-80GB"]
+  batch_sizes: [4, 8, 16, 32]
+  total_gpus: [1, 2, 4, 8, 16]
+
+# Optional column remap for arbitrary CSV headers. Defaults already accept common
+# spellings (model_name/llm_model, method/peft, gpu_model/gpu, tokens_per_sample/
+# seq_len, batch_size/batch, number_gpus, number_nodes).
+# input:
+#   columns:
+#     my_model_column: llm_model
+#     my_gpu_column: gpu_model

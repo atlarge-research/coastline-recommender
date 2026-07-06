@@ -1,0 +1,100 @@
+# Tunable — changes recommendations, won't break the API.
+# Exhaustive reference config documenting all CLI/API keys and allowed values.
+# See config/coastline_functionality/config.yaml for a clean everyday config. Many keys here are
+# MUTUALLY EXCLUSIVE ("pick one") or LEGACY (marked). CLI reads: workload.*,
+# system.default_gpu, grid.*, strategy.*, predictors.*, output.*
+
+
+# WORKLOAD — fine-tuning job. Grid sweeps batch_size and total_gpus;
+# workload.* are seed layout. See run_config.py for field mapping.
+workload:
+  # LLM to fine-tune. Must be in Kavier LLM_SPEC_LIBRARY or trained ML artifacts.
+  llm_model: "mistral-7b-v0.1"
+  # PEFT method: full, lora, gptq-lora (exactly these three).
+  fine_tuning_method: "lora"
+  # Sequence length: any int > 0. WT1 values: 512, 1024, 2048, 4096, 8192.
+  tokens_per_sample: 2048
+  # Seed per-device batch size. Grid overrides in sweep.
+  batch_size: 8
+  # Seed node layout (grid auto-derives real layout from total_gpus).
+  gpus_per_node: 8
+  number_of_nodes: 1
+  # Optional hints flowing into ML features (not swept).
+  torch_dtype: "bfloat16"   # bfloat16 | float16
+  enable_roce: true         # bool or null
+
+
+# SYSTEM — infrastructure. CLI reads ONLY default_gpu (fallback when grid.gpu_models is empty).
+# Other keys are API/legacy (descriptive).
+system:
+  default_gpu: "NVIDIA-A100-SXM4-80GB"
+  max_tokens: 2048
+  available_gpu_models:
+    - "NVIDIA-A100-SXM4-80GB"
+    - "NVIDIA-A100-80GB-PCIe"
+    - "L40S"
+    - "NVIDIA-H100-PCIe"
+  max_gpus: 32
+  gpu_memory:
+    "NVIDIA-A100-SXM4-80GB": 80
+    "NVIDIA-A100-80GB-PCIe": 80
+    "NVIDIA-H100-PCIe": 80
+    "L40S": 48
+  constraints:
+    max_gpus: 32
+    gpus_per_node: 8
+    max_nodes: 4
+
+
+# ORCHESTRATION — legacy block not parsed by CLI. Shown for reference only.
+orchestration:
+  max_iterations: 3
+  convergence_threshold: 0.05
+  enable_verification: true
+  fallback_on_failure: false
+
+
+# STRATEGY — ranking candidates. Dispatched by PolicyFactory.create_strategy.
+strategy:
+  # min_gpu (fewest feasible GPUs) or multi_objective (throughput-vs-energy).
+  name: "multi_objective"
+  # For multi_objective: balanced, performance, energy. Or set alpha/beta pair (mutually exclusive).
+  preset: "balanced"
+  # alpha: 0.3  # energy weight; beta: 0.7 for throughput (normalized ratio)
+
+
+# PREDICTORS — throughput/energy/feasibility engines. Dispatched via PolicyFactory.
+predictors:
+  # Throughput: intelligent (cache+Kavier), kavier, cache, or ML model name.
+  performance: "intelligent"
+  # Energy: kavier_power (default) or opendc.
+  energy: "kavier_power"
+  # Feasibility: autoconf (OOM-aware, ADO plugin), rules, or none.
+  feasibility: "autoconf"
+  # Optional: OpenDC scaling factor (default 1.0) and AutoConf version (default 3.1.0).
+  opendc_calibration_factor: 1.0
+  autoconf_model_version: "3.1.0"
+
+
+# GRID — search space: batch_size × total_gpus. Node layout auto-derived from total_gpus.
+# GridConfig has three keys: batch_sizes, total_gpus, top_k.
+grid:
+  # GPU models: CLI uses gpu_models[0]. Calibrated WT1: NVIDIA-A100-SXM4-80GB,
+  # NVIDIA-A100-80GB-PCIe, L40S, NVIDIA-H100-PCIe.
+  gpu_models:
+    - "NVIDIA-A100-SXM4-80GB"
+  batch_sizes: [1, 2, 4, 8, 16, 32, 64, 128]
+  # Cluster sizes to sweep. CLI max_gpus = max(total_gpus).
+  total_gpus: [1, 2, 4, 8, 16, 32]
+  # Ranked configs returned (default 3; min_gpu returns 1).
+  top_k: 3
+
+
+# OUTPUT — where/how to report. CLI always writes runs/<RUN_ID>/recommendation.json.
+output:
+  format: "console"
+  save_json: true
+  json_path: "output/recommendation.json"
+  save_html: false
+  html_path: "output/recommendation.html"
+  verbose: true
