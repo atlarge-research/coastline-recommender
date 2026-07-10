@@ -24,10 +24,12 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _model_is_materialized(stem: str) -> bool:
-    """True if the repo-root models/ pickle is a real artifact, not an unpulled Git-LFS pointer
+    """True if the resolved models pickle is a real artifact, not an unpulled Git-LFS pointer
     (CI checks out without LFS, where the file is a small `version https://git-lfs...` text stub).
-    parents[2] is the coastline repo root (this file's REPO_ROOT is the superproject umbrella)."""
-    path = Path(__file__).resolve().parents[2] / "models" / f"performance_{stem}_featv3.pkl"
+    Uses the production resolver so the custom/ > coastline-bundled/ split is honoured."""
+    from coastline.sdk.predictors.performance.data_driven.ml_common import performance_trained_model_path
+
+    path = performance_trained_model_path(stem)
     return path.exists() and not path.read_bytes()[:40].startswith(b"version https://git-lfs")
 
 

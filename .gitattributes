@@ -1,3 +1,4 @@
-models/performance_tabpfn_featv3.pkl filter=lfs diff=lfs merge=lfs -text
-models/performance_tabpfn_featv3_6models.pkl filter=lfs diff=lfs merge=lfs -text
-models/performance_random_forest_featv3.pkl filter=lfs diff=lfs merge=lfs -text
+models/coastline-bundled/performance_tabpfn_featv3.pkl filter=lfs diff=lfs merge=lfs -text
+models/coastline-bundled/performance_tabpfn_featv3_6models.pkl filter=lfs diff=lfs merge=lfs -text
+models/coastline-bundled/performance_random_forest_featv3.pkl filter=lfs diff=lfs merge=lfs -text
+models/custom/*.pkl filter=lfs diff=lfs merge=lfs -text

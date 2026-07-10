@@ -19,11 +19,13 @@ BASE_DIR = Path(__file__).parent
 # parents[2] is the repo root and parents[3] the umbrella that holds trace-archive.
 DATA_DIR = Path(os.environ.get("DATA_DIR", str(Path(__file__).resolve().parents[3] / "trace-archive")))
 DATA_PATH = DATA_DIR / "profiling-dataset" / "curated_trace.csv"
-# Trained model artifacts live in <repo>/models/, tracked in git and independent of DATA_DIR
-# (which holds only workload/carbon traces). Honour PORTFOLIO_DIR (Docker/CI/pip-install): the
-# trained pickles ship as data artifacts, so a pip-installed deployment points this env var at
-# the models/ dir rather than the absent site-packages/models.
-PORTFOLIO_DIR = Path(os.environ.get("PORTFOLIO_DIR", str(Path(__file__).resolve().parents[2] / "models")))
+# Official (re)trained artifacts live in <repo>/models/coastline-bundled/, tracked in git and
+# independent of DATA_DIR. User-tuned models go to models/custom/ via `coastline tune`. Honour
+# PORTFOLIO_DIR (Docker/CI/pip-install): a pip-installed deployment points this env var at its
+# own models dir rather than the absent site-packages/models.
+PORTFOLIO_DIR = Path(
+    os.environ.get("PORTFOLIO_DIR", str(Path(__file__).resolve().parents[2] / "models" / "coastline-bundled"))
+)
 
 # Bump when categorical / numeric schema changes so old pickles are not loaded by mistake.
 PERFORMANCE_MODEL_ARTIFACT_SUFFIX = "_featv3"

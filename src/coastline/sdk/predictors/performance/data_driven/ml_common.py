@@ -102,26 +102,33 @@ def gpu_spec_features(gpu_model: Any) -> Dict[str, float]:
     }
 
 
-# Model artifacts are resolved in two places, in order:
-#   1. PORTFOLIO_DIR — env override, else the repo-root models/ (a dev checkout has the FULL set,
-#      incl. the large LFS + instance-based models; parents[6] == repo root).
-#   2. the packaged portfolio/ next to this file — the parametric subset (catboost, xgboost,
-#      lightgbm, bayesian_ridge, deep_learning) that SHIPS in the wheel, so a plain
-#      `pip install coastline[ml]` serves them with no external models/ dir.
+# Model artifacts are resolved in precedence order:
+#   1. PORTFOLIO_DIR/custom/            — models tuned by the user (`coastline tune`)
+#   2. PORTFOLIO_DIR/coastline-bundled/ — the shipped portfolio (a dev checkout has the FULL
+#      set, incl. the large LFS + instance-based models; parents[6] == repo root)
+#   3. PORTFOLIO_DIR/ flat              — pre-split layout, kept for compatibility
+#   4. the packaged portfolio/ next to this file — the parametric subset that SHIPS in the
+#      wheel, so a plain `pip install coastline[ml]` serves them with no external models/ dir.
 PORTFOLIO_DIR = Path(os.environ.get("PORTFOLIO_DIR", str(Path(__file__).resolve().parents[6] / "models")))
 _BUNDLED_PORTFOLIO_DIR = Path(__file__).resolve().parent / "portfolio"
 
 
+def custom_models_dir() -> Path:
+    """Where user-tuned artifacts live (highest resolution precedence)."""
+    return PORTFOLIO_DIR / "custom"
+
+
 def _resolve_artifact(name: str) -> Path:
-    """First existing of PORTFOLIO_DIR/name (dev) or the packaged portfolio/name (wheel);
-    falls back to the PORTFOLIO_DIR path (for a clear not-found error) when neither exists."""
-    external = PORTFOLIO_DIR / name
-    if external.exists():
-        return external
+    """First existing of custom/ > coastline-bundled/ > flat PORTFOLIO_DIR > packaged portfolio;
+    falls back to the custom/ path (for a clear not-found error) when none exists."""
+    for directory in (PORTFOLIO_DIR / "custom", PORTFOLIO_DIR / "coastline-bundled", PORTFOLIO_DIR):
+        candidate = directory / name
+        if candidate.exists():
+            return candidate
     bundled = _BUNDLED_PORTFOLIO_DIR / name
     if bundled.exists():
         return bundled
-    return external
+    return PORTFOLIO_DIR / "custom" / name
 
 
 def performance_trained_model_path(model_stem: str) -> Path:
