@@ -104,15 +104,20 @@ class PolicyFactory:
     @staticmethod
     def _lookup_path(predictor_config: dict) -> Optional[Path]:
         """Resolve ``predictors.lookup``: a measured-runs CSV path, or the literal
-        ``default`` for the bundled (jittered sfttrainer) lookup DB. None = the
-        RetrievalPredictor's own resolution ($DATA_DIR, then the bundled sample)."""
+        ``default`` for the repo's default lookup DB (jittered sfttrainer sample in
+        config/coastline_functionality/). None = the RetrievalPredictor's own
+        resolution ($DATA_DIR, then the bundled sample)."""
         lookup = predictor_config.get("lookup")
         if not lookup:
             return None
         if str(lookup).strip().lower() == "default":
-            from coastline.sdk.io.sample_data import default_lookup_path
-
-            return default_lookup_path()
+            default = _REPO_ROOT / "config" / "coastline_functionality" / "default_lookup.csv"
+            if not default.exists():
+                raise FileNotFoundError(
+                    "the default lookup DB (config/coastline_functionality/default_lookup.csv) "
+                    "is only available in a repo checkout — pass an explicit lookup CSV path"
+                )
+            return default
         path = Path(lookup)
         if not path.exists():
             raise FileNotFoundError(f"lookup CSV not found: {path}")

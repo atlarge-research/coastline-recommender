@@ -107,7 +107,6 @@ def test_wheel_ships_package_not_heavy_artifacts(tmp_path):
 
     # Bundled data + FastAPI templates ride along automatically (uv_build ships the tree).
     assert "coastline/sdk/io/data/sample_raw_trace.csv" in names
-    assert "coastline/sdk/io/data/default_lookup.csv" in names
     assert "coastline/ui/templates/index.html" in names
 
     # The parametric model subset ships bundled in the wheel (so pip install coastline[ml] serves
