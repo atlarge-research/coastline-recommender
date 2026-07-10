@@ -76,16 +76,18 @@ def test_estimated_duration_scales_linearly_with_the_jobs_actual_work(tmp_path):
 
 # --------------------------------------------------------------------------- #
 # Failure isolation: an unrecommendable / incomplete row must never crash the
-# trace — it keeps its ORIGINAL layout and gets estimated_duration = null.
+# trace — the job appears UNCHANGED: original layout + observed duration
+# (extrapolated_duration, else train_runtime), so the timeline still receives it.
 # --------------------------------------------------------------------------- #
 
 
 def test_incomplete_layout_row_short_circuits_before_the_recommender(tmp_path, monkeypatch):
     """A row missing an integer layout field (blank gpus_per_node) must never
     reach coastline.recommend: the guard `not (tokens and batch and gpn and
-    nodes)` returns the original layout with a null duration. We prove the
-    short-circuit by making recommend a tripwire that fails the test if called
-    (this distinguishes 'guard skipped it' from 'exception was swallowed')."""
+    nodes)` keeps the job unchanged — original layout, and the OBSERVED duration
+    (the fixture's train_runtime = 3600 s, since it has no extrapolated_duration).
+    We prove the short-circuit by making recommend a tripwire that fails the test
+    if called (this distinguishes 'guard skipped it' from 'exception was swallowed')."""
 
     def _tripwire(*_a, **_k):
         raise AssertionError("recommend must not be called for an incomplete-layout row")
@@ -96,7 +98,8 @@ def test_incomplete_layout_row_short_circuits_before_the_recommender(tmp_path, m
     out = tmp_path / "out.csv"
     df = recommend_trace(str(_write_csv(tmp_path, [row])), str(out), method="kavier")
 
-    assert pd.isna(df["metadata.estimated_duration_kavier"].iloc[0])
+    # Fallback duration = observed train_runtime (3600.0), not null: the job stays in the replay.
+    assert df["metadata.estimated_duration_kavier"].iloc[0] == pytest.approx(3600.0)
     # Original layout is preserved untouched (num_nodes stays 1).
     assert int(df["resources.num_nodes"].iloc[0]) == 1
     assert df["metadata.uid"].iloc[0] == "incomplete"
@@ -104,9 +107,10 @@ def test_incomplete_layout_row_short_circuits_before_the_recommender(tmp_path, m
 
 def test_mixed_trace_recommends_good_row_and_preserves_the_unrecommendable_one(tmp_path):
     """One good row + one unrecommendable row (unknown model/GPU Kavier has no
-    library for) in the same trace. The good row gets a positive duration; the
-    bad row falls back to its EXACT original layout (4 gpn x 2 nodes, batch 8)
-    with a null duration; the whole trace still writes out. Contract oracle:
+    library for) in the same trace. The good row gets a positive predicted
+    duration; the bad row appears UNCHANGED — its EXACT original layout
+    (4 gpn x 2 nodes, batch 8) and its OBSERVED duration (extrapolated_duration
+    = 1234.5, which must win over train_runtime = 3600). Contract oracle:
     per-row failure isolation — one bad row changes nothing about the good one
     and leaves its own inputs untouched."""
     good = {**_GOOD_ROW, "metadata.uid": "good"}
@@ -120,6 +124,7 @@ def test_mixed_trace_recommends_good_row_and_preserves_the_unrecommendable_one(t
         "resources.num_nodes": 2,
         "metadata.output.train_tokens_per_second": 15000.0,
         "metadata.train_runtime": 3600.0,
+        "metadata.output.extrapolated_duration": 1234.5,
         "metadata.uid": "bad",
     }
     out = tmp_path / "mixed_out.csv"
@@ -131,7 +136,9 @@ def test_mixed_trace_recommends_good_row_and_preserves_the_unrecommendable_one(t
 
     col = "metadata.estimated_duration_kavier"
     assert g[col] > 0 and pd.notna(g[col])
-    assert pd.isna(b[col])
+    # Unchanged job: observed extrapolated_duration wins over train_runtime.
+    assert b[col] == pytest.approx(1234.5)
+    assert "unchanged" in str(b["metadata.recommendation_note"])
     # Bad row's original layout AND batch survive verbatim.
     assert int(b["resources.num_gpus_per_node"]) == 4
     assert int(b["resources.num_nodes"]) == 2

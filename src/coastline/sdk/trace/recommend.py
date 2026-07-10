@@ -28,6 +28,8 @@ _NODES = "resources.num_nodes"
 # ground-truth work (config-independent): tokens the job actually processed
 _ACT_TPS = "metadata.output.train_tokens_per_second"
 _ACT_RUNTIME = "metadata.train_runtime"
+# observed job duration — the fallback when no recommendation can be made
+_ACT_DURATION = "metadata.output.extrapolated_duration"
 
 # coastline predictor keys for the trace's method names
 _METHOD_TO_PREDICTOR = {"kavier": "kavier", "tabpfn": "tabpfn", "xgb": "xgboost", "xgboost": "xgboost"}
@@ -88,7 +90,32 @@ def _infeasible_note(gpn: int, nodes: int, feasibility: str) -> str:
         if feasibility == "autoconf"
         else "no config passes the divisibility rules"
     )
-    return f"infeasible within {gpn * nodes} GPUs: {cause} — kept original layout, no duration"
+    return f"infeasible within {gpn * nodes} GPUs: {cause}"
+
+
+def _observed_duration(row: pd.Series) -> Optional[float]:
+    """The job's measured duration (extrapolated_duration, else train_runtime), if positive."""
+    for col in (_ACT_DURATION, _ACT_RUNTIME):
+        v = pd.to_numeric(row.get(col), errors="coerce")
+        if pd.notna(v) and v > 0:
+            return float(v)
+    return None
+
+
+def _unchanged(keep: dict[str, Any], row: pd.Series, reason: str) -> dict[str, Any]:
+    """The job appears in the trace UNCHANGED: original config + observed duration.
+
+    This keeps unrecommendable jobs in the cluster replay (the scheduler still
+    received them) instead of silently dropping them from the timeline.
+    """
+    keep["dur"] = _observed_duration(row)
+    tail = (
+        "job kept unchanged (original config + observed duration)"
+        if keep["dur"] is not None
+        else "job kept with the original config but NO observed duration — it will be missing from the timeline"
+    )
+    keep["note"] = f"{reason} — {tail}"
+    return keep
 
 
 def _recommend_row(
@@ -105,8 +132,7 @@ def _recommend_row(
     tokens, batch = _as_int(row.get(_TOKENS)), _as_int(row.get(_BATCH))
     gpn, nodes = _as_int(row.get(_GPN)), _as_int(row.get(_NODES))
     if not (tokens and batch and gpn and nodes):
-        keep["note"] = "no recommendation: missing/invalid workload fields — kept original layout, no duration"
-        return keep
+        return _unchanged(keep, row, "no recommendation: missing/invalid workload fields")
     wl = {
         "llm_model": str(row[_MODEL]),
         "fine_tuning_method": str(row[_METHOD]),
@@ -131,29 +157,29 @@ def _recommend_row(
             # rejected every config, or the predictor had no answer. The kavier probe
             # (same feasibility checker) tells them apart.
             hint = kavier_hint()
-            if hint:
-                keep["note"] = f"'{predictor}' could not predict this workload{hint}"
-            else:
-                keep["note"] = _infeasible_note(gpn, nodes, feasibility)
-            return keep
+            reason = (
+                f"'{predictor}' could not predict this workload{hint}"
+                if hint
+                else _infeasible_note(gpn, nodes, feasibility)
+            )
+            return _unchanged(keep, row, reason)
         top = out.iloc[0]
         total_tokens, thr = _job_total_tokens(row), top["throughput_tok_s"]
         if not (pd.notna(thr) and thr > 0):
-            keep["note"] = f"'{predictor}' returned no throughput for this workload{kavier_hint()}"
-            return keep
-        est = (total_tokens / thr) if total_tokens else None
+            return _unchanged(keep, row, f"'{predictor}' returned no throughput for this workload{kavier_hint()}")
+        if not total_tokens:
+            return _unchanged(
+                keep, row, "recommended config discarded: no observed throughput/runtime to derive the job's work"
+            )
         return {
             "nodes": int(top["number_of_nodes"]),
             "gpn": int(top["gpus_per_node"]),
             "batch": _as_int(top["batch_size"]) or batch,
-            "dur": est,
-            "note": None
-            if est is not None
-            else "recommended, but no duration: missing observed throughput/runtime in the trace",
+            "dur": total_tokens / thr,
+            "note": None,
         }
     except Exception as exc:  # one bad row must not sink the whole trace
-        keep["note"] = f"'{predictor}' failed ({type(exc).__name__}){kavier_hint()} — kept original layout, no duration"
-        return keep
+        return _unchanged(keep, row, f"'{predictor}' failed ({type(exc).__name__}){kavier_hint()}")
 
 
 def recommend_trace(
