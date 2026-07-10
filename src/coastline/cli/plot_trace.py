@@ -1,4 +1,4 @@
-"""`coastline plot-trace` — plot an enriched trace's operational cluster timeline."""
+"""`coastline plot-trace` — plot a recommended trace's operational cluster timeline."""
 
 from __future__ import annotations
 
@@ -12,11 +12,10 @@ from coastline.sdk.trace.plot import plot_trace_timeline
 def _build_parser() -> FriendlyParser:
     p = FriendlyParser(
         prog="coastline plot-trace",
-        description="Plot a coastline-enriched trace: the operational cluster timeline "
-        "(GPUs in use + jobs queued over time).",
-        example="coastline plot-trace --input enriched.csv --output timeline.pdf",
+        description="Plot a recommended trace: the operational cluster timeline (GPUs in use + jobs queued over time).",
+        example="coastline plot-trace --input recommended.csv --output timeline.pdf",
     )
-    p.add_argument("--input", required=True, help="Enriched trace CSV (from coastline enrich-trace).")
+    p.add_argument("--input", required=True, help="Recommended trace CSV (from coastline recommend-trace).")
     p.add_argument("--output", required=True, help="Output path for the timeline figure.")
     add_trace_layout_args(p)
     return p

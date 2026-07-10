@@ -2,7 +2,7 @@
 
 Covers the full flow:
   1. synthetic trace CSV matching the trace schema
-  2. enrich_trace() -> enriched CSV with layout + estimated_duration column
+  2. recommend_trace() -> enriched CSV with layout + estimated_duration column
 
 Every assertion carries an INDEPENDENT oracle: hand-derived arithmetic
 (estimated_duration = total_tokens / throughput), a scaling law
@@ -60,7 +60,7 @@ def _write_trace(tmp_path, rows) -> str:
 def _rules_throughput() -> float:
     """Throughput kavier assigns to the fixture workload on the divisibility-only
     (rules) path — fetched via a SEPARATE recommend() call so it is an independent
-    oracle for enrich_trace's estimated_duration = total_tokens / throughput."""
+    oracle for recommend_trace's estimated_duration = total_tokens / throughput."""
     import coastline
 
     wl = {
@@ -77,12 +77,12 @@ def _rules_throughput() -> float:
 
 
 # ---------------------------------------------------------------------------
-# 1. enrich_trace — estimated_duration is total_tokens / recommended throughput
+# 1. recommend_trace — estimated_duration is total_tokens / recommended throughput
 # ---------------------------------------------------------------------------
 
 
-def test_enrich_trace_rules_estimate_equals_total_tokens_over_throughput(tmp_path):
-    """enrich_trace writes estimated_duration = job_total_tokens / recommended
+def test_recommend_trace_rules_estimate_equals_total_tokens_over_throughput(tmp_path):
+    """recommend_trace writes estimated_duration = job_total_tokens / recommended
     throughput. Oracle: total_tokens = 2500*3600 = 9_000_000 (hand-derived), and
     the throughput is obtained from an INDEPENDENT recommend() call, so the product
     est * throughput must recover the 9_000_000 tokens of work.
@@ -90,12 +90,12 @@ def test_enrich_trace_rules_estimate_equals_total_tokens_over_throughput(tmp_pat
     This falsifies a total-token bug (e.g. using tokens_per_sample instead of
     tps*runtime) or an inverted division.
     """
-    from coastline.sdk.trace.enrich import enrich_trace
+    from coastline.sdk.trace.recommend import recommend_trace
 
     in_csv = _write_trace(tmp_path, [_trace_row()])
     out_csv = str(tmp_path / "enriched.csv")
 
-    df = enrich_trace(in_csv, out_csv, method="kavier", feasibility="rules")
+    df = recommend_trace(in_csv, out_csv, method="kavier", feasibility="rules")
 
     # enriched CSV round-trips to disk with the single input row
     assert (tmp_path / "enriched.csv").exists(), "enriched CSV not written"
@@ -114,7 +114,7 @@ def test_enrich_trace_rules_estimate_equals_total_tokens_over_throughput(tmp_pat
     assert est * thr == pytest.approx(_FIXTURE_TOTAL_TOKENS)
 
 
-def test_enrich_trace_estimated_duration_scales_linearly_with_runtime(tmp_path):
+def test_recommend_trace_estimated_duration_scales_linearly_with_runtime(tmp_path):
     """Two identical workloads differing only in train_runtime (3600 s vs 7200 s)
     get the SAME recommended config -> the SAME throughput, so estimated_duration
     (= tps*runtime / throughput) must scale linearly with runtime: doubling the
@@ -122,19 +122,19 @@ def test_enrich_trace_estimated_duration_scales_linearly_with_runtime(tmp_path):
 
     Falsifies any bug where the estimate ignores runtime / total tokens.
     """
-    from coastline.sdk.trace.enrich import enrich_trace
+    from coastline.sdk.trace.recommend import recommend_trace
 
     in_csv = _write_trace(tmp_path, [_trace_row(runtime=3600.0), _trace_row(runtime=7200.0)])
     out_csv = str(tmp_path / "enriched_scale.csv")
 
-    df = enrich_trace(in_csv, out_csv, method="kavier", feasibility="rules")
+    df = recommend_trace(in_csv, out_csv, method="kavier", feasibility="rules")
     est = pd.to_numeric(df["metadata.estimated_duration_kavier"], errors="coerce")
 
     # runtime doubled from row 0 to row 1 -> tokens doubled -> duration doubled.
     assert est.iloc[1] == pytest.approx(2.0 * est.iloc[0])
 
 
-def test_enrich_trace_autoconf_default_does_not_fall_back_to_rules(tmp_path):
+def test_recommend_trace_autoconf_default_does_not_fall_back_to_rules(tmp_path):
     """The default feasibility='autoconf' runs the real OOM check, which caps a
     full fine-tune of a 7B model on a single 80GB A100 to a SMALLER batch than the
     divisibility-only ('rules') path admits. Different batch -> different throughput
@@ -144,12 +144,12 @@ def test_enrich_trace_autoconf_default_does_not_fall_back_to_rules(tmp_path):
     Equality would mean autoconf silently degraded to the rules path — the exact
     regression the docstring warns about.
     """
-    from coastline.sdk.trace.enrich import enrich_trace
+    from coastline.sdk.trace.recommend import recommend_trace
 
     in_csv = _write_trace(tmp_path, [_trace_row()])
 
-    df_auto = enrich_trace(in_csv, str(tmp_path / "auto.csv"), method="kavier")  # default = autoconf
-    df_rules = enrich_trace(in_csv, str(tmp_path / "rules.csv"), method="kavier", feasibility="rules")
+    df_auto = recommend_trace(in_csv, str(tmp_path / "auto.csv"), method="kavier")  # default = autoconf
+    df_rules = recommend_trace(in_csv, str(tmp_path / "rules.csv"), method="kavier", feasibility="rules")
 
     est_auto = float(pd.to_numeric(df_auto["metadata.estimated_duration_kavier"], errors="coerce").iloc[0])
     est_rules = float(pd.to_numeric(df_rules["metadata.estimated_duration_kavier"], errors="coerce").iloc[0])

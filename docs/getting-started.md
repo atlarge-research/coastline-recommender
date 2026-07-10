@@ -65,15 +65,27 @@ the rest.
 
 ## CLI
 
-One `coastline` command, five subcommands:
+One `coastline` command, six subcommands:
 
 ```bash
 coastline recommend --config config.yaml --input workloads.csv --output recs.csv  # batch CSV → CSV
-coastline run       --config config/coastline_functionality/config.yaml           # → recommendation.json
-coastline enrich-trace --input trace.csv --output enriched.csv --method kavier     # annotate a trace
+coastline run       --config config/coastline_functionality/config.yaml           # → recommendation JSON
+coastline recommend-trace --input trace.csv --output enriched.csv --method kavier     # annotate a trace
 coastline plot-trace   --input enriched.csv --output timeline.pdf              # visualise ([plot] extra)
+coastline tune      --data runs.csv --model tabpfn --train-percentage 1.0          # tune on your own runs ([ml] extra)
 coastline interactive                                                             # guided REPL
 ```
+
+### Tune on your own measurements
+
+`coastline tune` fits TabPFN on any measured-runs CSV. `--train-percentage 1.0`
+(default) uses every valid row — no holdout; lower values hold out a test split and
+report MdAPE for both targets. `coastline tune --format` prints the dataset
+contract; a CSV that doesn't meet it fails loudly listing what's missing, and
+quality problems (too few rows, one config, models unknown to Kavier's library)
+print as *"Tuning may have produced poor results because valid datasets should have
+these properties: …"*. The tuned model is picked up immediately by
+`--method tabpfn` / `predictors.performance: tabpfn`.
 
 The FastAPI dashboard is the second entrypoint:
 

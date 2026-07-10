@@ -7,7 +7,7 @@ Submodules:
     policies    min_gpu · multi_objective  (PolicyFactory — the single predictor resolver)
     models      WorkloadSpec · SystemContext · Prediction · Recommendation
     library     GPU/LLM hardware specs
-    trace       enrich · plot
+    trace       recommend · plot
     io          config/options loaders · json/html run artifacts · infrastructure · odc_runner
 
 Import-light by contract: this package imports no heavy backend (torch, catboost,

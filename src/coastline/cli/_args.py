@@ -6,7 +6,7 @@ import argparse
 
 
 def add_trace_layout_args(parser: argparse.ArgumentParser) -> None:
-    """Cluster-layout flags shared by `enrich-trace --visual` and `plot-trace`."""
+    """Cluster-layout flags shared by `recommend-trace --visual` and `plot-trace`."""
     parser.add_argument(
         "--method", default="kavier", help="Predictor whose estimate to use: kavier | tabpfn | xgb (default: kavier)."
     )

@@ -38,7 +38,7 @@ One installable package, `src/coastline` (uv-native, `build-backend = "uv_build"
 
 | Layer | Role |
 |---|---|
-| `coastline.cli` | The single `coastline` dispatcher: `recommend` / `run` / `enrich-trace` / `plot-trace` / `interactive` |
+| `coastline.cli` | The single `coastline` dispatcher: `recommend` / `run` / `recommend-trace` / `plot-trace` / `tune` / `interactive` |
 | `coastline.ui` | FastAPI dashboard + REST (`coastline-ui`) — wizard UI, background prediction worker + queue |
 | `coastline.sdk` | The engine, import-light: `recommend` (facade + batch) · `pipeline` · `predictors` · `policies` · `models` · `library` · `trace` · `io` |
 
@@ -88,5 +88,5 @@ FastAPI app (`ui/app.py`) serving the wizard UI + REST. Long predictions run thr
 - `import coastline` — Python facade (`sdk/recommend/facade.py`): single workloads or batch DataFrames, in-process. `coastline.recommend(batch)` → DataFrame; `coastline(...).recommend(workload)` → `list[Recommendation]`.
 - `coastline recommend` / `coastline.recommend_csv()` — production batch CSV→CSV with config-declared safeguards.
 - `coastline run --config …` (`make recommend`) — config-driven engine run → JSON to stdout (write an artifact via `--output-dir` or `OUTPUT_DIR`).
-- `coastline enrich-trace` / `coastline plot-trace` — add Coastline predictions to a fine-tuning trace CSV, then visualise ([plot] extra).
+- `coastline recommend-trace` / `coastline plot-trace` — add Coastline predictions to a fine-tuning trace CSV, then visualise ([plot] extra).
 - `coastline-ui` (`make gui`) — the FastAPI dashboard.

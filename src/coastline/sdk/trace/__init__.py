@@ -1,1 +1,1 @@
-"""Fine-tuning trace enrichment and plotting."""
+"""Fine-tuning trace recommendation and plotting."""

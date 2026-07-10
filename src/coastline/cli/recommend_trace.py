@@ -1,4 +1,4 @@
-"""`coastline enrich-trace` — enrich a fine-tuning trace CSV with coastline recommendations."""
+"""`coastline recommend-trace` — recommend a config for every job in a fine-tuning trace CSV."""
 
 from __future__ import annotations
 
@@ -7,17 +7,18 @@ from typing import Optional, Sequence
 
 from coastline.cli._args import add_trace_layout_args
 from coastline.cli._shared import FriendlyParser
-from coastline.sdk.trace.enrich import enrich_trace
+from coastline.sdk.trace.recommend import recommend_trace
 
 
 def _build_parser() -> FriendlyParser:
     p = FriendlyParser(
-        prog="coastline enrich-trace",
-        description="Enrich a fine-tuning trace with coastline recommendations.",
-        example="coastline enrich-trace --input trace.csv --output enriched.csv --method kavier",
+        prog="coastline recommend-trace",
+        description="Recommend a config for every job in a fine-tuning trace CSV "
+        "(adds the recommended layout + estimated duration per row).",
+        example="coastline recommend-trace --input trace.csv --output recommended.csv --method kavier",
     )
     p.add_argument("--input", required=True, help="Input trace CSV.")
-    p.add_argument("--output", required=True, help="Output (enriched) CSV.")
+    p.add_argument("--output", required=True, help="Output (recommended trace) CSV.")
     p.add_argument(
         "--goal",
         default="min_gpu",
@@ -52,7 +53,7 @@ def _build_parser() -> FriendlyParser:
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = _build_parser().parse_args(argv)
-    df = enrich_trace(
+    df = recommend_trace(
         args.input, args.output, method=args.method, goal=args.goal, feasibility=args.feasibility, lookup=args.lookup
     )
     n = df[f"metadata.estimated_duration_{args.method}"].notna().sum()

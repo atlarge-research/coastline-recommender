@@ -42,7 +42,7 @@ One `coastline` command (five subcommands) plus the dashboard:
 ```bash
 coastline recommend --config config.yaml --input workloads.csv --output recs.csv  # batch CSV → CSV
 coastline run --config config/coastline_functionality/config.yaml                 # → recommendation.json
-coastline enrich-trace --input trace.csv --output enriched.csv                    # annotate a trace
+coastline recommend-trace --input trace.csv --output enriched.csv                    # annotate a trace
 coastline plot-trace --input enriched.csv --output timeline.pdf                   # visualise ([plot] extra)
 coastline interactive                                                            # guided REPL
 coastline-ui                                                                     # FastAPI dashboard :8000

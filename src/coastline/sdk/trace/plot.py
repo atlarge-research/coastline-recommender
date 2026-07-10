@@ -3,7 +3,7 @@ cluster timeline — FIFO-schedule the recommended configs onto a fixed cluster 
 draw GPUs-in-use (filled area) + jobs-queued (line) over time, the exp2/exp4
 "what does running these recommendations look like" view.
 
-Input: a trace enriched by ``coastline enrich-trace`` (it carries the recommended
+Input: a trace enriched by ``coastline recommend-trace`` (it carries the recommended
 layout columns plus ``metadata.estimated_duration_<method>``).
 """
 
@@ -14,7 +14,7 @@ import math
 
 import pandas as pd
 
-# Recommended layout written by coastline enrich-trace (originals are the fallback).
+# Recommended layout written by coastline recommend-trace (originals are the fallback).
 _GPN = "resources.num_gpus_per_node"
 _NODES = "resources.num_nodes"
 _ORIG_GPUS = "metadata.orig_number_gpus"
@@ -210,7 +210,9 @@ def plot_trace_timeline(
     df = pd.read_csv(enriched_csv, low_memory=False)
     est_col = f"metadata.estimated_duration_{method}"
     if est_col not in df.columns:
-        raise SystemExit(f"{enriched_csv} has no '{est_col}' — run `coastline enrich-trace --method {method}` first.")
+        raise SystemExit(
+            f"{enriched_csv} has no '{est_col}' — run `coastline recommend-trace --method {method}` first."
+        )
     jobs, skipped = _trace_jobs(df, method)
     if not jobs:
         raise SystemExit("no rows with both a positive estimated duration and a positive GPU count to schedule.")

@@ -26,8 +26,8 @@ def _run_run(argv: Optional[Sequence[str]]) -> None:
     main(argv)
 
 
-def _run_enrich(argv: Optional[Sequence[str]]) -> None:
-    from coastline.cli.enrich_trace import main
+def _run_recommend_trace(argv: Optional[Sequence[str]]) -> None:
+    from coastline.cli.recommend_trace import main
 
     main(argv)
 
@@ -44,12 +44,19 @@ def _run_interactive(argv: Optional[Sequence[str]]) -> None:
     run(argv)
 
 
+def _run_tune(argv: Optional[Sequence[str]]) -> None:
+    from coastline.cli.tune import main
+
+    main(argv)
+
+
 _COMMANDS: dict[str, tuple[str, _Handler]] = {
     "recommend": ("Batch-recommend GPU/node configs for a CSV of workloads (CSV in -> CSV out).", _run_recommend),
     "run": ("Run one config-file experiment; write a recommendation.json run artifact.", _run_run),
-    "enrich-trace": ("Enrich a fine-tuning trace CSV with coastline recommendations.", _run_enrich),
-    "plot-trace": ("Plot an enriched trace: cluster timeline and/or impact scatter ([plot] extra).", _run_plot),
+    "recommend-trace": ("Recommend a config for every job in a fine-tuning trace CSV.", _run_recommend_trace),
+    "plot-trace": ("Plot a recommended trace: cluster timeline, GPUs in use + jobs queued ([plot] extra).", _run_plot),
     "interactive": ("Guided keyboard-driven REPL over the recommender.", _run_interactive),
+    "tune": ("Tune a data-driven predictor (tabpfn) on your own measured-runs CSV ([ml] extra).", _run_tune),
 }
 
 
@@ -70,6 +77,9 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         print(f"coastline {__version__}")
         return
     command, rest = args[0], args[1:]
+    if command == "enrich-trace":  # pre-rename spelling, kept working but not advertised
+        print("note: `enrich-trace` is now `recommend-trace`", file=sys.stderr)
+        command = "recommend-trace"
     entry = _COMMANDS.get(command)
     if entry is None:
         print(f"coastline: error: unknown command {command!r}\n", file=sys.stderr)

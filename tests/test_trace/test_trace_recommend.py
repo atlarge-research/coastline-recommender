@@ -11,11 +11,11 @@ Oracles used here:
 import pandas as pd
 import pytest
 
-from coastline.sdk.trace import enrich as trace_enrich
-from coastline.sdk.trace.enrich import (
+from coastline.sdk.trace import recommend as trace_recommend
+from coastline.sdk.trace.recommend import (
     _METHOD_TO_PREDICTOR,
     _job_total_tokens,
-    enrich_trace,
+    recommend_trace,
 )
 
 # One physical row: granite-8b / A100 / full. Kavier finds this feasible at 1 GPU.
@@ -53,7 +53,7 @@ def test_estimated_duration_scales_linearly_with_the_jobs_actual_work(tmp_path):
     r1 = {**_GOOD_ROW, "metadata.uid": "one-hour", "metadata.train_runtime": 3600.0}
     r2 = {**_GOOD_ROW, "metadata.uid": "two-hour", "metadata.train_runtime": 7200.0}
     out = tmp_path / "enriched.csv"
-    df = enrich_trace(str(_write_csv(tmp_path, [r1, r2])), str(out), method="kavier")
+    df = recommend_trace(str(_write_csv(tmp_path, [r1, r2])), str(out), method="kavier")
 
     col = "metadata.estimated_duration_kavier"
     assert col in df.columns
@@ -90,11 +90,11 @@ def test_incomplete_layout_row_short_circuits_before_the_recommender(tmp_path, m
     def _tripwire(*_a, **_k):
         raise AssertionError("recommend must not be called for an incomplete-layout row")
 
-    monkeypatch.setattr(trace_enrich.coastline, "recommend", _tripwire)
+    monkeypatch.setattr(trace_recommend.coastline, "recommend", _tripwire)
 
     row = {**_GOOD_ROW, "resources.num_gpus_per_node": None, "resources.num_nodes": 1, "metadata.uid": "incomplete"}
     out = tmp_path / "out.csv"
-    df = enrich_trace(str(_write_csv(tmp_path, [row])), str(out), method="kavier")
+    df = recommend_trace(str(_write_csv(tmp_path, [row])), str(out), method="kavier")
 
     assert pd.isna(df["metadata.estimated_duration_kavier"].iloc[0])
     # Original layout is preserved untouched (num_nodes stays 1).
@@ -123,7 +123,7 @@ def test_mixed_trace_recommends_good_row_and_preserves_the_unrecommendable_one(t
         "metadata.uid": "bad",
     }
     out = tmp_path / "mixed_out.csv"
-    df = enrich_trace(str(_write_csv(tmp_path, [good, bad])), str(out), method="kavier")
+    df = recommend_trace(str(_write_csv(tmp_path, [good, bad])), str(out), method="kavier")
 
     assert len(df) == 2 and out.exists()
     g = df[df["metadata.uid"] == "good"].iloc[0]
@@ -190,7 +190,7 @@ def test_method_to_predictor_map_is_exactly_the_declared_aliases():
 
 
 def test_enrich_resolves_predictor_and_computes_duration_from_recommended_throughput(tmp_path, monkeypatch):
-    """enrich_trace maps method 'xgb' -> predictor 'xgboost', passes it plus the
+    """recommend_trace maps method 'xgb' -> predictor 'xgboost', passes it plus the
     feasibility choice to coastline.recommend, replaces the layout with the
     recommendation, and derives estimated_duration = job_total_tokens /
     recommended_throughput."""
@@ -212,9 +212,9 @@ def test_enrich_resolves_predictor_and_computes_duration_from_recommended_throug
             ]
         )
 
-    monkeypatch.setattr(trace_enrich.coastline, "recommend", _fake_recommend)
+    monkeypatch.setattr(trace_recommend.coastline, "recommend", _fake_recommend)
 
-    df = enrich_trace(str(_write_csv(tmp_path, [_GOOD_ROW])), str(tmp_path / "o1.csv"), method="xgb")
+    df = recommend_trace(str(_write_csv(tmp_path, [_GOOD_ROW])), str(tmp_path / "o1.csv"), method="xgb")
     assert captured["predictor"] == "xgboost"
     assert captured["feasibility"] == "autoconf"  # default is the real OOM check
     # Layout replaced by the recommendation.
@@ -227,16 +227,16 @@ def test_enrich_resolves_predictor_and_computes_duration_from_recommended_throug
     assert df["metadata.estimated_duration_xgb"].iloc[0] == pytest.approx(3600.0)
 
     # Caller can opt out to the rules-only feasibility path.
-    enrich_trace(str(_write_csv(tmp_path, [_GOOD_ROW])), str(tmp_path / "o2.csv"), method="xgb", feasibility="rules")
+    recommend_trace(str(_write_csv(tmp_path, [_GOOD_ROW])), str(tmp_path / "o2.csv"), method="xgb", feasibility="rules")
     assert captured["feasibility"] == "rules"
 
     # An unmapped method falls through lowercased, unchanged.
-    enrich_trace(str(_write_csv(tmp_path, [_GOOD_ROW])), str(tmp_path / "o3.csv"), method="SomeModel")
+    recommend_trace(str(_write_csv(tmp_path, [_GOOD_ROW])), str(tmp_path / "o3.csv"), method="SomeModel")
     assert captured["predictor"] == "somemodel"
 
 
 # --------------------------------------------------------------------------- #
-# main() / the coastline enrich-trace CLI (via monkeypatched argv)
+# main() / the coastline recommend-trace CLI (via monkeypatched argv)
 # --------------------------------------------------------------------------- #
 
 
@@ -244,7 +244,7 @@ def test_main_cli_enriches_trace_and_reports_the_derived_row_count(tmp_path, cap
     src = _write_csv(tmp_path, [_GOOD_ROW])
     out = tmp_path / "cli_out.csv"
     argv = [
-        "enrich-trace",
+        "recommend-trace",
         "--input",
         str(src),
         "--output",

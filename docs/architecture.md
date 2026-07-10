@@ -106,7 +106,7 @@ every predictor and policy speaks.
 
 ```text
 src/coastline/
-├── cli/          coastline — recommend · run · enrich-trace · plot-trace · interactive
+├── cli/          coastline — recommend · run · recommend-trace · plot-trace · interactive
 ├── ui/           coastline-ui — FastAPI dashboard + REST
 └── sdk/
     ├── recommend/    facade · batch DataFrame · CSV→CSV · engine

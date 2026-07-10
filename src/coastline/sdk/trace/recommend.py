@@ -1,9 +1,9 @@
-"""Enrich a fine-tuning trace with coastline recommendations.
+"""Recommend a config for every job in a fine-tuning trace.
 
 Replaces the GPU layout columns and appends ``metadata.estimated_duration_<method>``
 (= job_total_tokens / recommended_throughput). With ``--visual`` it also renders the
 operational cluster timeline (the recommended configs FIFO-scheduled — GPUs in use +
-jobs queued over time) to a PDF beside the enriched CSV.
+jobs queued over time) to a PDF beside the output CSV.
 """
 
 from __future__ import annotations
@@ -156,7 +156,7 @@ def _recommend_row(
         return keep
 
 
-def enrich_trace(
+def recommend_trace(
     input_csv: str,
     output_csv: str,
     *,
@@ -165,7 +165,7 @@ def enrich_trace(
     feasibility: str = "autoconf",
     lookup: Optional[str] = None,
 ) -> pd.DataFrame:
-    """Recommend a layout per trace row, write the enriched CSV, and return the DataFrame.
+    """Recommend a layout per trace row, write the recommended-trace CSV, and return the DataFrame.
 
     ``feasibility="autoconf"`` (default) runs the real AutoConf OOM check — it
     fail-closes if AutoConf (the ``coastline[autoconf]`` extra) is
