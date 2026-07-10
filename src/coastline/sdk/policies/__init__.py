@@ -111,10 +111,10 @@ class PolicyFactory:
         if not lookup:
             return None
         if str(lookup).strip().lower() == "default":
-            default = _REPO_ROOT / "config" / "coastline_functionality" / "default_lookup.csv"
+            default = _REPO_ROOT / "config" / "coastline_functionality" / "run_database.csv"
             if not default.exists():
                 raise FileNotFoundError(
-                    "the default lookup DB (config/coastline_functionality/default_lookup.csv) "
+                    "the default run database (config/coastline_functionality/run_database.csv) "
                     "is only available in a repo checkout — pass an explicit lookup CSV path"
                 )
             return default
