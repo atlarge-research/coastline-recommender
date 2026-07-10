@@ -114,11 +114,11 @@ def test_wheel_ships_package_not_heavy_artifacts(tmp_path):
     # them); the large/instance-based ones (tabpfn, random_forest, knn, gaussian_process, svr) do NOT.
     _portfolio = "coastline/sdk/predictors/performance/data_driven/portfolio/"
     for stem in ("catboost", "xgboost", "lightgbm", "bayesian_ridge"):
-        assert f"{_portfolio}performance_{stem}_featv3.pkl" in names, f"{stem} model not bundled"
-    assert any(n.startswith(f"{_portfolio}performance_deep_learning_featv3/") for n in names)
+        assert f"{_portfolio}{stem}.pkl" in names, f"{stem} model not bundled"
+    assert any(n.startswith(f"{_portfolio}deep_learning/") for n in names)
     # (predictor code for these ships; only their trained artifacts must not).
     for excluded in ("tabpfn", "random_forest", "knn", "gaussian_process", "svr"):
-        assert not [n for n in names if f"performance_{excluded}_featv3" in n], (
+        assert not [n for n in names if n.endswith(f"/{excluded}.pkl")], (
             f"{excluded} model artifact must NOT ship in the public wheel"
         )
     assert not [n for n in names if "/tests/" in n], "wheel must not ship test packages"

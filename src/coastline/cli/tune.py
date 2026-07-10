@@ -27,7 +27,7 @@ def _build_parser() -> FriendlyParser:
     p.add_argument(
         "--output",
         default=None,
-        help="Artifact path (default: models/performance_<model>_featv3.pkl, auto-discovered "
+        help="Artifact path (default: models/custom/<model>.pkl, auto-discovered "
         "by --method/<predictors.performance> = tabpfn).",
     )
     p.add_argument("--seed", type=int, default=42, help="Split seed (default 42).")

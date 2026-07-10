@@ -22,7 +22,6 @@ import numpy as np
 import pandas as pd
 
 from coastline.sdk.predictors.performance.data_driven.ml_common import (
-    PERFORMANCE_MODEL_ARTIFACT_SUFFIX,
     _torch_dtype_category,
     custom_models_dir,
     extract_model_family,
@@ -233,9 +232,7 @@ def tune(
 
     tune_id = f"{model}-{time.strftime('%Y%m%d-%H%M%S')}"
     # tuned artifacts land in models/custom/ — they shadow the coastline-bundled portfolio
-    path = (
-        Path(output) if output else custom_models_dir() / f"performance_{model}{PERFORMANCE_MODEL_ARTIFACT_SUFFIX}.pkl"
-    )
+    path = Path(output) if output else custom_models_dir() / f"{model}.pkl"
     step(
         f"tune id {tune_id} · train {len(X_train)} rows / holdout {0 if X_test is None else len(X_test)} rows "
         f"(train-percentage {train_percentage}) · device {device}"

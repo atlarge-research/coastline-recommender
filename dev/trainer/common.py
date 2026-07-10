@@ -33,12 +33,12 @@ PERFORMANCE_MODEL_ARTIFACT_SUFFIX = "_featv3"
 
 def performance_trained_model_path(model_stem: str) -> Path:
     """Path to a trained sklearn-style pickle (e.g. model_stem='xgboost')."""
-    return PORTFOLIO_DIR / f"performance_{model_stem}{PERFORMANCE_MODEL_ARTIFACT_SUFFIX}.pkl"
+    return PORTFOLIO_DIR / f"{model_stem}.pkl"
 
 
 def performance_deep_learning_model_dir() -> Path:
     """Directory holding Deep Learning weights + artifacts for the current feature schema."""
-    return PORTFOLIO_DIR / f"performance_deep_learning{PERFORMANCE_MODEL_ARTIFACT_SUFFIX}"
+    return PORTFOLIO_DIR / "deep_learning"
 
 
 SEED = 42

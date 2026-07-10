@@ -118,27 +118,28 @@ def custom_models_dir() -> Path:
     return PORTFOLIO_DIR / "custom"
 
 
-def _resolve_artifact(name: str) -> Path:
-    """First existing of custom/ > coastline-bundled/ > flat PORTFOLIO_DIR > packaged portfolio;
-    falls back to the custom/ path (for a clear not-found error) when none exists."""
-    for directory in (PORTFOLIO_DIR / "custom", PORTFOLIO_DIR / "coastline-bundled", PORTFOLIO_DIR):
-        candidate = directory / name
-        if candidate.exists():
-            return candidate
-    bundled = _BUNDLED_PORTFOLIO_DIR / name
-    if bundled.exists():
-        return bundled
-    return PORTFOLIO_DIR / "custom" / name
+def _resolve_artifact(*names: str) -> Path:
+    """First existing of custom/ > coastline-bundled/ > flat PORTFOLIO_DIR > packaged portfolio,
+    trying each name spelling per directory; falls back to the custom/ path of the first
+    (canonical) name for a clear not-found error."""
+    directories = (PORTFOLIO_DIR / "custom", PORTFOLIO_DIR / "coastline-bundled", PORTFOLIO_DIR, _BUNDLED_PORTFOLIO_DIR)
+    for directory in directories:
+        for name in names:
+            candidate = directory / name
+            if candidate.exists():
+                return candidate
+    return PORTFOLIO_DIR / "custom" / names[0]
 
 
 def performance_trained_model_path(model_stem: str) -> Path:
-    """Path to a trained sklearn-style pickle (e.g. model_stem='xgboost')."""
-    return _resolve_artifact(f"performance_{model_stem}{PERFORMANCE_MODEL_ARTIFACT_SUFFIX}.pkl")
+    """Path to a trained sklearn-style pickle (e.g. model_stem='xgboost') — ``<stem>.pkl``,
+    with the pre-rename ``performance_<stem>_featv3.pkl`` spelling as a legacy fallback."""
+    return _resolve_artifact(f"{model_stem}.pkl", f"performance_{model_stem}{PERFORMANCE_MODEL_ARTIFACT_SUFFIX}.pkl")
 
 
 def performance_deep_learning_model_dir() -> Path:
-    """Directory holding DL weights + artifacts for the current feature schema."""
-    return _resolve_artifact(f"performance_deep_learning{PERFORMANCE_MODEL_ARTIFACT_SUFFIX}")
+    """Directory holding DL weights + artifacts (``deep_learning/``; legacy spelling falls back)."""
+    return _resolve_artifact("deep_learning", f"performance_deep_learning{PERFORMANCE_MODEL_ARTIFACT_SUFFIX}")
 
 
 def extract_model_family(name: str) -> str:
