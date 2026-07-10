@@ -29,6 +29,7 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     "max_gpus": ("max_gpus", "gpu_budget"),
     "goal": ("goal", "goal_label"),
     "predictor": ("predictor", "throughput_estim"),
+    "lookup": ("lookup", "lookup_csv"),
     "max_slowdown": ("max_slowdown", "runtime_guard_k"),
 }
 # Public column -> the ``engine`` answers key it fills (the engine's own schema).
@@ -43,6 +44,7 @@ _COLUMN_TO_ANSWER = {
     "max_gpus": "max_gpus",
     "goal": "goal_label",
     "predictor": "predictor",
+    "lookup": "lookup",
 }
 _INT_COLUMNS = ("tokens_per_sample", "batch_size", "dataset_size", "epochs", "max_gpus")
 
@@ -209,6 +211,7 @@ def recommend(
     dataset_size: Optional[int] = None,
     epochs: Optional[int] = None,
     feasibility: str = "autoconf",
+    lookup: Optional[str] = None,
 ) -> pd.DataFrame:
     """Recommend GPU/node configurations for a batch — returns a ``pandas.DataFrame`` of the input
     rows plus the chosen config + predictions (one row per ranked pick).
@@ -218,6 +221,8 @@ def recommend(
     yields ``feasible=False`` without failing the rest. ``max_slowdown`` keeps only configs within k×
     of the fastest. ``feasibility`` picks the OOM checker (``autoconf`` | ``rules`` | ``none``); use
     ``rules`` for the divisibility-only path that needs no AutoConf install.
+    ``lookup`` points the ``cache``/``intelligent`` predictors at a measured-runs CSV
+    (or ``"default"`` for the small bundled lookup DB); other predictors ignore it.
     """
     rows = _normalise(batch)
     base = engine.defaults(engine.resolve_options())
@@ -228,6 +233,7 @@ def recommend(
         "max_slowdown": max_slowdown,
         "dataset_size": dataset_size,
         "epochs": epochs,
+        "lookup": lookup,
     }
 
     out_rows: list[dict[str, Any]] = []

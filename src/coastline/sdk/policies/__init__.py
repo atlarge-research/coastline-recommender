@@ -102,23 +102,41 @@ class PolicyFactory:
             raise ValueError(f"Unknown strategy: '{strategy_name}'. Supported: 'min_gpu', 'multi_objective'")
 
     @staticmethod
+    def _lookup_path(predictor_config: dict) -> Optional[Path]:
+        """Resolve ``predictors.lookup``: a measured-runs CSV path, or the literal
+        ``default`` for the bundled (jittered sfttrainer) lookup DB. None = the
+        RetrievalPredictor's own resolution ($DATA_DIR, then the bundled sample)."""
+        lookup = predictor_config.get("lookup")
+        if not lookup:
+            return None
+        if str(lookup).strip().lower() == "default":
+            from coastline.sdk.io.sample_data import default_lookup_path
+
+            return default_lookup_path()
+        path = Path(lookup)
+        if not path.exists():
+            raise FileNotFoundError(f"lookup CSV not found: {path}")
+        return path
+
+    @staticmethod
     def throughput_predictor(predictor_config: dict):
         performance_type = predictor_config.get("performance", "intelligent")
+        lookup = PolicyFactory._lookup_path(predictor_config)
         if performance_type in ("kavier", "physics", "physics_driven"):
             return create_physics_driven()
         if performance_type == "cache":
-            return RetrievalPredictor()
+            return RetrievalPredictor(dataset_path=lookup)
         if performance_type == "intelligent":
-            return PolicyFactory._intelligent_throughput_predictor()
+            return PolicyFactory._intelligent_throughput_predictor(lookup)
         # a specific data-driven model selected by name (catboost, xgboost, …)
         named = _build_named_ml_predictor(performance_type)
         if named is not None:
             return named
         logger.warning("Unknown predictor '%s'; using intelligent default", performance_type)
-        return PolicyFactory._intelligent_throughput_predictor()
+        return PolicyFactory._intelligent_throughput_predictor(lookup)
 
     @staticmethod
-    def _intelligent_throughput_predictor():
+    def _intelligent_throughput_predictor(lookup: Optional[Path] = None):
         # "intelligent" = use an exact cache match (a real measured past run) when
         # one exists for this configuration, else the Kavier analytical predictor.
         # A cache miss yields no prediction, so the composite falls through to
@@ -126,7 +144,7 @@ class PolicyFactory:
         from coastline.sdk.predictors.performance.composite import CacheThenPhysicsPredictor
 
         return CacheThenPhysicsPredictor(
-            cache=RetrievalPredictor(),
+            cache=RetrievalPredictor(dataset_path=lookup),
             physics=create_physics_driven(),
         )
 

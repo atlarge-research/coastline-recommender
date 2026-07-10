@@ -3,10 +3,9 @@
 Covers the full flow:
   1. synthetic trace CSV matching the trace schema
   2. enrich_trace() -> enriched CSV with layout + estimated_duration column
-  3. plot_trace_performance() -> PNG + impact stats (jobs / pct_faster / median_speedup)
 
 Every assertion carries an INDEPENDENT oracle: hand-derived arithmetic
-(estimated_duration = total_tokens / throughput, impact stats), a scaling law
+(estimated_duration = total_tokens / throughput), a scaling law
 (duration scales linearly with runtime), a derived-metric cross-check
 (tokens_per_watt = throughput / power, energy_wh = power x gpus x runtime / 3600),
 or a cross-method contract check (autoconf must not silently fall back to rules).
@@ -202,42 +201,3 @@ def test_recommend_feasibility_rules_works_without_autoconf(monkeypatch):
     assert float(row["tokens_per_watt"]) == pytest.approx(thr / power)
     # energy [Wh] = per-GPU power * #GPUs * runtime[s] / 3600 s-per-h (catches a /1000 unit bug).
     assert float(row["energy_wh"]) == pytest.approx(power * gpus * runtime / 3600.0)
-
-
-# ---------------------------------------------------------------------------
-# 3. plot_trace_performance — impact stats hand-derived from known est/actual
-# ---------------------------------------------------------------------------
-
-
-def test_plot_trace_impact_stats_are_hand_derived(tmp_path):
-    """plot_trace_performance masks rows to (est>0 & actual>0), then reports
-    jobs / pct_faster (est<actual) / median_speedup (actual/est). Build an enriched
-    CSV with KNOWN columns and hand-compute every stat.
-
-    Kept rows (est, actual): (100,200)->speedup 2, (400,200)->0.5, (100,300)->3.
-    Masked: (0,500) est not >0; (NaN,100) est missing.
-      jobs            = 3
-      faster (est<act)= rows 1 & 3 -> 2 of 3 -> pct_faster = 200/3 = 66.667%
-      speedups sorted = [0.5, 2.0, 3.0] -> median = 2.0
-    """
-    pytest.importorskip("matplotlib", reason="matplotlib not installed; pip install coastline[plot]")
-
-    from coastline.sdk.trace.plot import plot_trace_performance
-
-    enriched = tmp_path / "enriched.csv"
-    pd.DataFrame(
-        {
-            "metadata.estimated_duration_kavier": [100.0, 400.0, 100.0, 0.0, float("nan")],
-            "metadata.output.extrapolated_duration": [200.0, 200.0, 300.0, 500.0, 100.0],
-        }
-    ).to_csv(enriched, index=False)
-
-    out_png = tmp_path / "perf.png"
-    result = plot_trace_performance(str(enriched), str(out_png), method="kavier")
-
-    # PNG written (guard for the plotting side effect)
-    assert out_png.exists() and out_png.stat().st_size > 0, "PNG not written"
-
-    assert result["jobs"] == 3  # two of five rows masked out
-    assert result["pct_faster"] == pytest.approx(200.0 / 3.0)  # 2 faster of 3 -> 66.667%
-    assert result["median_speedup"] == pytest.approx(2.0)  # median of [0.5, 2.0, 3.0]

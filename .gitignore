@@ -39,3 +39,7 @@ daniele_data/
 # Stray generated doc artifacts (the docs live under docs/ as MkDocs Markdown).
 /USAGE.html
 /cluster_timeline*.pdf
+/demo/
+
+# local demo data + generated artifacts
+demo/

@@ -121,13 +121,16 @@ def build_config(
     strategy: dict[str, Any] = {"name": strategy_name, "preset": preset or "balanced"}
     if max_slowdown is not None:
         strategy["runtime_guard_k"] = float(max_slowdown)
+    predictors: dict[str, Any] = {
+        "performance": predictor,
+        "energy": "kavier_power",
+        "feasibility": answers.get("feasibility", feasibility),
+    }
+    if answers.get("lookup"):
+        predictors["lookup"] = str(answers["lookup"])  # measured-runs CSV for cache/intelligent
     config: dict[str, Any] = {
         "strategy": strategy,
-        "predictors": {
-            "performance": predictor,
-            "energy": "kavier_power",
-            "feasibility": answers.get("feasibility", feasibility),
-        },
+        "predictors": predictors,
         "grid": {
             # The chosen batch size plus its neighbours, so the ranked table
             # shows real trade-offs rather than a single row.

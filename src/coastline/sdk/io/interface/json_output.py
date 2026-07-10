@@ -8,14 +8,12 @@ from typing import List, Optional, Union
 from coastline.sdk.models.recommendation import Recommendation
 
 
-def save_recommendation_to_json(
+def recommendation_payload(
     recommendation: Recommendation,
-    filepath: Union[str, Path],
     include_metadata: bool = True,
     rationale: Optional[str] = None,
-) -> None:
-    """Save a recommendation to JSON, optionally with its metadata and a one-line
-    rationale ('why this config')."""
+) -> dict:
+    """The JSON-serialisable dict for one recommendation (shared by file + stdout output)."""
     data = {
         "timestamp": datetime.now().isoformat(),
         "configuration": {
@@ -40,7 +38,18 @@ def save_recommendation_to_json(
 
     if include_metadata:
         data["metadata"] = recommendation.metadata
+    return data
 
+
+def save_recommendation_to_json(
+    recommendation: Recommendation,
+    filepath: Union[str, Path],
+    include_metadata: bool = True,
+    rationale: Optional[str] = None,
+) -> None:
+    """Save a recommendation to JSON, optionally with its metadata and a one-line
+    rationale ('why this config')."""
+    data = recommendation_payload(recommendation, include_metadata=include_metadata, rationale=rationale)
     Path(filepath).parent.mkdir(parents=True, exist_ok=True)
     with open(filepath, "w") as f:
         json.dump(data, f, indent=2)

@@ -71,7 +71,7 @@ One `coastline` command, five subcommands:
 coastline recommend --config config.yaml --input workloads.csv --output recs.csv  # batch CSV → CSV
 coastline run       --config config/coastline_functionality/config.yaml           # → recommendation.json
 coastline enrich-trace --input trace.csv --output enriched.csv --method kavier     # annotate a trace
-coastline plot-trace   --input enriched.csv --output timeline.pdf --view timeline  # visualise ([plot] extra)
+coastline plot-trace   --input enriched.csv --output timeline.pdf              # visualise ([plot] extra)
 coastline interactive                                                             # guided REPL
 ```
 

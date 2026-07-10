@@ -13,7 +13,7 @@ from pathlib import Path
 
 import yaml
 
-from coastline.sdk.io.interface.json_output import save_recommendation_to_json
+from coastline.sdk.io.interface.json_output import recommendation_payload, save_recommendation_to_json
 from coastline.sdk.io.run_config import load_strategy_config
 from coastline.sdk.logging import setup_logging
 from coastline.sdk.models.context import SystemContext
@@ -74,7 +74,12 @@ def main(argv: Sequence[str] | None = None) -> None:
         "--config", default=os.environ.get("CONFIG_FILE", "./config/coastline_functionality/default.yaml")
     )
     parser.add_argument("--input", help="JSON input file (overrides workload/context)")
-    parser.add_argument("--output-dir", default=None, help="Output directory")
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="Write recommendation.json here (default: print to stdout, write nothing; "
+        "OUTPUT_DIR env sets a root for per-run subdirectories).",
+    )
     args = parser.parse_args(argv)
 
     config_path = Path(args.config)
@@ -87,11 +92,15 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     strategy_config = load_strategy_config(config_path)
     run_id = os.environ.get("RUN_ID", datetime.now(UTC).strftime("%Y_%m_%d_%H_%M_%S"))
-    # Output is decoupled from DATA_DIR (trace-archive is read-only inputs); run
-    # artifacts go to OUTPUT_DIR (default recommender/runs — a tracked directory;
-    # a couple of sample runs are deliberately committed there).
-    output_root = Path(os.environ.get("OUTPUT_DIR", "recommender/runs"))
-    output_dir = Path(args.output_dir) if args.output_dir else output_root / run_id
+    # Artifacts are opt-in: without --output-dir or OUTPUT_DIR nothing is written
+    # (the recommendation prints to stdout) — no stray recommender/ dir in the CWD.
+    output_root = os.environ.get("OUTPUT_DIR")
+    if args.output_dir:
+        output_dir = Path(args.output_dir)
+    elif output_root:
+        output_dir = Path(output_root) / run_id
+    else:
+        output_dir = None
 
     logger.info("Recommender starting | run_id=%s | config=%s", run_id, config_path)
 
@@ -116,6 +125,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         sys.exit(1)
 
     result = recs[0]
+    if output_dir is None:
+        print(json.dumps(recommendation_payload(result), indent=2))
+        return
     output_dir.mkdir(parents=True, exist_ok=True)
     out_path = output_dir / "recommendation.json"
     save_recommendation_to_json(result, out_path)

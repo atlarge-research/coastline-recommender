@@ -87,6 +87,6 @@ FastAPI app (`ui/app.py`) serving the wizard UI + REST. Long predictions run thr
 
 - `import coastline` — Python facade (`sdk/recommend/facade.py`): single workloads or batch DataFrames, in-process. `coastline.recommend(batch)` → DataFrame; `coastline(...).recommend(workload)` → `list[Recommendation]`.
 - `coastline recommend` / `coastline.recommend_csv()` — production batch CSV→CSV with config-declared safeguards.
-- `coastline run --config …` (`make recommend`) — config-driven engine run → JSON artifact under `recommender/runs/<run_id>/`.
+- `coastline run --config …` (`make recommend`) — config-driven engine run → JSON to stdout (write an artifact via `--output-dir` or `OUTPUT_DIR`).
 - `coastline enrich-trace` / `coastline plot-trace` — add Coastline predictions to a fine-tuning trace CSV, then visualise ([plot] extra).
 - `coastline-ui` (`make gui`) — the FastAPI dashboard.

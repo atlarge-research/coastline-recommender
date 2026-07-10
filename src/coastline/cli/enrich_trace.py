@@ -31,6 +31,13 @@ def _build_parser() -> FriendlyParser:
         "| rules (divisibility-only, works without AutoConf).",
     )
     p.add_argument(
+        "--lookup",
+        default=None,
+        help="Measured-runs CSV for --method cache/intelligent (flat sfttrainer schema), "
+        "or 'default' for the small bundled lookup DB. Default: $DATA_DIR/profiling-dataset/"
+        "raw_trace.csv when set, else the bundled sample.",
+    )
+    p.add_argument(
         "--visual",
         action="store_true",
         help="Also render the operational cluster timeline (GPUs in use + jobs queued over "
@@ -45,9 +52,14 @@ def _build_parser() -> FriendlyParser:
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = _build_parser().parse_args(argv)
-    df = enrich_trace(args.input, args.output, method=args.method, goal=args.goal, feasibility=args.feasibility)
+    df = enrich_trace(
+        args.input, args.output, method=args.method, goal=args.goal, feasibility=args.feasibility, lookup=args.lookup
+    )
     n = df[f"metadata.estimated_duration_{args.method}"].notna().sum()
+    missing = len(df) - n
     print(f"wrote {args.output}: {len(df)} rows, {n} with an estimated_duration_{args.method}")
+    if missing:
+        print(f"note: {missing} row(s) without a duration — see warnings above and metadata.recommendation_note")
     if args.visual:
         from coastline.sdk.trace.plot import plot_trace_timeline
 

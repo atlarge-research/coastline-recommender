@@ -1,12 +1,7 @@
-"""Plot a coastline-enriched trace, two views (``coastline plot-trace --view``):
-
-* ``timeline`` (default) — the operational cluster timeline: FIFO-schedule the
-  recommended configs onto a fixed cluster and draw GPUs-in-use (filled area) +
-  jobs-queued (line) over time, the exp2/exp4 "what does running these
-  recommendations look like" view.
-* ``impact`` — a log-log scatter of recommended-config duration vs original
-  actual duration with a y=x reference line, green where coastline speeds the
-  job up and red otherwise.
+"""Plot a coastline-enriched trace (``coastline plot-trace``): the operational
+cluster timeline — FIFO-schedule the recommended configs onto a fixed cluster and
+draw GPUs-in-use (filled area) + jobs-queued (line) over time, the exp2/exp4
+"what does running these recommendations look like" view.
 
 Input: a trace enriched by ``coastline enrich-trace`` (it carries the recommended
 layout columns plus ``metadata.estimated_duration_<method>``).
@@ -16,13 +11,8 @@ from __future__ import annotations
 
 import heapq
 import math
-from pathlib import Path
 
 import pandas as pd
-
-# Ground-truth job duration in the trace (fall back to measured runtime).
-_ACTUAL = "metadata.output.extrapolated_duration"
-_ACTUAL_FALLBACK = "metadata.train_runtime"
 
 # Recommended layout written by coastline enrich-trace (originals are the fallback).
 _GPN = "resources.num_gpus_per_node"
@@ -49,62 +39,6 @@ def _savefig(fig, path: str) -> None:
         fig.savefig(path, metadata={"CreationDate": None})
     else:
         fig.savefig(path, dpi=130)
-
-
-def plot_trace_performance(enriched_csv: str, output_png: str, *, method: str = "kavier") -> dict:
-    """Scatter recommended vs original duration; write output_png; return impact stats.
-
-    Returns a dict with keys:
-        jobs         – number of jobs with both a positive estimate and a positive actual
-        pct_faster   – percentage of jobs where the recommended config is estimated faster
-        median_speedup – median of (actual / estimate) across all jobs; >1 means faster on average
-    """
-    import matplotlib
-
-    matplotlib.use("Agg")  # headless: write a file, never open a window
-    import matplotlib.pyplot as plt
-
-    df = pd.read_csv(enriched_csv, low_memory=False)
-    est_col = f"metadata.estimated_duration_{method}"
-    if est_col not in df.columns:
-        raise SystemExit(f"{enriched_csv} has no '{est_col}' — run `coastline enrich-trace --method {method}` first.")
-    actual_col = _ACTUAL if _ACTUAL in df.columns else _ACTUAL_FALLBACK
-    if actual_col not in df.columns:
-        raise SystemExit(f"{enriched_csv} has no ground-truth duration ('{_ACTUAL}' or '{_ACTUAL_FALLBACK}').")
-
-    est = pd.to_numeric(df[est_col], errors="coerce")
-    act = pd.to_numeric(df[actual_col], errors="coerce")
-    mask = est.notna() & act.notna() & (est > 0) & (act > 0)
-    est, act = est[mask], act[mask]
-    if est.empty:
-        raise SystemExit("no rows with both a positive estimate and a positive actual duration to plot.")
-
-    faster = est < act
-    pct_faster = float(100.0 * faster.sum() / len(est))
-    speedup = act / est
-    median_speedup = float(speedup.median())
-    n_jobs = len(est)
-
-    colors = ["green" if f else "red" for f in faster]
-
-    fig, ax = plt.subplots(figsize=(6, 6))
-    ax.scatter(act, est, c=colors, s=28, alpha=0.7, edgecolor="black", linewidth=0.4)
-    lo, hi = min(act.min(), est.min()), max(act.max(), est.max())
-    ax.plot([lo, hi], [lo, hi], "--", color="grey", linewidth=1, label="same as original (y=x)")
-    ax.set_xscale("log")
-    ax.set_yscale("log")
-    ax.set_xlabel(f"original actual duration  ({actual_col}, s)")
-    ax.set_ylabel(f"recommended config estimated duration  (estimated_duration_{method}, s)")
-    if not _is_pdf(output_png):
-        ax.set_title(
-            f"Recommendation Impact — {method}\n"
-            f"{n_jobs} jobs · {pct_faster:.1f}% faster · median speedup {median_speedup:.2f}x"
-        )
-    ax.legend()
-    fig.tight_layout()
-    _savefig(fig, output_png)
-    plt.close(fig)
-    return {"jobs": n_jobs, "pct_faster": pct_faster, "median_speedup": median_speedup}
 
 
 # Operational cluster-timeline view (FIFO scheduler ported from exp2/exp4).
@@ -373,9 +307,3 @@ def plot_trace_timeline(
         "peak_gpus": int(peak_gpus),
         "peak_queue": int(peak_queue),
     }
-
-
-def impact_output(path: str) -> str:
-    """`<stem>_impact<suffix>` next to the timeline output (used by --view both)."""
-    p = Path(path)
-    return str(p.with_name(f"{p.stem}_impact{p.suffix or '.png'}"))

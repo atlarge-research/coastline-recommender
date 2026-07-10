@@ -26,6 +26,8 @@ predictors:
   performance: "intelligent"   # ML with Kavier fallback; alt: kavier, cache, or model name
   energy: "kavier_power"       # analytical power model
   feasibility: "autoconf"      # OOM-aware AutoConf checker
+  lookup: "default"            # measured-runs DB for cache/intelligent: a CSV path, or
+                               # "default" = the bundled sample (sfttrainer runs, ±3% jitter)
 
 # GRID — search space: batch_size × total_gpus. gpu_models[0] is the primary GPU.
 grid:
