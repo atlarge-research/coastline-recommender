@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "coastline-recommender"
-version = "0.2.0"
+version = "0.2.1"
 description = "Context-aware GPU/datacenter configuration recommender for LLM fine-tuning"
 readme = "README.md"
 license = "MIT"
@@ -13,7 +13,7 @@ authors = [
     { name = "Radu Nicolae" },
     { name = "AtLarge Research", email = "info@atlarge-research.com" },
 ]
-requires-python = ">=3.13"
+requires-python = ">=3.13,<3.14"
 keywords = [
     "llm",
     "fine-tuning",
@@ -54,6 +54,9 @@ dependencies = [
     # 0.5 exposes the engines under kavier.sdk.* (library / io / training) plus the top-level
     # kavier.inference / kavier.training verbs — which is what coastline imports.
     "kavier>=0.5,<0.6",
+    # AutoConf OOM-feasibility safeguard (open-source `ado`, on public PyPI) — ships by
+    # default so the stock `feasibility: autoconf` check works out of the box.
+    "ado-autoconf>=1.7,<2",
 ]
 
 [project.optional-dependencies]
@@ -69,15 +72,12 @@ ml = [
     "torch>=2.0.0",
     "tabpfn==8.0.3",
 ]
-# AutoConf OOM-feasibility safeguard (IBM's open-source `ado`, on public PyPI).
-# Required for the default `feasibility: autoconf` memory-safety check.
-autoconf = ["ado-autoconf>=1.7,<2"]
+# DEPRECATED no-op: ado-autoconf moved into the core dependencies (ships by default).
+# Kept so `pip install "coastline-recommender[autoconf]"` keeps working.
+autoconf = []
 # Plotting: needed by `coastline plot-trace`. matplotlib is imported lazily inside
 # the plot functions so the core stays importable without it.
 plot = ["matplotlib>=3.5"]
-# OpenDC energy path shells out to an external Java runner (see sdk/io/odc_runner);
-# no extra pip dependency — kept as a documented capability marker.
-opendc = []
 
 # PEP 735 dev group — synced by default with `uv sync`; not part of the published wheel.
 [dependency-groups]
@@ -112,10 +112,9 @@ Issues = "https://github.com/atlarge-research/coastline-recommender/issues"
 #  uv resolver
 # ------------------------------------------------------------------
 [tool.uv]
-# kavier requires pyarrow>=23.0.1 (Arrow-IPC security GHSA); autogluon — pulled ONLY
-# by the optional `autoconf` extra — caps pyarrow<21. The default install already runs
-# pyarrow>=23 for kavier, so override autogluon's stale cap to let the lock resolve.
-# autoconf installs (Docker/OOM path) accept the newer pyarrow.
+# kavier requires pyarrow>=23.0.1 (Arrow-IPC security GHSA); autogluon — pulled by
+# ado-autoconf (a core dependency) — caps pyarrow<21. The install runs pyarrow>=23
+# for kavier, so override autogluon's stale cap to let the lock resolve.
 override-dependencies = ["pyarrow>=23.0.1"]
 
 # ------------------------------------------------------------------
@@ -156,6 +155,9 @@ ignore = []
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The dev trainer/benchmark suites import the `trainer`/`benchmark` packages by name;
+# they resolve with dev/ on the path (only used when those suites are run explicitly).
+pythonpath = ["dev"]
 # Native-ML predictor tests co-load libomp-bundling backends that can crash in one
 # interpreter, so they carry the `ml_isolated` marker and are deselected by default;
 # run them in their own process: `uv run pytest -m ml_isolated -p no:cacheprovider`.

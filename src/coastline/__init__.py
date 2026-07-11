@@ -15,7 +15,7 @@ from importlib.metadata import version as _version
 from typing import TYPE_CHECKING, Any
 
 try:
-    __version__ = _version("coastline")
+    __version__ = _version("coastline-recommender")
 except PackageNotFoundError:  # pragma: no cover - source tree without installed metadata
     __version__ = "0.0.0+unknown"
 
