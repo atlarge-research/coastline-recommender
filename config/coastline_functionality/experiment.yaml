@@ -38,7 +38,6 @@ predictors:
   energy: "kavier_power"
   feasibility: "autoconf"
   autoconf_model_version: "3.1.0"
-  opendc_calibration_factor: 1.0
 
 grid:
   batch_sizes: [4, 8, 16, 32, 64]

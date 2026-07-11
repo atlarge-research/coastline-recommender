@@ -156,14 +156,9 @@ class PolicyFactory:
     @staticmethod
     def power_predictor(predictor_config: dict):
         energy_type = predictor_config.get("energy", "kavier_power")
-        if energy_type == "opendc":
-            from coastline.sdk.predictors.energy.opendc import OpenDCEnergyPredictor
-
-            calibration_factor = predictor_config.get("opendc_calibration_factor", 1.0)
-            return OpenDCEnergyPredictor(calibration_factor=calibration_factor)
         if energy_type == "kavier_power":
             return KavierPowerPredictor()
-        raise ValueError(f"Unknown energy predictor: '{energy_type}'. Supported: 'kavier_power', 'opendc'")
+        raise ValueError(f"Unknown energy predictor: '{energy_type}'. Supported: 'kavier_power'")
 
     @staticmethod
     def _create_min_gpu_strategy(config: dict, predictor_config: dict) -> MinGPUStrategy:

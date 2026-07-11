@@ -203,7 +203,7 @@ def tune(
         from tabpfn.constants import ModelVersion
     except ImportError as exc:
         raise RuntimeError(
-            "tabpfn is not installed — install the ML extras first: make install-ml "
+            "tabpfn is not installed — install the ML extras first: uv sync --extra ml "
             '(or pip install "coastline-recommender[ml]")'
         ) from exc
 

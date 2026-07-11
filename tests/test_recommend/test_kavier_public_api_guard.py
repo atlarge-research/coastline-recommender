@@ -4,8 +4,8 @@ API (``kavier.training`` / ``kavier.inference``, top-level module ``kavier``) or
 
 A module-level ``kavier.sdk.io`` / ``kavier.sdk.training`` import is exactly the kind of eager
 engine dependency that once broke test collection when kavier reorganised its internals. This test
-fails if one is reintroduced. Internals may still be imported LAZILY (inside a function) for the
-paths with no public verb yet (e.g. the OpenDC export) — those are not module-scope, so exempt.
+fails if one is reintroduced. Internals may still be imported LAZILY (inside a function) for any
+path with no public verb yet — those are not module-scope, so exempt.
 """
 
 from __future__ import annotations
@@ -78,11 +78,11 @@ def test_forbidden_matches_exact_internal_package_and_submodules():
     # rule, in a different form (spelled-out cases) than the impl:
     #   "kavier.sdk.io"                 -> exact match on _FORBIDDEN[0]        -> True
     #   "kavier.sdk.training"           -> exact match on _FORBIDDEN[1]        -> True
-    #   "kavier.sdk.io.opendc"          -> submodule of kavier.sdk.io          -> True
+    #   "kavier.sdk.io.adapter"         -> submodule of kavier.sdk.io          -> True
     #   "kavier.sdk.training.core.engine" -> submodule of kavier.sdk.training  -> True
     assert _is_forbidden("kavier.sdk.io")
     assert _is_forbidden("kavier.sdk.training")
-    assert _is_forbidden("kavier.sdk.io.opendc")
+    assert _is_forbidden("kavier.sdk.io.adapter")
     assert _is_forbidden("kavier.sdk.training.core.engine")
 
 
@@ -107,11 +107,11 @@ def test_module_level_imports_are_collected_across_both_import_forms():
     # Body order, both `import` and `from ... import` forms, and a bare relative import (whose ast
     # module is None) which must be skipped without crashing. Hand-enumerated module-scope targets:
     #   import kavier.sdk.training               -> "kavier.sdk.training"
-    #   from kavier.sdk.io.opendc import export  -> "kavier.sdk.io.opendc"
+    #   from kavier.sdk.io.adapter import export -> "kavier.sdk.io.adapter"
     #   from . import sibling                    -> module is None -> dropped
     #   import os                                -> "os"
-    src = "import kavier.sdk.training\nfrom kavier.sdk.io.opendc import export\nfrom . import sibling\nimport os\n"
-    assert _targets_of_source(src) == ["kavier.sdk.training", "kavier.sdk.io.opendc", "os"]
+    src = "import kavier.sdk.training\nfrom kavier.sdk.io.adapter import export\nfrom . import sibling\nimport os\n"
+    assert _targets_of_source(src) == ["kavier.sdk.training", "kavier.sdk.io.adapter", "os"]
 
 
 def test_scan_pipeline_flags_module_level_offender_but_not_allowed_or_lazy():
@@ -123,28 +123,28 @@ def test_scan_pipeline_flags_module_level_offender_but_not_allowed_or_lazy():
     #   from kavier.training import fit          -> collected, allowed (verb)      -> drop
     #   import kavier.sdk.library                -> collected, allowed (spec data) -> drop
     #   def f(): import kavier.sdk.training      -> NOT module-scope               -> never collected
-    #   from kavier.sdk.io.opendc import writer  -> collected, forbidden (submod)  -> KEEP
+    #   from kavier.sdk.io.adapter import writer -> collected, forbidden (submod)  -> KEEP
     src = (
         "import kavier.sdk.io\n"
         "from kavier.training import fit\n"
         "import kavier.sdk.library\n"
         "def f():\n"
         "    import kavier.sdk.training\n"
-        "from kavier.sdk.io.opendc import writer\n"
+        "from kavier.sdk.io.adapter import writer\n"
     )
     flagged = [m for m in _targets_of_source(src) if _is_forbidden(m)]
-    assert flagged == ["kavier.sdk.io", "kavier.sdk.io.opendc"]
+    assert flagged == ["kavier.sdk.io", "kavier.sdk.io.adapter"]
 
 
 def test_lazy_function_level_internal_imports_are_exempt():
     # The guard's central contract: internals may be imported LAZILY (inside a function). Only
     # `tree.body` (module scope) is inspected, so a forbidden import nested in a def contributes
     # NOTHING. Falsification: switching to ast.walk() would collect these and wrongly flag every
-    # lazy OpenDC-export import.
+    # lazy internal import.
     src = (
         "def export():\n"
         "    import kavier.sdk.training\n"
-        "    from kavier.sdk.io.opendc import writer\n"
+        "    from kavier.sdk.io.adapter import writer\n"
         "    return writer\n"
     )
     assert _targets_of_source(src) == []

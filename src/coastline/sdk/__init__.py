@@ -8,7 +8,7 @@ Submodules:
     models      WorkloadSpec · SystemContext · Prediction · Recommendation
     library     GPU/LLM hardware specs
     trace       recommend · plot
-    io          config/options loaders · json/html run artifacts · infrastructure · odc_runner
+    io          config/options loaders · json/html run artifacts · infrastructure
 
 Import-light by contract: this package imports no heavy backend (torch, catboost,
 xgboost, lightgbm, tabpfn, ado/AutoConf) at import time — those load lazily only when a

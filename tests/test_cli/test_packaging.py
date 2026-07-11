@@ -45,7 +45,7 @@ def test_documented_public_commands_are_declared_as_console_scripts():
 
     Oracle (independent of the pyproject table under test): the deployment surface is
     the single ``coastline`` dispatcher (facade/batch/recommend) plus ``coastline-ui``
-    (the FastAPI dashboard launched by ``make gui``). Both MUST be installed on the
+    (the FastAPI dashboard). Both MUST be installed on the
     PATH by a `pip install coastline`; a subset check, so adding a new script doesn't
     spuriously fail, but dropping either goes red.
     """

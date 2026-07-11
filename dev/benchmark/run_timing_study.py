@@ -129,5 +129,5 @@ if __name__ == "__main__":
     if a.worker:
         _worker(a.worker, a.repeats)
         sys.exit(0)
-    print(f"{len(MODELS)}×{a.repeats}={len(MODELS) * a.repeats} timings — make exp1-timing-100", flush=True)
+    print(f"{len(MODELS)}×{a.repeats}={len(MODELS) * a.repeats} timings", flush=True)
     run(a.repeats, a.output, a.summary, a.force)

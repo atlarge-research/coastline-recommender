@@ -67,12 +67,11 @@ strategy:
 predictors:
   # Throughput: intelligent (cache+Kavier), kavier, cache, or ML model name.
   performance: "intelligent"
-  # Energy: kavier_power (default) or opendc.
+  # Energy: kavier_power (default).
   energy: "kavier_power"
   # Feasibility: autoconf (OOM-aware, ADO plugin), rules, or none.
   feasibility: "autoconf"
-  # Optional: OpenDC scaling factor (default 1.0) and AutoConf version (default 3.1.0).
-  opendc_calibration_factor: 1.0
+  # Optional: AutoConf version (default 3.1.0).
   autoconf_model_version: "3.1.0"
 
 

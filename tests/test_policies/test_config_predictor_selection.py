@@ -5,7 +5,7 @@ which produces energy via the ``predictors:`` section::
 
     predictors:
       performance: <intelligent | kavier | cache | catboost | xgboost | ...>
-      energy:      <kavier_power | opendc>
+      energy:      <kavier_power>
 
 ``coastline/sdk/policies/__init__.py`` (``PolicyFactory``) and
 ``coastline/sdk/io/run_config.py`` (``load_strategy_config``) consume those keys.
@@ -23,7 +23,6 @@ return.  The map is:
                   catboost/xgboost/lightgbm/...   -> <Name>Predictor  (one class *each*)
                   <unknown name>                 -> intelligent fallback
     energy:       kavier_power (default)         -> KavierPowerPredictor (WRAPS_THROUGHPUT_ENGINE)
-                  opendc                         -> OpenDCEnergyPredictor(calibration_factor=...)
                   <unknown name>                 -> ValueError
 
 The per-name map is load-bearing because of a real regression documented in
@@ -36,9 +35,7 @@ Scope / segfault avoidance
 We assert the *type / wiring* of the selected predictor only and never call
 ``.predict()`` on a data-driven (ML) predictor — they lazy-unpickle their model on
 first predict and unpickling xgboost & friends in-process segfaults on the host.
-*Constructing* them is safe (verified). The ``opendc`` energy path builds an
-``OpenDCRunner`` in ``__init__`` that needs the OpenDC binary (absent on CI), so we
-patch ``OpenDCEnergyPredictor`` with a lightweight fake.
+*Constructing* them is safe (verified).
 """
 
 from pathlib import Path
@@ -46,11 +43,9 @@ from pathlib import Path
 import pytest
 import yaml
 
-import coastline.sdk.predictors.energy.opendc as opendc_module
 import coastline.sdk.predictors.performance.data_driven.ml_common as ml_common
 from coastline.sdk.io.run_config import load_strategy_config
 from coastline.sdk.policies import PolicyFactory
-from coastline.sdk.predictors.base import BasePredictor
 from coastline.sdk.predictors.energy import KavierPowerPredictor
 from coastline.sdk.predictors.performance.composite import CacheThenPhysicsPredictor
 from coastline.sdk.predictors.performance.physics import KavierPredictor
@@ -59,27 +54,6 @@ from coastline.sdk.predictors.performance.retrieval.cache_predictor import Retri
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
 # ---------------------------------------------------------------------------
-
-
-class _FakeOpenDC(BasePredictor):
-    """Stand-in for OpenDCEnergyPredictor that does not need the OpenDC binary."""
-
-    def __init__(self, calibration_factor: float = 1.0, **kwargs):
-        self.calibration_factor = calibration_factor
-        self.kwargs = kwargs
-
-    def predict(self, workload, context):  # pragma: no cover - never called
-        return None
-
-    def get_name(self) -> str:
-        return "fake-opendc"
-
-
-@pytest.fixture
-def mock_opendc(monkeypatch):
-    """Replace OpenDCEnergyPredictor with a binary-free fake at its import site."""
-    monkeypatch.setattr(opendc_module, "OpenDCEnergyPredictor", _FakeOpenDC)
-    return _FakeOpenDC
 
 
 @pytest.fixture(autouse=True)
@@ -152,15 +126,6 @@ class TestNamedMLModelSelection:
 
 
 class TestPerformanceAndEnergyAreIndependent:
-    def test_performance_ml_and_energy_opendc_each_honoured(self, mock_opendc):
-        # performance=ML, energy=opendc in the SAME config: each key drives its own
-        # predictor; neither overrides the other. Also: opendc_calibration_factor
-        # threads through to the constructor (config 1.37 -> predictor arg 1.37).
-        strategy = _make_strategy({"performance": "xgboost", "energy": "opendc", "opendc_calibration_factor": 1.37})
-        assert type(strategy.throughput_predictor).__name__ == "XGBoostPredictor"
-        assert isinstance(strategy.power_predictor, mock_opendc)
-        assert strategy.power_predictor.calibration_factor == 1.37
-
     def test_exp4_combo_tabpfn_perf_kavier_energy(self):
         # The exact combo exp4 will use: performance=tabpfn, energy=kavier.
         # ("kavier" for energy is exposed in config as "kavier_power".) The energy
@@ -237,11 +202,12 @@ class TestYamlLoaderSurfacesBothKeys:
         return path
 
     def test_loader_reads_both_keys_from_yaml_file(self, tmp_path):
-        # Oracle: the loader must surface exactly the strings written to disk.
-        path = self._write(tmp_path, {"performance": "xgboost", "energy": "opendc"})
+        # Oracle: the loader must surface exactly the strings written to disk — it
+        # does not validate them, so a non-default marker string proves passthrough.
+        path = self._write(tmp_path, {"performance": "xgboost", "energy": "custom_energy"})
         loaded = load_strategy_config(path)
         assert loaded["predictors"]["performance"] == "xgboost"
-        assert loaded["predictors"]["energy"] == "opendc"
+        assert loaded["predictors"]["energy"] == "custom_energy"
 
     def test_loader_defaults_when_predictors_absent(self, tmp_path):
         # A YAML with no predictors section -> loader supplies the documented

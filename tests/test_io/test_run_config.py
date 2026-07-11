@@ -189,12 +189,12 @@ class TestLegacyOrchestratorMapping:
         payload = {
             "orchestrator": {
                 "predictor": "cache_first",
-                "energy": "opendc_energy",
+                "energy": "custom_energy",
                 "feasibility": "memory_aware",
             }
         }
         cfg = load_strategy_config(_write_yaml(tmp_path, payload))
-        assert cfg["predictors"]["energy"] == "opendc_energy"
+        assert cfg["predictors"]["energy"] == "custom_energy"
         assert cfg["predictors"]["feasibility"] == "memory_aware"
 
     def test_orchestrator_missing_energy_feasibility_use_defaults(self, tmp_path):

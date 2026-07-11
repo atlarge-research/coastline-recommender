@@ -15,7 +15,7 @@ from coastline.sdk.logging import setup_logging
 
 logger = logging.getLogger(__name__)
 
-# Makefile --model names -> (module basename, callable attribute)
+# --model names -> (module basename, callable attribute)
 _MODEL_TRAINERS: dict[str, tuple[str, str]] = {
     "xgboost": ("train_performance_xgboost", "train"),
     "lightgbm": ("train_performance_lightgbm", "train"),

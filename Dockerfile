@@ -8,10 +8,9 @@
 #
 # The default image is LEAN (Kavier analytical physics path — no ML backends, no pickles). Bake in the
 # optional heavy capabilities with the EXTRAS build arg:
-#     docker build --target cli --build-arg EXTRAS="[ml]"          -t coastline:cli-ml .
-#     docker build --target ui  --build-arg EXTRAS="[autoconf]"    -t coastline:ui-autoconf .
-# The trained ML pickles are NOT in the wheel — mount them (or run the trainer) for the [ml] path; the
-# OpenDC energy path additionally needs a JRE + the OpenDC runner mounted at OPENDC_BIN_PATH.
+#     docker build --target cli --build-arg EXTRAS="[ml]"    -t coastline:cli-ml .
+#     docker build --target ui  --build-arg EXTRAS="[plot]"  -t coastline:ui-plot .
+# The trained ML pickles are NOT in the wheel — mount them (or run the trainer) for the [ml] path.
 
 # ---- stage 1: build the wheel ----
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS build
@@ -21,8 +20,8 @@ RUN uv build --wheel --out-dir /dist
 
 # ---- shared runtime: install ONLY the wheel (+ optional EXTRAS), compiled to bytecode ----
 FROM python:3.13-slim AS runtime
-# uv gives us reproducible installs and honors the pyarrow override the [autoconf] extra needs
-# (kavier pins pyarrow>=23; autogluon caps <21 — the override lets both resolve).
+# uv gives us reproducible installs and honors the pyarrow override the core ado-autoconf
+# dependency needs (kavier pins pyarrow>=23; autogluon caps <21 — the override lets both resolve).
 COPY --from=ghcr.io/astral-sh/uv:0.11.7 /uv /usr/local/bin/uv
 ARG EXTRAS=""
 COPY --from=build /dist/*.whl /tmp/

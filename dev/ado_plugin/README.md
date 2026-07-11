@@ -82,7 +82,7 @@ exposes the stable public `coastline` facade (`coastline.Coastline` /
   dependency and a plain `import coastline` is used.
 - **Local dev:** install the checkout editable —
   `pip install -e <umbrella>/coastline` (and its engine `pip install -e <umbrella>/kavier`)
-  — into the same venv. Note both declare `requires-python >= 3.11`.
+  — into the same venv. Note both declare `requires-python >= 3.13`.
 - **Umbrella fallback:** if `coastline-recommender` is not installed, the plugin
   injects a sibling `coastline` checkout (and its `kavier` engine) onto `sys.path`
   automatically when `coastline` is a sibling of `ado`. Set `COASTLINE_ROOT`
@@ -90,8 +90,8 @@ exposes the stable public `coastline` facade (`coastline.Coastline` /
 
 ## Tests
 
-From the coastline repo root, `make test-ado` runs this plugin's tests; it skips
-with a message when ado core (`orchestrator`) is not installed in the venv.
+From the coastline repo root, `uv run --project dev/ado_plugin pytest dev/ado_plugin`
+runs this plugin's tests; it needs IBM's ado core (`orchestrator`) installed.
 
 ## Usage
 

@@ -6,7 +6,7 @@ performance (throughput) or energy (power) predictor:
   * ``PolicyFactory.throughput_predictor`` / ``PolicyFactory.power_predictor``
     (``recommender/recommendation_policies/__init__.py``) — the canonical factory used by the
     strategy layer (performance: intelligent / cache / kavier / named-ML;
-    energy: kavier_power / opendc).
+    energy: kavier_power).
   * ``create_physics_driven`` (``recommender/predictor_factory.py``) — the
     low-level physics-predictor constructor the above delegates to.
   * ``coastline.sdk.pipeline.workflow._create_throughput_predictor`` /
@@ -20,12 +20,6 @@ their pickled model on first ``predict``, and unpickling xgboost (and friends)
 in-process segfaults on the host. Constructing them is safe, so we assert the
 returned class without touching the model.
 
-The ``opendc`` energy path constructs an ``OpenDCRunner`` in ``__init__`` that
-requires the OpenDC binary to exist (it may be absent on CI / other machines).
-We patch ``OpenDCEnergyPredictor`` with a lightweight fake so the opendc-path
-assertions are deterministic everywhere and we can verify the calibration_factor
-is forwarded.
-
 The ``intelligent`` performance path is a cache→physics composite: an exact
 cache match (a measured past run) when one exists, else the Kavier analytical
 predictor.
@@ -33,49 +27,13 @@ predictor.
 
 import pytest
 
-import coastline.sdk.predictors.energy.opendc as opendc_module
 from coastline.sdk.pipeline import workflow as wf
 from coastline.sdk.policies import PolicyFactory, _build_named_ml_predictor
-from coastline.sdk.predictors.base import BasePredictor
 from coastline.sdk.predictors.energy import KavierPowerPredictor
 from coastline.sdk.predictors.factory import create_physics_driven
 from coastline.sdk.predictors.performance.composite import CacheThenPhysicsPredictor
 from coastline.sdk.predictors.performance.physics import KavierPredictor
 from coastline.sdk.predictors.performance.retrieval.cache_predictor import RetrievalPredictor
-
-# ---------------------------------------------------------------------------
-# Fixtures / helpers
-# ---------------------------------------------------------------------------
-
-
-class _FakeOpenDC(BasePredictor):
-    """Stand-in for OpenDCEnergyPredictor that does not need the OpenDC binary.
-
-    Records the calibration_factor so tests can assert the factory forwards it.
-    """
-
-    def __init__(self, calibration_factor: float = 1.0, **kwargs):
-        self.calibration_factor = calibration_factor
-        self.kwargs = kwargs
-
-    def predict(self, workload, context):  # pragma: no cover - never called
-        return None
-
-    def get_name(self) -> str:
-        return "fake-opendc"
-
-
-@pytest.fixture
-def mock_opendc(monkeypatch):
-    """Replace OpenDCEnergyPredictor with a binary-free fake at its import site.
-
-    Both factories use a function-local
-    ``from coastline.sdk.predictors.energy.opendc import OpenDCEnergyPredictor``,
-    so patching the attribute on that module covers every call path.
-    """
-    monkeypatch.setattr(opendc_module, "OpenDCEnergyPredictor", _FakeOpenDC)
-    return _FakeOpenDC
-
 
 # ---------------------------------------------------------------------------
 # PredictorFactory (low-level: physics / power / data-driven)
@@ -186,11 +144,6 @@ class TestPowerPredictorFactory:
         predictor = PolicyFactory.power_predictor({})
         assert isinstance(predictor, KavierPowerPredictor)
 
-    def test_opendc_returns_opendc_predictor_and_forwards_calibration(self, mock_opendc):
-        predictor = PolicyFactory.power_predictor({"energy": "opendc", "opendc_calibration_factor": 2.5})
-        assert isinstance(predictor, mock_opendc)
-        assert predictor.calibration_factor == 2.5
-
     def test_unknown_energy_raises_value_error(self):
         with pytest.raises(ValueError, match="Unknown energy predictor"):
             PolicyFactory.power_predictor({"energy": "totally-bogus"})
@@ -230,13 +183,8 @@ class TestWorkflowThroughputFactory:
 
 class TestWorkflowPowerFactory:
     # kavier_power + missing-key default mirror TestPowerPredictorFactory exactly
-    # (both delegate to the same wiring); only the opendc + error paths of this
-    # separate workflow function are exercised here.
-    def test_opendc_returns_opendc_predictor_and_forwards_calibration(self, mock_opendc):
-        predictor = wf._create_power_predictor({"energy": "opendc", "opendc_calibration_factor": 3.0})
-        assert isinstance(predictor, mock_opendc)
-        assert predictor.calibration_factor == 3.0
-
+    # (both delegate to the same wiring); only the error path of this separate
+    # workflow function is exercised here.
     def test_unknown_energy_raises_value_error(self):
         with pytest.raises(ValueError, match="Unknown energy predictor"):
             wf._create_power_predictor({"energy": "totally-bogus"})

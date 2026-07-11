@@ -67,7 +67,7 @@ def __dir__() -> list[str]:
 
 
 def load_train_val_test_rows() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Return (full_train, full_val, full_test) using the same deterministic split as `make evaluate`."""
+    """Return (full_train, full_val, full_test) using the trainer's deterministic split."""
     X_cat, X_num, y_df, _, _ = load_and_preprocess_data()
     y_thr = y_df["dataset_tokens_per_second"].values
     y_rt = y_df["train_runtime"].values

@@ -48,7 +48,8 @@ jobs:
           uv run --no-sync python -c "import sys, coastline; assert callable(coastline); assert not any(m in sys.modules for m in ('torch','xgboost'))"
       - name: Run pytest (shipped-package suite)
         # CI validates the shipped package. The dev trainer/benchmark tests require the external
-        # trace-archive dataset (not available in CI); run them locally with `make test`.
+        # trace-archive dataset (not available in CI); run them locally, each in its own invocation:
+        # `uv run --all-extras pytest dev/trainer/tests` / `... dev/benchmark/tests`.
         run: uv run --no-sync pytest
       - name: Native-ML predictor tests (informational — featv3 pickles may need regen on 3.13)
         continue-on-error: true

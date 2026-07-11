@@ -3,25 +3,24 @@
 Context-aware recommender for **GPU / datacenter configurations** for LLM fine-tuning: given a
 workload it grid-searches configs, filters infeasible ones, predicts **throughput + power**, and
 ranks them on a performance↔energy score. Throughput comes from **Kavier** (analytical physics) or
-a data-driven model (TabPFN, CatBoost, …); energy from Kavier-power or the **OpenDC** simulator;
-feasibility from IBM **AutoConf**.
+a data-driven model (TabPFN, CatBoost, …); energy from Kavier-power; feasibility from IBM
+**AutoConf**.
 
 **Accuracy** (throughput MdAPE, 15% holdout): default `intelligent` = cache hit (0%) → Kavier
 (6.2%). ML predictors (bring your own trained artifacts): TabPFN 2.1%, XGBoost 7.2%, CatBoost 8.4%.
 
-📖 **Full documentation:** run `make docs` (or `uv run mkdocs serve`) — Overview · Getting started ·
+📖 **Full documentation:** run `uv run --group docs mkdocs serve` — Overview · Getting started ·
 Architecture · per-component pages (pipeline, predictors, energy, feasibility, policies, library) ·
 Contributing.
 
 ## Install
 
 ```bash
-pip install coastline-recommender                 # core engine (Kavier physics path)
-pip install "coastline-recommender[autoconf]"     # + AutoConf OOM-feasibility safeguard
+pip install coastline-recommender                 # core engine + AutoConf OOM-feasibility safeguard
 pip install "coastline-recommender[ml]"           # + heavy ML backends (TabPFN, XGBoost, …)
 ```
 
-From a checkout (uv-native): `uv sync --extra autoconf` (or `make install`), then `uv run coastline …`.
+From a checkout (uv-native): `uv sync`, then `uv run coastline …`.
 
 ## Use it
 
@@ -37,7 +36,7 @@ print(results[0])                                      # best-ranked Recommendat
 df = coastline.recommend(batch_df, predictor="kavier", goal="balanced", max_gpus=8)  # batch → DataFrame
 ```
 
-One `coastline` command (five subcommands) plus the dashboard:
+One `coastline` command (six subcommands) plus the dashboard:
 
 ```bash
 coastline recommend --config config.yaml --input workloads.csv --output recs.csv  # batch CSV → CSV
@@ -48,7 +47,7 @@ coastline interactive                                                           
 coastline-ui                                                                     # FastAPI dashboard :8000
 ```
 
-Run the full API tour with `make demo` (`docs/usage.py`, reproduced in the
+Run the full API tour with `uv run python docs/usage.py` (reproduced in the
 [getting-started guide](docs/getting-started.md)); see `config/` for sample configs.
 
 ## Structure
@@ -69,18 +68,19 @@ trainer). See [Architecture](docs/architecture.md).
 ## Develop
 
 ```bash
-uv sync --extra ml --extra autoconf   # or: make install-ml
-make test                             # main suite + trainer + benchmark
-make test-ml                          # native-ML predictor tests (own process)
+uv sync --extra ml                                    # + heavy native ML backends
+uv run --all-extras pytest                            # main suite
+uv run --all-extras pytest dev/trainer/tests          # trainer suite (own invocation)
+uv run --all-extras pytest dev/benchmark/tests        # benchmark suite (own invocation)
+uv run --all-extras pytest -m ml_isolated -p no:cacheprovider   # native-ML tests (own process)
 uv run ruff check . && uv run mypy
-make docs                             # serve the docs at http://127.0.0.1:8000
+uv run --group docs mkdocs serve                      # serve the docs at http://127.0.0.1:8000
 ```
 
 ## External dependencies (not vendored)
 
 - **Kavier** — analytical throughput/power engine; PyPI dependency (`kavier>=0.5,<0.6`).
-- **AutoConf** — OOM-feasibility safeguard (IBM `ado-autoconf`); install via the `[autoconf]` extra.
-- **OpenDC** — optional Java simulator for the `energy: opendc` path; set `OPENDC_BIN_PATH`.
+- **AutoConf** — OOM-feasibility safeguard (`ado-autoconf`); ships by default in the core install.
 
 ## License
 
