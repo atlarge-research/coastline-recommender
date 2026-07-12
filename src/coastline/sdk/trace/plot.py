@@ -1,7 +1,11 @@
 """Plot a coastline-enriched trace (``coastline plot-trace``): the operational
-cluster timeline — FIFO-schedule the recommended configs onto a fixed cluster and
+cluster timeline — schedule the recommended configs onto a fixed cluster and
 draw GPUs-in-use (filled area) + jobs-queued (line) over time, the exp2/exp4
 "what does running these recommendations look like" view.
+
+The cluster **simulation** (the FIFO/backfill scheduler + the GPUs-in-use / queue-depth
+timeline) lives in Kavier (``kavier.sdk.cluster.schedule``); this module only adapts the
+enriched trace into job rows and renders Kavier's result. Coastline recommends, Kavier simulates.
 
 Input: a trace enriched by ``coastline recommend-trace`` (it carries the recommended
 layout columns plus ``metadata.estimated_duration_<method>``).
@@ -9,10 +13,8 @@ layout columns plus ``metadata.estimated_duration_<method>``).
 
 from __future__ import annotations
 
-import heapq
-import math
-
 import pandas as pd
+from kavier.sdk.cluster import schedule as cluster_schedule
 
 # Recommended layout written by coastline recommend-trace (originals are the fallback).
 _GPN = "resources.num_gpus_per_node"
@@ -41,7 +43,7 @@ def _savefig(fig, path: str) -> None:
         fig.savefig(path, dpi=130)
 
 
-# Operational cluster-timeline view (FIFO scheduler ported from exp2/exp4).
+# Operational cluster-timeline view (scheduling + timeline delegated to kavier.sdk.cluster).
 
 
 def _num(df: pd.DataFrame, col: str) -> pd.Series:
@@ -49,100 +51,6 @@ def _num(df: pd.DataFrame, col: str) -> pd.Series:
     if col in df.columns:
         return pd.to_numeric(df[col], errors="coerce")
     return pd.Series([float("nan")] * len(df), index=df.index)
-
-
-def _placement(free: list[int], per_node: int, nodes: int) -> list[int] | None:
-    """Tightest-fit node ids for a job needing `per_node` GPUs on `nodes` distinct
-    nodes, or None if it does not fit the currently free GPUs."""
-    fitting = sorted((f, n) for n, f in enumerate(free) if f >= per_node)
-    if len(fitting) < nodes:
-        return None
-    return [n for _, n in fitting[:nodes]]
-
-
-def schedule_backfill(jobs: list[tuple], node_gpus: int = 8, num_nodes: int = 2) -> list[dict]:
-    """Best-effort FIFO with aggressive backfill on a ``num_nodes`` x ``node_gpus``
-    cluster (ported from the exp4 in-vitro scheduler). Jobs are considered in
-    submission order; one that does not fit is skipped so newer jobs that do fit can
-    start. A job's GPUs are placed on whole nodes and capped to the cluster.
-
-    jobs: list of ``(submit_s, gpus, duration_s[, nodes])``; nodes defaults to 1.
-    Returns per-job records ``[{job, gpus, wait_h, start_h, end_h}]`` where ``gpus``
-    is the count actually placed.
-    """
-
-    def unpack(job):
-        submit, gpus, duration = job[0], job[1], job[2]
-        nodes = max(1, min(int(job[3]) if len(job) > 3 else 1, num_nodes))
-        per_node = min(math.ceil(gpus / nodes), node_gpus)
-        return submit, per_node, nodes, duration
-
-    arrivals = sorted(enumerate(jobs), key=lambda item: item[1][0])
-    pending: list[tuple] = []  # FIFO queue of (index, submit, per_node, nodes, duration)
-    running: list[tuple] = []  # min-heap of (end_s, per_node, node_ids)
-    free = [node_gpus] * num_nodes
-    next_arrival = 0
-    done: dict[int, dict] = {}
-
-    time = arrivals[0][1][0]
-    while len(done) < len(jobs):
-        while next_arrival < len(arrivals) and arrivals[next_arrival][1][0] <= time:
-            index, job = arrivals[next_arrival]
-            pending.append((index, *unpack(job)))
-            next_arrival += 1
-        while running and running[0][0] <= time:
-            _, freed, node_ids = heapq.heappop(running)
-            for n in node_ids:
-                free[n] += freed
-        admitted = []
-        for queue_pos, (index, submit, per_node, nodes, duration) in enumerate(pending):
-            node_ids = _placement(free, per_node, nodes)
-            if node_ids is None:
-                continue
-            for n in node_ids:
-                free[n] -= per_node
-            heapq.heappush(running, (time + duration, per_node, tuple(node_ids)))
-            done[index] = {
-                "job": index,
-                "gpus": per_node * len(node_ids),
-                "wait_h": (time - submit) / 3600,
-                "start_h": time / 3600,
-                "end_h": (time + duration) / 3600,
-            }
-            admitted.append(queue_pos)
-        for queue_pos in reversed(admitted):
-            pending.pop(queue_pos)
-        candidates = []
-        if next_arrival < len(arrivals):
-            candidates.append(arrivals[next_arrival][1][0])
-        if running:
-            candidates.append(running[0][0])
-        if not candidates:
-            break
-        time = max(time, min(candidates))
-    return [done[i] for i in sorted(done)]
-
-
-def cumulative_steps(events: list[tuple], t_end: float) -> tuple[list[float], list[float]]:
-    """Turn (time, change) events into a step line (times, values), netting
-    same-instant events so a zero-wait job never makes the line dip below its true
-    level. Ported from gen_exp2.cumulative_steps."""
-    net: dict[float, float] = {}
-    for time, change in events:
-        net[time] = net.get(time, 0.0) + change
-    times, values, running_sum = [0.0], [0.0], 0.0
-    for time in sorted(net):
-        change = net[time]
-        if change == 0:
-            continue
-        times.append(time)
-        values.append(running_sum)
-        running_sum += change
-        times.append(time)
-        values.append(running_sum)
-    times.append(t_end)
-    values.append(running_sum)
-    return times, values
 
 
 def _submit_seconds(df: pd.DataFrame) -> list[float]:
@@ -217,21 +125,24 @@ def plot_trace_timeline(
     if not jobs:
         raise SystemExit("no rows with both a positive estimated duration and a positive GPU count to schedule.")
 
-    records = schedule_backfill(jobs, node_gpus=node_gpus, num_nodes=num_nodes)
-    t_end = max(r["end_h"] for r in records)
-    makespan_h = t_end - min(r["start_h"] for r in records)
-
-    gpu_events, queue_events = [], []
-    for r in records:
-        gpu_events.append((r["start_h"], r["gpus"]))
-        gpu_events.append((r["end_h"], -r["gpus"]))
-        submit_h = jobs[r["job"]][0] / 3600
-        queue_events.append((submit_h, 1))  # +1 when submitted
-        queue_events.append((r["start_h"], -1))  # -1 when it starts
-    gpu_t, gpu_v = cumulative_steps(gpu_events, t_end)
-    q_t, q_v = cumulative_steps(queue_events, t_end)
-    peak_gpus = max(gpu_v) if gpu_v else 0.0
-    peak_queue = max(q_v) if q_v else 0.0
+    # Kavier owns the cluster simulation: node-aware backfill of the recommended configs plus the
+    # aligned GPUs-in-use / queue-depth timeline. Coastline only supplies the job rows and renders.
+    result = cluster_schedule(
+        [
+            {"submit_s": submit, "gpus": gpus, "duration_s": duration, "nodes": nodes}
+            for submit, gpus, duration, nodes in jobs
+        ],
+        policy="backfill",
+        num_nodes=num_nodes,
+        node_gpus=node_gpus,
+    )
+    makespan_h = result.cluster.makespan_h
+    gpu_t = q_t = result.timeline.times_h
+    gpu_v = result.timeline.gpus_in_use
+    q_v = result.timeline.queue_depth
+    t_end = gpu_t[-1] if gpu_t else 0.0
+    peak_gpus = result.cluster.peak_gpus
+    peak_queue = result.cluster.peak_queue
 
     fs_label, fs_tick, fs_legend, fs_title = 14, 12, 13, 13
     titled = not _is_pdf(output_png)

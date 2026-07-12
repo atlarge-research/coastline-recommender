@@ -594,7 +594,7 @@ requires-dist = [
     { name = "catboost", marker = "extra == 'ml'", specifier = "==1.2.10" },
     { name = "fastapi", specifier = ">=0.104.0" },
     { name = "jinja2", specifier = ">=3.1.0" },
-    { name = "kavier", specifier = ">=0.5,<0.6" },
+    { name = "kavier", editable = "../kavier" },
     { name = "lightgbm", marker = "extra == 'ml'", specifier = "==4.6.0" },
     { name = "matplotlib", marker = "extra == 'plot'", specifier = ">=3.5" },
     { name = "numpy", specifier = ">=1.24.0" },
@@ -797,34 +797,34 @@ wheels = [
 
 [package.optional-dependencies]
 cudart = [
-    { name = "nvidia-cuda-runtime" },
+    { name = "nvidia-cuda-runtime", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 cufft = [
-    { name = "nvidia-cufft" },
+    { name = "nvidia-cufft", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 cufile = [
-    { name = "nvidia-cufile" },
+    { name = "nvidia-cufile", marker = "sys_platform == 'linux'" },
 ]
 cupti = [
-    { name = "nvidia-cuda-cupti" },
+    { name = "nvidia-cuda-cupti", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 curand = [
-    { name = "nvidia-curand" },
+    { name = "nvidia-curand", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 cusolver = [
-    { name = "nvidia-cusolver" },
+    { name = "nvidia-cusolver", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 cusparse = [
-    { name = "nvidia-cusparse" },
+    { name = "nvidia-cusparse", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 nvjitlink = [
-    { name = "nvidia-nvjitlink" },
+    { name = "nvidia-nvjitlink", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 nvrtc = [
-    { name = "nvidia-cuda-nvrtc" },
+    { name = "nvidia-cuda-nvrtc", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 nvtx = [
-    { name = "nvidia-nvtx" },
+    { name = "nvidia-nvtx", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 
 [[package]]
@@ -1395,8 +1395,8 @@ wheels = [
 
 [[package]]
 name = "kavier"
-version = "0.5.0"
-source = { registry = "https://pypi.org/simple" }
+version = "0.5.1"
+source = { editable = "../kavier" }
 dependencies = [
     { name = "cachetools" },
     { name = "numpy" },
@@ -1407,9 +1407,32 @@ dependencies = [
     { name = "rich" },
     { name = "tqdm" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/71/82/e8a6399646660d965873506ef05e4ba7d0788b164a798821b9dcd3658662/kavier-0.5.0.tar.gz", hash = "sha256:82945361157664296dac94867e1d72c925b7b8faa4d628c4738acb393c39116e", size = 76419, upload-time = "2026-07-06T20:02:58.783Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/49/f6/61a1e5bfbdab2acf45171c9ab94ff956dfb3478076e155e16f8d4b411bce/kavier-0.5.0-py3-none-any.whl", hash = "sha256:47911c80b9b8b4916cbd1f69b4e8a960f0253f669662320b1b119314c5cc6fa2", size = 104852, upload-time = "2026-07-06T20:02:57.425Z" },
+
+[package.metadata]
+requires-dist = [
+    { name = "cachetools", specifier = ">=6.1" },
+    { name = "numpy", specifier = ">=2.2.6" },
+    { name = "pandas", specifier = ">=2.2.3" },
+    { name = "pyarrow", specifier = ">=15" },
+    { name = "pydantic", specifier = ">=2.9" },
+    { name = "pyyaml", specifier = ">=6.0.2" },
+    { name = "rich", specifier = ">=13.9" },
+    { name = "scikit-learn", marker = "extra == 'calibration'", specifier = ">=1.6" },
+    { name = "scipy", marker = "extra == 'calibration'", specifier = ">=1.14" },
+    { name = "tqdm", specifier = ">=4.67.1" },
+]
+provides-extras = ["calibration"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "hypothesis", specifier = ">=6.102" },
+    { name = "mypy", specifier = ">=1.10" },
+    { name = "pandas-stubs", specifier = ">=2.2" },
+    { name = "pytest", specifier = ">=8.2" },
+    { name = "ruff", specifier = "==0.15.15" },
+    { name = "types-cachetools" },
+    { name = "types-pyyaml" },
+    { name = "types-tqdm" },
 ]
 
 [[package]]
@@ -1664,7 +1687,7 @@ name = "mlx"
 version = "0.31.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "mlx-metal" },
+    { name = "mlx-metal", marker = "sys_platform == 'darwin'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a3/3f/888f8664d4f8e23a1363a5f50024be5216e199ab7ad0ba20988c7ed6d729/mlx-0.31.2-cp313-cp313-macosx_14_0_arm64.whl", hash = "sha256:1b3fb0dda955b0d552ce57bdd6f42b3309ab21b067e40587d6848443d307e91f", size = 584796, upload-time = "2026-04-22T03:14:47.215Z" },

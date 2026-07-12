@@ -1,4 +1,11 @@
-"""In-memory workload queue + FIFO discrete-event scheduler (Exp2 harness)."""
+"""In-memory workload queue + FIFO cluster simulation (the Exp2/Exp4 operational view).
+
+The cluster **simulation** — FIFO scheduling of the queued jobs onto a fixed GPU cluster, with
+per-job wait/runtime and per-cluster makespan/utilisation/energy — is done by Kavier
+(``kavier.sdk.cluster.schedule``). This module owns the in-memory queue, CSV import, and the
+adaptation of Kavier's result into the UI's SimulationResult/ClusterTimeline. Coastline consumes;
+Kavier simulates.
+"""
 
 from __future__ import annotations
 
@@ -10,16 +17,14 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+from kavier.sdk.cluster import schedule as cluster_schedule
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-# Average per-GPU draw used to compute the cluster-wide energy summary. The queue
-# intentionally only sees (id, arrival, num_gpus, duration), so it cannot look up
-# a per-config power; this constant is the placeholder until the recommender's
-# Kavier-power output feeds in.
+# Fallback per-GPU draw for the energy summary when a job carries no Kavier per-GPU power. Passed to
+# the simulator as its default; a job's own ``predicted_power_watts_per_gpu`` takes precedence.
 _AVG_WATTS_PER_GPU = 350.0
-_KWH_DIVISOR = 3_600_000.0  # W*s -> kWh
 
 
 class QueueJob(BaseModel):
@@ -91,8 +96,7 @@ def generate_id() -> str:
         return f"{_id_counter:03d}"
 
 
-# FIFO discrete-event scheduler.
-_TIME_EPS = 1e-9
+# Cluster simulation (delegated to kavier.sdk.cluster) + result adaptation.
 
 
 @dataclass
@@ -163,121 +167,80 @@ def _empty_result() -> SimulationResult:
     )
 
 
-def _job_energy_kwh(job: QueueJob) -> float:
-    """Per-job energy in kWh, from the Kavier per-GPU power if present, else
-    ``_AVG_WATTS_PER_GPU``."""
-    watts = job.predicted_power_watts_per_gpu or _AVG_WATTS_PER_GPU
-    return (watts * job.num_gpus * job.predicted_duration_s) / _KWH_DIVISOR
-
-
 def simulate_fifo(jobs: List[QueueJob], n_gpus_cluster: int) -> SimulationResult:
-    """FIFO discrete-event simulation of a list of QueueJobs on an n-GPU cluster."""
+    """FIFO simulation of a list of QueueJobs on an n-GPU cluster.
+
+    The scheduling + per-cluster metrics + energy are computed by Kavier
+    (``kavier.sdk.cluster.schedule``, strict-FIFO flat pool with head-of-line blocking); this
+    function only adapts the inputs/outputs to the UI's models. Oversized jobs (``num_gpus >
+    n_gpus_cluster``) are dropped — under strict FIFO they would block the queue head forever — so
+    the behaviour matches the previous in-process scheduler.
+    """
     if not jobs:
         return _empty_result()
     if n_gpus_cluster <= 0:
         raise ValueError(f"n_gpus_cluster must be > 0 (got {n_gpus_cluster})")
 
-    # Defensive: a job whose num_gpus exceeds the cluster's GPU count can never
-    # run, and under strict FIFO head-of-line scheduling it would block forever
-    # (the queue head never frees, no event ever advances time). The API rejects
-    # these at add-time, but a direct caller of simulate_fifo could still pass
-    # one. Drop them here with a warning so the simulation always terminates.
-    oversized = sum(1 for j in jobs if j.num_gpus > n_gpus_cluster)
-    if oversized:
+    # Key the jobs by POSITION, not request_id: request_ids are normally unique but a client can set
+    # a duplicate (or a CSV import can carry one), and the scheduler must keep each result's own
+    # display metadata rather than collapsing duplicates onto the last job's.
+    rows = [
+        {
+            "job_id": i,
+            "submit_s": j.arrival_time,
+            "gpus": j.num_gpus,
+            "duration_s": j.predicted_duration_s,
+            "power_w_per_gpu": j.predicted_power_watts_per_gpu,
+        }
+        for i, j in enumerate(jobs)
+    ]
+    result = cluster_schedule(
+        rows,
+        policy="fcfs",
+        num_gpus=n_gpus_cluster,
+        oversized="drop",
+        default_watts_per_gpu=_AVG_WATTS_PER_GPU,
+    )
+    if result.dropped:
         logger.warning(
             "simulate_fifo: skipping %d job(s) requiring more than %d GPUs",
-            oversized,
+            len(result.dropped),
             n_gpus_cluster,
         )
-    work = sorted(
-        (j for j in jobs if j.num_gpus <= n_gpus_cluster),
-        key=lambda j: j.arrival_time,
-    )
-    if not work:
+    if not result.jobs:
         return _empty_result()
-    events: List[tuple[float, int]] = [(j.arrival_time, i) for i, j in enumerate(work)]
-    events.sort(key=lambda e: (e[0], e[1]))
 
-    queue: List[int] = []
-    running: List[Dict[str, Any]] = []
     completed: List[JobResult] = []
-    event_idx = 0
-    total_gpu_time = 0.0
-    makespan_start = min(j.arrival_time for j in work)
-    makespan_end = makespan_start
-    time_now = makespan_start
-
-    while event_idx < len(events) or queue or running:
-        next_t = float("inf")
-        if event_idx < len(events):
-            next_t = min(next_t, events[event_idx][0])
-        if running:
-            next_t = min(next_t, min(r["end_time"] for r in running))
-        time_now = next_t
-
-        # Retire jobs that completed at or before this instant.
-        still_running = []
-        for r in running:
-            if r["end_time"] <= time_now + _TIME_EPS:
-                makespan_end = max(makespan_end, r["end_time"])
-                j = work[r["job_idx"]]
-                completed.append(
-                    JobResult(
-                        request_id=j.request_id,
-                        num_gpus=j.num_gpus,
-                        predicted_duration_s=j.predicted_duration_s,
-                        arrival_time=j.arrival_time,
-                        start_time=r["start_time"],
-                        end_time=r["end_time"],
-                        wait_time_s=r["start_time"] - j.arrival_time,
-                        completion_time_s=r["end_time"] - j.arrival_time,
-                        energy_kwh=_job_energy_kwh(j),
-                        llm_model=j.llm_model,
-                        fine_tuning_method=j.fine_tuning_method,
-                        batch_size=j.batch_size,
-                        training_epochs=j.training_epochs,
-                    )
-                )
-            else:
-                still_running.append(r)
-        running = still_running
-
-        # Admit newly-arrived jobs.
-        while event_idx < len(events) and events[event_idx][0] <= time_now + _TIME_EPS:
-            _, job_idx = events[event_idx]
-            queue.append(job_idx)
-            event_idx += 1
-
-        # Dispatch from the head while GPUs are free (strict FIFO — head-of-line blocking).
-        while queue:
-            head = queue[0]
-            job = work[head]
-            used = sum(r["gpus"] for r in running)
-            if job.num_gpus > n_gpus_cluster - used:
-                break
-            queue.pop(0)
-            start = time_now
-            end = start + job.predicted_duration_s
-            running.append({"start_time": start, "end_time": end, "gpus": job.num_gpus, "job_idx": head})
-            total_gpu_time += job.predicted_duration_s * job.num_gpus
-
+    for record in result.jobs:
+        source = jobs[record.job_id]  # record.job_id is the positional index passed in above
+        completed.append(
+            JobResult(
+                request_id=source.request_id,
+                num_gpus=record.gpus,
+                predicted_duration_s=record.runtime_s,
+                arrival_time=record.submit_s,
+                start_time=record.start_s,
+                end_time=record.end_s,
+                wait_time_s=record.wait_s,
+                completion_time_s=record.turnaround_s,  # job completion time = turnaround (end - arrival)
+                energy_kwh=record.energy_kwh if record.energy_kwh is not None else 0.0,
+                llm_model=source.llm_model,
+                fine_tuning_method=source.fine_tuning_method,
+                batch_size=source.batch_size,
+                training_epochs=source.training_epochs,
+            )
+        )
     completed.sort(key=lambda r: (r.start_time, r.request_id))
-    makespan = makespan_end - makespan_start
-    n_jobs = len(completed)
-    avg_occ = total_gpu_time / (makespan * n_gpus_cluster) if makespan > 0 else 0.0
-    goodput = n_jobs / makespan if makespan > 0 else 0.0
-    avg_wait = sum(r.wait_time_s for r in completed) / n_jobs if n_jobs else 0.0
-    avg_jct = sum(r.completion_time_s for r in completed) / n_jobs if n_jobs else 0.0
-    total_energy = sum(r.energy_kwh for r in completed)
 
+    cluster = result.cluster
     return SimulationResult(
-        makespan_s=makespan,
-        avg_resource_occupation=avg_occ,
-        goodput_jobs_per_s=goodput,
-        avg_waiting_time_s=avg_wait,
-        avg_job_completion_time_s=avg_jct,
-        total_energy_kwh=total_energy,
-        n_jobs=n_jobs,
+        makespan_s=cluster.makespan_s,
+        avg_resource_occupation=cluster.utilization,
+        goodput_jobs_per_s=cluster.goodput_jobs_per_s,
+        avg_waiting_time_s=cluster.avg_wait_s,
+        avg_job_completion_time_s=cluster.avg_turnaround_s,
+        total_energy_kwh=cluster.total_energy_kwh if cluster.total_energy_kwh is not None else 0.0,
+        n_jobs=cluster.n_jobs,
         jobs=completed,
     )
 
@@ -316,13 +279,9 @@ def build_cluster_timeline(jobs: List[JobResult], n_gpus_cluster: int) -> Cluste
 
     t0 = min(j.arrival_time for j in runnable)
 
-    # Signed deltas keyed by event time. When a job is dispatched the instant
-    # another frees its GPUs the two times usually coincide as the identical
-    # float and collapse onto one breakpoint; but ``simulate_fifo`` retires a
-    # finished job within ``_TIME_EPS`` of its exact ``end_time`` (a one-sided
-    # tolerance) and can reuse those GPUs at that instant, so a release and the
-    # matching dispatch may land on two breakpoints a sub-eps sliver apart. The
-    # capacity clamp in the sweep below absorbs that without distorting the run.
+    # Signed deltas keyed by event time. Kavier's schedule uses exact times, so a release and the
+    # matching dispatch coincide on one breakpoint; the capacity clamp in the sweep below is a cheap
+    # defensive guard against any float sliver and never distorts a well-formed run.
     gpu_delta: Dict[float, int] = defaultdict(int)
     queue_delta: Dict[float, int] = defaultdict(int)
     for j in runnable:
