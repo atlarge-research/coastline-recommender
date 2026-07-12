@@ -1,0 +1,54 @@
+name: Deploy docs
+
+# Build the MkDocs site and publish it to GitHub Pages.
+# Pages source must be set to "GitHub Actions" (Settings -> Pages -> Build and deployment).
+on:
+  push:
+    branches: [master]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - "pyproject.toml"
+      - ".github/workflows/docs-deploy.yml"
+  workflow_dispatch:   # allow manual redeploys from the Actions tab
+
+# Least-privilege token: read the repo, write the Pages deployment.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One live deployment at a time; let an in-flight deploy finish rather than cancel it.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  # Build the static site exactly as the CI `docs` job does (strict: no broken links).
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Build docs (strict)
+        run: |
+          uv sync --only-group docs --no-install-project
+          uv run --no-sync mkdocs build --strict
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site   # mkdocs.yml site_dir
+
+  # Publish the built artifact to GitHub Pages.
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
