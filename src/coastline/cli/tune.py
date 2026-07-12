@@ -16,7 +16,9 @@ def _build_parser() -> FriendlyParser:
         example="coastline tune --data runs.csv --model tabpfn --train-percentage 1.0",
     )
     p.add_argument("--data", help="Measured-runs CSV (one fine-tuning run per row; see --format).")
-    p.add_argument("--model", default="tabpfn", help="Model to tune (currently: tabpfn).")
+    p.add_argument(
+        "--model", default="tabpfn", help="Model to tune: tabpfn (in-context) | xgboost (gradient boosting)."
+    )
     p.add_argument(
         "--train-percentage",
         type=float,

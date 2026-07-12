@@ -17,12 +17,19 @@ def _build_parser() -> FriendlyParser:
     p.add_argument("--config", required=True, help="Config YAML (strategy, predictors, grid, safeguards).")
     p.add_argument("--input", required=True, help="Input CSV of workloads.")
     p.add_argument("--output", required=True, help="Output CSV path for the recommendations.")
+    p.add_argument(
+        "--cluster-gpus",
+        type=int,
+        default=None,
+        help="Total cluster GPUs (default: infrastructure.yaml's total_gpus). "
+        "No workload is recommended more GPUs than the cluster has.",
+    )
     return p
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = _build_parser().parse_args(argv)
-    recommend_csv(args.config, args.input, args.output)
+    recommend_csv(args.config, args.input, args.output, cluster_gpus=args.cluster_gpus)
 
 
 if __name__ == "__main__":

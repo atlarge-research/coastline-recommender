@@ -50,6 +50,12 @@ def _run_tune(argv: Optional[Sequence[str]]) -> None:
     main(argv)
 
 
+def _run_trace_to_runs(argv: Optional[Sequence[str]]) -> None:
+    from coastline.cli.trace_to_runs import main
+
+    main(argv)
+
+
 _COMMANDS: dict[str, tuple[str, _Handler]] = {
     "recommend": ("Batch-recommend GPU/node configs for a CSV of workloads (CSV in -> CSV out).", _run_recommend),
     "run": ("Run one config-file experiment; write a recommendation.json run artifact.", _run_run),
@@ -57,6 +63,10 @@ _COMMANDS: dict[str, tuple[str, _Handler]] = {
     "plot-trace": ("Plot a recommended trace: cluster timeline, GPUs in use + jobs queued ([plot] extra).", _run_plot),
     "interactive": ("Guided keyboard-driven REPL over the recommender.", _run_interactive),
     "tune": ("Tune a data-driven predictor (tabpfn) on your own measured-runs CSV ([ml] extra).", _run_tune),
+    "trace-to-runs": (
+        "Convert a fine-tuning trace CSV to the flat measured-runs schema (tune/lookup/calibrate).",
+        _run_trace_to_runs,
+    ),
 }
 
 

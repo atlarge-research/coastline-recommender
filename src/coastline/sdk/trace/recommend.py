@@ -14,6 +14,7 @@ from typing import Any, Optional
 import pandas as pd
 
 import coastline
+from coastline.sdk.io.infrastructure import resolve_cluster_caps
 
 logger = logging.getLogger(__name__)
 
@@ -84,13 +85,13 @@ def _kavier_can_predict(wl: dict[str, Any], goal: str, feasibility: str, max_gpu
         return False
 
 
-def _infeasible_note(gpn: int, nodes: int, feasibility: str) -> str:
+def _infeasible_note(max_gpus: int, feasibility: str) -> str:
     cause = (
         "every config would run out of GPU memory (autoconf OOM check)"
         if feasibility == "autoconf"
         else "no config passes the divisibility rules"
     )
-    return f"infeasible within {gpn * nodes} GPUs: {cause}"
+    return f"infeasible within {max_gpus} GPUs: {cause}"
 
 
 def _observed_duration(row: pd.Series) -> Optional[float]:
@@ -119,9 +120,13 @@ def _unchanged(keep: dict[str, Any], row: pd.Series, reason: str) -> dict[str, A
 
 
 def _recommend_row(
-    row: pd.Series, predictor: str, goal: str, feasibility: str, lookup: Optional[str] = None
+    row: pd.Series, predictor: str, goal: str, feasibility: str, max_gpus: int, lookup: Optional[str] = None
 ) -> dict[str, Any]:
     """Recommend a layout for one trace row; fall back to the original layout on any failure.
+
+    ``max_gpus`` is the cluster GPU budget (from infrastructure.yaml or ``--cluster-gpus``): every
+    job is optimised within the SAME cluster ceiling, never past it, and never keyed off the job's
+    own submitted footprint (a trace never carries cluster size).
 
     The returned dict carries a ``note`` (None on full success) saying why a row kept
     its original layout or got no estimated duration — surfaced as a per-row warning
@@ -144,13 +149,13 @@ def _recommend_row(
     def kavier_hint() -> str:
         if predictor == "kavier":
             return ""
-        if _kavier_can_predict(wl, goal, feasibility, gpn * nodes):
+        if _kavier_can_predict(wl, goal, feasibility, max_gpus):
             return " — kavier CAN handle this workload: rerun with --method kavier"
         return ""
 
     try:
         out = coastline.recommend(
-            [wl], predictor=predictor, goal=goal, max_gpus=gpn * nodes, top_k=1, feasibility=feasibility, lookup=lookup
+            [wl], predictor=predictor, goal=goal, max_gpus=max_gpus, top_k=1, feasibility=feasibility, lookup=lookup
         )
         if out.empty or not bool(out.iloc[0]["feasible"]):
             # feasible=False covers two very different causes: the feasibility check
@@ -160,7 +165,7 @@ def _recommend_row(
             reason = (
                 f"'{predictor}' could not predict this workload{hint}"
                 if hint
-                else _infeasible_note(gpn, nodes, feasibility)
+                else _infeasible_note(max_gpus, feasibility)
             )
             return _unchanged(keep, row, reason)
         top = out.iloc[0]
@@ -190,6 +195,8 @@ def recommend_trace(
     goal: str = "min_gpu",
     feasibility: str = "autoconf",
     lookup: Optional[str] = None,
+    cluster_gpus: Optional[int] = None,
+    node_gpus: Optional[int] = None,
 ) -> pd.DataFrame:
     """Recommend a layout per trace row, write the recommended-trace CSV, and return the DataFrame.
 
@@ -201,10 +208,15 @@ def recommend_trace(
 
     ``lookup`` points the ``cache``/``intelligent`` methods at a measured-runs CSV
     (flat sfttrainer schema), or ``"default"`` for the small bundled lookup DB.
+
+    ``cluster_gpus`` / ``node_gpus`` bound every job to the cluster: they resolve (with
+    ``infrastructure.yaml`` as the default) to the GPU budget each job is optimised within, so no
+    recommendation ever exceeds the cluster. The cluster size is never taken from the trace.
     """
+    total_gpus, _, _ = resolve_cluster_caps(cluster_gpus, node_gpus)
     predictor = _METHOD_TO_PREDICTOR.get(method.lower(), method.lower())
     df = pd.read_csv(input_csv, low_memory=False)
-    recs = [_recommend_row(row, predictor, goal, feasibility, lookup) for _, row in df.iterrows()]
+    recs = [_recommend_row(row, predictor, goal, feasibility, total_gpus, lookup) for _, row in df.iterrows()]
     for i, r in enumerate(recs):
         if r["note"]:
             logger.warning("row %d (%s): %s", i, df.iloc[i].get(_MODEL, "?"), r["note"])

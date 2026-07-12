@@ -52,7 +52,7 @@ OPTIONAL_COLUMNS: dict[str, str] = {
 }
 
 MIN_ROWS = 20  # below this, warn that the tuned model is likely poor
-TUNABLE_MODELS = ("tabpfn",)
+TUNABLE_MODELS = ("tabpfn", "xgboost")
 
 
 class DatasetFormatError(ValueError):
@@ -177,27 +177,30 @@ def _mdape(actual: np.ndarray, predicted: np.ndarray) -> float:
     return float(np.median(np.abs(predicted - actual) / actual) * 100.0)
 
 
-def tune(
-    data_csv: str,
-    *,
-    model: str = "tabpfn",
-    train_percentage: float = 1.0,
-    output: Optional[str] = None,
-    seed: int = 42,
-    on_step: Optional[Any] = None,
-) -> dict[str, Any]:
-    """Tune ``model`` on ``data_csv``; return {tune_id, path, rows_*, fit_seconds, metrics, warnings}.
+def _split(
+    X: pd.DataFrame, y: pd.DataFrame, y_log: pd.DataFrame, train_percentage: float, seed: int
+) -> tuple[pd.DataFrame, Optional[pd.DataFrame], pd.DataFrame, Optional[pd.DataFrame]]:
+    """Return (X_train, X_test, ylog_train, y_test); the holdout is None at train_percentage 1.0."""
+    if train_percentage < 1.0:
+        from sklearn.model_selection import train_test_split
 
-    ``train_percentage=1.0`` uses every valid row (no holdout); below 1.0 the rest
-    becomes a test split and MdAPE for both targets is reported. ``on_step`` (a
-    ``str -> None`` callable, e.g. ``print``) receives live progress lines so long
-    fits are never silent.
-    """
-    step = on_step or logger.info
-    if model not in TUNABLE_MODELS:
-        raise ValueError(f"only {TUNABLE_MODELS} can be tuned here; for other models use dev/trainer")
-    if not 0.0 < train_percentage <= 1.0:
-        raise ValueError(f"--train-percentage must be in (0, 1], got {train_percentage}")
+        X_train, X_test, ylog_train, _, _, y_test = train_test_split(
+            X, y_log, y, test_size=1.0 - train_percentage, random_state=seed
+        )
+        return X_train, X_test, ylog_train, y_test
+    return X, None, y_log, None
+
+
+def _fit_tabpfn(
+    X_train: pd.DataFrame,
+    X_test: Optional[pd.DataFrame],
+    ylog_train: pd.DataFrame,
+    y_test: Optional[pd.DataFrame],
+    cat_features: list[str],
+    num_features: list[str],
+    step: Any,
+) -> tuple[dict[str, Any], dict[str, float], float, str]:
+    """Two single-output TabPFN regressors (one per target); featv3 object-array input."""
     try:
         from tabpfn import TabPFNRegressor
         from tabpfn.constants import ModelVersion
@@ -206,23 +209,6 @@ def tune(
             "tabpfn is not installed — install the ML extras first: uv sync --extra ml "
             '(or pip install "coastline-recommender[ml]")'
         ) from exc
-
-    raw = pd.read_csv(data_csv, low_memory=False)
-    clean, warnings_list = validate_dataset(raw)
-    step(f"loaded {data_csv}: {len(raw)} rows -> {len(clean)} valid ({len(raw) - len(clean)} dropped by filters)")
-    X, cat_features, num_features = _feature_frame(clean)
-    y = clean[["dataset_tokens_per_second", "train_runtime"]].astype(float)
-    y_log = np.log1p(y)
-
-    if train_percentage < 1.0:
-        from sklearn.model_selection import train_test_split
-
-        X_train, X_test, ylog_train, _, _, y_test = train_test_split(
-            X, y_log, y, test_size=1.0 - train_percentage, random_state=seed
-        )
-    else:
-        X_train, X_test, ylog_train, y_test = X, None, y_log, None
-
     try:
         import torch
 
@@ -230,17 +216,7 @@ def tune(
     except ImportError:
         device = "cpu"
 
-    tune_id = f"{model}-{time.strftime('%Y%m%d-%H%M%S')}"
-    # tuned artifacts land in models/custom/ — they shadow the coastline-bundled portfolio
-    path = Path(output) if output else custom_models_dir() / f"{model}.pkl"
-    step(
-        f"tune id {tune_id} · train {len(X_train)} rows / holdout {0 if X_test is None else len(X_test)} rows "
-        f"(train-percentage {train_percentage}) · device {device}"
-    )
-    step(f"output: {path}" + (" (will OVERWRITE the existing artifact)" if path.exists() else " (new file)"))
-
-    # One regressor per target (TabPFN is single-output); v2 weights are the only
-    # redistributable ones — see dev/trainer/train_performance_tabpfn.py.
+    # v2 weights are the only redistributable ones — see dev/trainer/train_performance_tabpfn.py.
     def make_regressor():
         return TabPFNRegressor.create_default_for_version(
             ModelVersion.V2, device=device, ignore_pretraining_limits=True
@@ -248,15 +224,12 @@ def tune(
 
     X_train_arr = _as_model_input(X_train, num_features)
     t0 = time.perf_counter()
-    step("[1/3] fitting throughput regressor ...")
+    step("[1/2] fitting throughput regressor ...")
     model_throughput = make_regressor()
     model_throughput.fit(X_train_arr, ylog_train["dataset_tokens_per_second"].to_numpy())
-    step(f"[1/3] done in {time.perf_counter() - t0:.1f}s")
-    t1 = time.perf_counter()
-    step("[2/3] fitting runtime regressor ...")
+    step("[2/2] fitting runtime regressor ...")
     model_runtime = make_regressor()
     model_runtime.fit(X_train_arr, ylog_train["train_runtime"].to_numpy())
-    step(f"[2/3] done in {time.perf_counter() - t1:.1f}s")
     fit_seconds = time.perf_counter() - t0
 
     metrics: dict[str, float] = {}
@@ -269,21 +242,166 @@ def tune(
             "test_mdape_throughput_pct": _mdape(y_test["dataset_tokens_per_second"].to_numpy(), pred_thr),
             "test_mdape_runtime_pct": _mdape(y_test["train_runtime"].to_numpy(), pred_rt),
         }
-
-    step("[3/3] saving artifact ...")
-    path.parent.mkdir(parents=True, exist_ok=True)
     artifacts = {
         "model": {"throughput": model_throughput, "runtime": model_runtime},
         "cat_features": cat_features,
         "num_features": num_features,
-        "tune_id": tune_id,
-        "tuned_on": str(data_csv),
-        "train_percentage": train_percentage,
         "test_metrics": metrics,
     }
+    return artifacts, metrics, fit_seconds, device
+
+
+# Sensible single-fit XGBoost hyperparameters (no GridSearchCV — `tune` runs on small
+# user datasets where a grid search would be slow and unstable). dev/trainer tunes the full grid.
+_XGB_PARAMS: dict[str, Any] = dict(
+    n_estimators=600,
+    max_depth=6,
+    learning_rate=0.05,
+    subsample=0.9,
+    colsample_bytree=0.9,
+    reg_alpha=0.1,
+    reg_lambda=1.0,
+    n_jobs=-1,
+    verbosity=0,
+)
+
+
+def _fit_encoders(X_train: pd.DataFrame, cat_features: list[str]) -> dict[str, Any]:
+    """One LabelEncoder per categorical, each carrying an explicit 'unknown' class for unseen values."""
+    from sklearn.preprocessing import LabelEncoder
+
+    encoders: dict[str, Any] = {}
+    for col in cat_features:
+        enc = LabelEncoder()
+        enc.fit([*sorted(set(X_train[col].astype(str))), "unknown"])
+        encoders[col] = enc
+    return encoders
+
+
+def _encode_matrix(
+    X: pd.DataFrame, cat_features: list[str], num_features: list[str], encoders: dict[str, Any]
+) -> pd.DataFrame:
+    """LabelEncode the categoricals (unseen -> 'unknown'); columns ordered cat+num as at inference."""
+    X_enc = X.copy()
+    for col in cat_features:
+        enc = encoders[col]
+        known = set(enc.classes_)
+        unk = int(enc.transform(["unknown"])[0])
+        X_enc[col] = [int(enc.transform([v])[0]) if v in known else unk for v in X[col].astype(str)]
+    return X_enc[cat_features + num_features]
+
+
+def _fit_xgboost(
+    X_train: pd.DataFrame,
+    X_test: Optional[pd.DataFrame],
+    ylog_train: pd.DataFrame,
+    y_test: Optional[pd.DataFrame],
+    cat_features: list[str],
+    num_features: list[str],
+    seed: int,
+    step: Any,
+) -> tuple[dict[str, Any], dict[str, float], float, str]:
+    """One multi-output XGBRegressor over [log throughput, log runtime]; LabelEncoded categoricals.
+
+    Produces the SAME artifact shape ``XGBoostPredictor`` loads (model + encoders + cat/num_features +
+    best_params), so a tuned model is served immediately by ``--method xgboost``.
+    """
+    try:
+        from xgboost import XGBRegressor
+    except ImportError as exc:
+        raise RuntimeError(
+            "xgboost is not installed — install the ML extras first: uv sync --extra ml "
+            '(or pip install "coastline-recommender[ml]")'
+        ) from exc
+
+    step("[1/1] encoding categoricals + fitting the multi-output regressor ...")
+    encoders = _fit_encoders(X_train, cat_features)
+    X_train_mat = _encode_matrix(X_train, cat_features, num_features, encoders)
+    # Target order is (throughput, runtime) — the order invert_log_targets expects at inference.
+    y_train = ylog_train[["dataset_tokens_per_second", "train_runtime"]].to_numpy()
+
+    t0 = time.perf_counter()
+    model = XGBRegressor(random_state=seed, **_XGB_PARAMS)
+    model.fit(X_train_mat, y_train)
+    fit_seconds = time.perf_counter() - t0
+
+    metrics: dict[str, float] = {}
+    test_metrics: dict[str, Any] = {}
+    if X_test is not None and len(X_test):
+        step(f"evaluating holdout ({len(X_test)} rows) ...")
+        X_test_mat = _encode_matrix(X_test, cat_features, num_features, encoders)
+        pred = np.expm1(model.predict(X_test_mat))
+        thr_mdape = _mdape(y_test["dataset_tokens_per_second"].to_numpy(), pred[:, 0])
+        rt_mdape = _mdape(y_test["train_runtime"].to_numpy(), pred[:, 1])
+        metrics = {"test_mdape_throughput_pct": thr_mdape, "test_mdape_runtime_pct": rt_mdape}
+        test_metrics = {"original_space": {"mdape": thr_mdape}}  # shape XGBoostPredictor logs
+
+    artifacts = {
+        "model": model,
+        "encoders": encoders,
+        "cat_features": cat_features,
+        "num_features": num_features,
+        "best_params": {"random_state": seed, **_XGB_PARAMS},
+        "feature_importance": [],
+        "test_metrics": test_metrics,
+    }
+    return artifacts, metrics, fit_seconds, "cpu"
+
+
+def tune(
+    data_csv: str,
+    *,
+    model: str = "tabpfn",
+    train_percentage: float = 1.0,
+    output: Optional[str] = None,
+    seed: int = 42,
+    on_step: Optional[Any] = None,
+) -> dict[str, Any]:
+    """Tune ``model`` on ``data_csv``; return {tune_id, path, rows_*, fit_seconds, metrics, warnings}.
+
+    ``model`` is ``"tabpfn"`` (in-context, single-output-per-target) or ``"xgboost"`` (a multi-output
+    gradient-boosted model — the best non-ICL portfolio model). ``train_percentage=1.0`` uses every
+    valid row (no holdout); below 1.0 the rest becomes a test split and MdAPE for both targets is
+    reported. ``on_step`` (a ``str -> None`` callable, e.g. ``print``) receives live progress lines.
+    """
+    step = on_step or logger.info
+    if model not in TUNABLE_MODELS:
+        raise ValueError(f"only {TUNABLE_MODELS} can be tuned here; for other models use dev/trainer")
+    if not 0.0 < train_percentage <= 1.0:
+        raise ValueError(f"--train-percentage must be in (0, 1], got {train_percentage}")
+
+    raw = pd.read_csv(data_csv, low_memory=False)
+    clean, warnings_list = validate_dataset(raw)
+    step(f"loaded {data_csv}: {len(raw)} rows -> {len(clean)} valid ({len(raw) - len(clean)} dropped by filters)")
+    X, cat_features, num_features = _feature_frame(clean)
+    y = clean[["dataset_tokens_per_second", "train_runtime"]].astype(float)
+    y_log = np.log1p(y)
+    X_train, X_test, ylog_train, y_test = _split(X, y, y_log, train_percentage, seed)
+
+    tune_id = f"{model}-{time.strftime('%Y%m%d-%H%M%S')}"
+    # tuned artifacts land in models/custom/ — they shadow the coastline-bundled portfolio
+    path = Path(output) if output else custom_models_dir() / f"{model}.pkl"
+    step(
+        f"tune id {tune_id} · train {len(X_train)} rows / holdout {0 if X_test is None else len(X_test)} rows "
+        f"(train-percentage {train_percentage})"
+    )
+    step(f"output: {path}" + (" (will OVERWRITE the existing artifact)" if path.exists() else " (new file)"))
+
+    if model == "tabpfn":
+        artifacts, metrics, fit_seconds, device = _fit_tabpfn(
+            X_train, X_test, ylog_train, y_test, cat_features, num_features, step
+        )
+    else:  # xgboost
+        artifacts, metrics, fit_seconds, device = _fit_xgboost(
+            X_train, X_test, ylog_train, y_test, cat_features, num_features, seed, step
+        )
+
+    artifacts.update({"tune_id": tune_id, "tuned_on": str(data_csv), "train_percentage": train_percentage})
+    step("saving artifact ...")
+    path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "wb") as f:
         pickle.dump(artifacts, f)
-    step(f"[3/3] wrote {path} ({path.stat().st_size / 1e6:.0f} MB)")
+    step(f"wrote {path} ({path.stat().st_size / 1e6:.0f} MB)")
 
     return {
         "tune_id": tune_id,

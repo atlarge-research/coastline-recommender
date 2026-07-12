@@ -13,6 +13,7 @@ from pathlib import Path
 
 import yaml
 
+from coastline.sdk.io.infrastructure import resolve_cluster_caps
 from coastline.sdk.io.interface.json_output import recommendation_payload, save_recommendation_to_json
 from coastline.sdk.io.run_config import load_strategy_config
 from coastline.sdk.logging import setup_logging
@@ -35,7 +36,9 @@ _DEFAULT_WORKLOAD = {
 }
 
 
-def _workload_and_context(config_path: Path, raw: dict) -> tuple[WorkloadSpec, SystemContext]:
+def _workload_and_context(
+    config_path: Path, raw: dict, cluster_gpus: int | None = None
+) -> tuple[WorkloadSpec, SystemContext]:
     workload_cfg = raw.get("workload") or {}
     system_cfg = raw.get("system") or {}
     grid_cfg = raw.get("grid") or {}
@@ -57,12 +60,14 @@ def _workload_and_context(config_path: Path, raw: dict) -> tuple[WorkloadSpec, S
         number_of_nodes=int(wl.get("number_of_nodes") or _DEFAULT_WORKLOAD["number_of_nodes"]),
     )
 
-    max_gpus = max(grid_cfg.get("total_gpus") or [16])
+    # Cluster budget: --cluster-gpus if given, else infrastructure.yaml. The config grid still
+    # applies but is capped so no recommendation exceeds the cluster.
+    max_gpus, gpus_per_node, max_nodes = resolve_cluster_caps(cluster_gpus)
     context = SystemContext.for_gpus(
         grid_cfg.get("gpu_models") or [gpu_model],
         max_gpus=max_gpus,
-        gpus_per_node=8,
-        max_nodes=4,
+        gpus_per_node=gpus_per_node,
+        max_nodes=max_nodes,
     )
     return workload, context
 
@@ -79,6 +84,13 @@ def main(argv: Sequence[str] | None = None) -> None:
         default=None,
         help="Write recommendation.json here (default: print to stdout, write nothing; "
         "OUTPUT_DIR env sets a root for per-run subdirectories).",
+    )
+    parser.add_argument(
+        "--cluster-gpus",
+        type=int,
+        default=None,
+        help="Total cluster GPUs (default: infrastructure.yaml's total_gpus). "
+        "The recommendation never exceeds the cluster.",
     )
     args = parser.parse_args(argv)
 
@@ -110,7 +122,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         workload = WorkloadSpec(**payload["workload"])
         context = SystemContext(**payload["context"])
     else:
-        workload, context = _workload_and_context(config_path, raw)
+        workload, context = _workload_and_context(config_path, raw, args.cluster_gpus)
 
     strategy_name = strategy_config.get("strategy", {}).get("name", "min_gpu")
     preset = strategy_config.get("strategy", {}).get("preset")

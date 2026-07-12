@@ -12,6 +12,7 @@ from typing import Any, Iterator
 import yaml
 
 from coastline.sdk.exceptions import RecommenderSystemError
+from coastline.sdk.io.infrastructure import resolve_cluster_caps
 from coastline.sdk.models.aliases import col_to_field_map
 from coastline.sdk.models.context import SystemContext
 from coastline.sdk.models.workload import WorkloadSpec
@@ -34,14 +35,17 @@ _OUTPUT_FIELDS = (
 )
 
 
-def recommend_csv(config_path, input_csv, output_csv) -> None:
-    """Recommend the best configuration for every workload row in ``input_csv``."""
+def recommend_csv(config_path, input_csv, output_csv, *, cluster_gpus=None) -> None:
+    """Recommend the best configuration for every workload row in ``input_csv``.
+
+    The GPU search is bounded by the cluster: ``cluster_gpus`` (a ``--cluster-gpus`` flag) or, when
+    unset, ``infrastructure.yaml``'s declared total. No row is ever recommended more GPUs than the
+    cluster has; the config ``grid.total_gpus`` still applies but is capped to the cluster.
+    """
     config = _load_config(config_path)
     strategy = _build_strategy(config)
     column_map = _column_map(config)
-    grid = config["grid"]
-    max_gpus = max(grid.get("total_gpus") or [16])
-    gpus_per_node = grid.get("gpus_per_node", 8)
+    max_gpus, gpus_per_node, max_nodes = resolve_cluster_caps(cluster_gpus)
     # Goal context for the one-line rationale (same phrasing as the API/UI/JSON).
     meta = {"preset": config["strategy"].get("preset"), "strategy_name": config["strategy"].get("name")}
 
@@ -53,7 +57,9 @@ def recommend_csv(config_path, input_csv, output_csv) -> None:
             # here marks just that row feasible=False (like coastline.sdk.recommend.batch_api.recommend) instead
             # of aborting the whole job mid-stream.
             workload = WorkloadSpec(**fields)
-            context = SystemContext.for_gpus([workload.gpu_model], max_gpus=max_gpus, gpus_per_node=gpus_per_node)
+            context = SystemContext.for_gpus(
+                [workload.gpu_model], max_gpus=max_gpus, gpus_per_node=gpus_per_node, max_nodes=max_nodes
+            )
             recs = strategy.recommend(workload, context)
         except (RuntimeError, ValueError, RecommenderSystemError):
             recs = []  # invalid/incomplete row, or no feasible configuration in the grid

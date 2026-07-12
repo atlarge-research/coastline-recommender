@@ -1395,7 +1395,7 @@ wheels = [
 
 [[package]]
 name = "kavier"
-version = "0.5.1"
+version = "0.5.0.2"
 source = { editable = "../kavier" }
 dependencies = [
     { name = "cachetools" },
@@ -1411,6 +1411,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "cachetools", specifier = ">=6.1" },
+    { name = "matplotlib", marker = "extra == 'plot'", specifier = ">=3.5" },
     { name = "numpy", specifier = ">=2.2.6" },
     { name = "pandas", specifier = ">=2.2.3" },
     { name = "pyarrow", specifier = ">=15" },
@@ -1421,7 +1422,7 @@ requires-dist = [
     { name = "scipy", marker = "extra == 'calibration'", specifier = ">=1.14" },
     { name = "tqdm", specifier = ">=4.67.1" },
 ]
-provides-extras = ["calibration"]
+provides-extras = ["calibration", "plot"]
 
 [package.metadata.requires-dev]
 dev = [

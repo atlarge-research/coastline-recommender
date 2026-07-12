@@ -22,7 +22,7 @@ def _build_parser() -> FriendlyParser:
     p.add_argument(
         "--goal",
         default="min_gpu",
-        choices=["min_gpu", "performance"],
+        choices=["min_gpu", "performance", "energy", "balanced"],
         help="Optimisation goal for recommendations (default: min_gpu).",
     )
     p.add_argument(
@@ -53,12 +53,27 @@ def _build_parser() -> FriendlyParser:
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = _build_parser().parse_args(argv)
+    # Resolve the cluster budget ONCE (infrastructure.yaml default, --cluster-gpus/--node-gpus
+    # override) so the recommendation cap and the timeline use the exact same cluster.
+    from coastline.sdk.io.infrastructure import resolve_cluster_caps
+
+    cluster_gpus, node_gpus, _ = resolve_cluster_caps(args.cluster_gpus, args.node_gpus)
     df = recommend_trace(
-        args.input, args.output, method=args.method, goal=args.goal, feasibility=args.feasibility, lookup=args.lookup
+        args.input,
+        args.output,
+        method=args.method,
+        goal=args.goal,
+        feasibility=args.feasibility,
+        lookup=args.lookup,
+        cluster_gpus=cluster_gpus,
+        node_gpus=node_gpus,
     )
     n = df[f"metadata.estimated_duration_{args.method}"].notna().sum()
     missing = len(df) - n
-    print(f"wrote {args.output}: {len(df)} rows, {n} with an estimated_duration_{args.method}")
+    print(
+        f"wrote {args.output}: {len(df)} rows, {n} with an "
+        f"estimated_duration_{args.method} (cluster {cluster_gpus} GPUs)"
+    )
     if missing:
         print(f"note: {missing} row(s) without a duration — see warnings above and metadata.recommendation_note")
     if args.visual:
@@ -66,7 +81,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
 
         viz = args.visual_output or str(Path(args.output).with_suffix(".pdf"))
         stats = plot_trace_timeline(
-            args.output, viz, method=args.method, cluster_gpus=args.cluster_gpus, node_gpus=args.node_gpus
+            args.output, viz, method=args.method, cluster_gpus=cluster_gpus, node_gpus=node_gpus
         )
         print(f"wrote {viz}: cluster timeline ({stats})")
 

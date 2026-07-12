@@ -254,7 +254,6 @@ Use it when you have measured runs of your own and want predictions tuned to you
 
 The `--train-percentage` flag keeps a share of the rows out of tuning as a quality check: the command reports the median prediction error (`MdAPE`) for throughput and runtime on the held-out rows.
 
-
 ```bash
 coastline tune \
       --data run_database.csv \

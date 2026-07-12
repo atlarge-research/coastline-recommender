@@ -23,9 +23,13 @@ def _build_parser() -> FriendlyParser:
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = _build_parser().parse_args(argv)
+    from coastline.sdk.io.infrastructure import resolve_cluster_caps
+
+    # infrastructure.yaml default; --cluster-gpus/--node-gpus override.
+    cluster_gpus, node_gpus, _ = resolve_cluster_caps(args.cluster_gpus, args.node_gpus)
     print(
         plot_trace_timeline(
-            args.input, args.output, method=args.method, cluster_gpus=args.cluster_gpus, node_gpus=args.node_gpus
+            args.input, args.output, method=args.method, cluster_gpus=cluster_gpus, node_gpus=node_gpus
         )
     )
 

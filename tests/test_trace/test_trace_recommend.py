@@ -65,13 +65,33 @@ def test_estimated_duration_scales_linearly_with_the_jobs_actual_work(tmp_path):
     # 2x the actual work (7200 s vs 3600 s at the same tps) => exactly 2x duration.
     assert two[col] == pytest.approx(2.0 * one[col])
 
-    # min_gpu recommendation is bounded by max_gpus = gpus_per_node*num_nodes = 8*1 = 8.
+    # min_gpu picks the FEWEST feasible GPUs, so this single job stays small (<= 8) — well within
+    # the cluster budget (infrastructure.yaml), which is the real ceiling now, not the job's footprint.
     total = int(df["resources.num_gpus_per_node"].iloc[0]) * int(df["resources.num_nodes"].iloc[0])
     assert 1 <= total <= 8
 
     # Unrelated column survives; round-trips to disk with the same row count.
     assert df["metadata.uid"].iloc[0] == "one-hour"
     assert out.exists() and len(pd.read_csv(out)) == 2
+
+
+def test_recommendations_never_exceed_the_cluster_budget(tmp_path):
+    """The cluster GPU budget is a hard ceiling: with cluster_gpus=2, no job — even under the
+    scale-out `performance` goal — is recommended more than 2 GPUs. The cluster size comes from the
+    argument (infrastructure.yaml in production), never from the trace."""
+    rows = [{**_GOOD_ROW, "metadata.uid": f"job-{i}", "resources.num_gpus_per_node": 8} for i in range(3)]
+    out = tmp_path / "rec.csv"
+    df = recommend_trace(
+        str(_write_csv(tmp_path, rows)),
+        str(out),
+        method="kavier",
+        goal="performance",
+        feasibility="rules",
+        cluster_gpus=2,
+    )
+    total = pd.to_numeric(df["resources.num_gpus_per_node"]) * pd.to_numeric(df["resources.num_nodes"])
+    assert (total <= 2).all()  # never exceeds the 2-GPU cluster
+    assert (total >= 1).all()
 
 
 # --------------------------------------------------------------------------- #

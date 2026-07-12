@@ -88,8 +88,9 @@ def test_tune_rejects_bad_train_percentage_and_unknown_model(tmp_path):
     """Argument validation fires before any dataset/ML work."""
     with pytest.raises(ValueError, match="train-percentage"):
         tune("does-not-matter.csv", train_percentage=0.0)
+    # tabpfn and xgboost are tunable; a portfolio model like catboost is not (use dev/trainer).
     with pytest.raises(ValueError, match="only"):
-        tune("does-not-matter.csv", model="xgboost")
+        tune("does-not-matter.csv", model="catboost")
 
 
 def test_format_help_lists_every_required_column():

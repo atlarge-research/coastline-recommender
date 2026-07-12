@@ -77,6 +77,11 @@ def generate_candidates(
         gpus_per_node, num_nodes = _derive_node_layout(n_gpus, max_gpus_per_node)
         if num_nodes > max_nodes:
             continue
+        # A non-power-of-two step rounds its layout UP (e.g. 30 GPUs at 8/node -> 8x4 = 32),
+        # so the actual layout can exceed the cap even when the requested step did not. Re-check
+        # the derived total so a cluster budget is never overrun.
+        if gpus_per_node * num_nodes > max_gpus:
+            continue
 
         for batch_size in grid_config.batch_sizes:
             candidates.append(

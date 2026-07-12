@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 from functools import lru_cache
 from pathlib import Path
+from typing import Optional
 
 import yaml
 from pydantic import BaseModel, Field
@@ -51,3 +53,25 @@ def load_infrastructure() -> Infrastructure:
     else:
         logger.warning("Infrastructure config not found at %s; using built-in defaults", path)
     return Infrastructure(**_DEFAULTS)
+
+
+def resolve_cluster_caps(
+    cluster_gpus: Optional[int] = None, node_gpus: Optional[int] = None
+) -> tuple[int, int, int]:
+    """Resolve the cluster GPU caps as ``(total_gpus, gpus_per_node, max_nodes)``.
+
+    The cluster size is sysadmin-declared in ``infrastructure.yaml`` — it is deliberately NOT read
+    from the workload trace (a trace must never carry cluster topology). The optional ``cluster_gpus``
+    / ``node_gpus`` arguments (from a ``--cluster-gpus`` / ``--node-gpus`` CLI flag) override the
+    declared totals; when ``cluster_gpus`` is given, ``max_nodes`` is derived from it, otherwise the
+    file's declared ``max_nodes`` is used. The returned triple feeds ``SystemContext`` so the grid
+    never proposes a layout larger than the cluster.
+    """
+    infra = load_infrastructure()
+    total = int(cluster_gpus) if cluster_gpus else infra.total_gpus
+    if total < 1:
+        raise ValueError(f"cluster GPUs must be >= 1, got {total}")
+    per_node = int(node_gpus) if node_gpus else infra.max_gpus_per_node
+    per_node = max(1, min(per_node, total))
+    max_nodes = max(1, math.ceil(total / per_node)) if cluster_gpus else infra.max_nodes
+    return total, per_node, max_nodes

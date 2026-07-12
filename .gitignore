@@ -32,7 +32,7 @@ dev/benchmark/results/*.csv
 # local-only trace data
 daniele_data/
 
-# Trained ML model artifacts are TRACKED here (this repo is PRIVATE; the 3 largest ride via Git
+# Trained ML model artifacts are TRACKED here (NOTE: this repo is PUBLIC — these artifacts are world-readable; the 3 largest ride via Git
 # LFS — see .gitattributes). They are NOT bundled into the uv_build wheel (models/ lives at the
 # repo root, outside src/coastline), and the default Kavier physics path needs none.
 
@@ -43,3 +43,9 @@ daniele_data/
 
 # local demo data + generated artifacts
 demo/
+
+# local run outputs (coastline run / recommend-trace: CSV + PDF). Regenerated; may echo private trace columns.
+/out/
+
+# stray copies of the private measured-runs dataset — the canonical copy lives in the gitignored demo/ above
+/baseline_*.csv

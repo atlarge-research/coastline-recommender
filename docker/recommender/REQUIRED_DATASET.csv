@@ -1,0 +1,5 @@
+__COASTLINE_DATASET_PLACEHOLDER__
+This is a placeholder, not a dataset. The pre-trained recommender image needs a dataset
+passed at BUILD time (it is never hardcoded in the Dockerfile). Provide one with either:
+  docker build -f docker/recommender/Dockerfile --build-arg DATASET_CSV=<path/in/build/context.csv> -t coastline-trained .
+  docker build -f docker/recommender/Dockerfile --build-context dataset=<abs/host/dir> -t coastline-trained .   # then adjust the COPY
