@@ -1,0 +1,6 @@
+metadata.model_name,metadata.method,resources.gpu_model,metadata.tokens_per_sample,metadata.batch_size,resources.num_gpus_per_node,resources.num_nodes,metadata.output.train_tokens_per_second,metadata.train_runtime,metadata.submission_time
+llama3.1-70b,full,NVIDIA-A100-SXM4-80GB,2048,8,8,2,1150,5400,2026-03-02T09:00:00Z
+mistral-7b-v0.1,lora,NVIDIA-A100-SXM4-80GB,1024,16,8,1,3900,3600,2026-03-02T09:15:00Z
+granite-3.3-8b,full,NVIDIA-A100-SXM4-80GB,4096,4,8,2,8800,1800,2026-03-02T09:30:00Z
+granite-3.1-2b,lora,NVIDIA-A100-SXM4-80GB,1024,16,4,1,15000,1000,2026-03-02T09:45:00Z
+mistral-7b-v0.1,lora,NVIDIA-A100-SXM4-80GB,2048,8,8,1,2600,2770,2026-03-02T10:00:00Z

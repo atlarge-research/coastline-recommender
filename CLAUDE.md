@@ -94,3 +94,16 @@ FastAPI app (`ui/app.py`) serving the wizard UI + REST. Long predictions run thr
 - `coastline run --config …` — config-driven engine run → JSON to stdout (write an artifact via `--output-dir` or `OUTPUT_DIR`).
 - `coastline recommend-trace` / `coastline plot-trace` — add Coastline predictions to a fine-tuning trace CSV, then visualise ([plot] extra).
 - `coastline-ui` — the FastAPI dashboard.
+
+## Documentation (`docs/`)
+
+Flat numbered pages (`1_introduction.md` … `7_terminology.md`) in the style of the uv docs. The writing and structure guidelines live in `docs/docs.md` — follow them exactly. Radu's authoring preferences:
+
+- Radu leaves inline `TODO:` comments in the pages; resolve each TODO in place, then delete the TODO line. Keep unresolved cross-references as empty `[text](...)` links.
+- One canonical term per thing: **recommendation policy** (never "strategy" in prose; the YAML key stays literally `strategy:`), **preset** (a named α/β weight pair — α weighs energy, β weighs performance in `combined_score = α·power_score + β·throughput_score`), **workload**, **simulation models** (the predictors), **feasibility checker** (IBM AutoConf).
+- Number sections and subsections on every page (`## 1.`, `### 1.1`) and keep explicit `{ #anchor }` tags so cross-page links survive renumbering. Open each page with a numbered table of contents, one line of explication per entry.
+- Every shown command displays input AND output. Outputs are captured from real runs, never invented or hand-edited; display floats are rounded to 2 decimals at the source (`Recommendation.__str__`, the JSON payload), so capture after rounding.
+- Reference specs follow the template: anchored heading, one prose paragraph, then a `| Field | Type | Required | Description |` table.
+- Images live in `docs/media/` with descriptive snake_case names; thesis figures under `docs/thesis/floats/` are reusable when current.
+- When documenting an input format, ship a ready-to-run sample (e.g. `config/coastline_functionality/sample_workloads.csv`) and run the command against the sample first.
+- Never document: `make` commands (the project is pure uv), `energy: opendc` (removed), or CO2 prediction (exists in kavier, not exposed through Coastline).

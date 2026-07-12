@@ -1,11 +1,21 @@
 site_name: Coastline
-site_description: Context-aware GPU/datacenter configuration recommender for LLM fine-tuning
+site_description: Recommender system for LLM fine-tuning workloads
 site_author: Radu Nicolae · AtLarge Research
 repo_url: https://github.com/atlarge-research/coastline-recommender
 repo_name: atlarge-research/coastline-recommender
-copyright: Coastline — AtLarge Research
+copyright: Coastline
 docs_dir: docs
 site_dir: site
+
+nav:
+  - Introduction: index.md
+  - Overview:
+      - Concepts: overview/concepts.md
+      - Architecture: overview/architecture.md
+  - Guides:
+      - Installation: guides/installation.md
+      - CLI usage: guides/cli.md
+  - Contributing: contributing.md
 
 theme:
   name: material
@@ -61,6 +71,9 @@ markdown_extensions:
           class: mermaid
           format: !!python/name:pymdownx.superfences.fence_code_format
 
+extra_css:
+  - assets/extra.css
+
 extra_javascript:
   - assets/mathjax.js
   - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
@@ -68,15 +81,3 @@ extra_javascript:
 plugins:
   - search
 
-nav:
-  - Overview: index.md
-  - Getting started: getting-started.md
-  - Architecture: architecture.md
-  - Components:
-      - Recommendation pipeline: components/pipeline.md
-      - Performance predictors: components/performance.md
-      - Energy predictors: components/energy.md
-      - Feasibility: components/feasibility.md
-      - Ranking policies: components/policies.md
-      - Library & data models: components/library.md
-  - Contributing: contributing.md

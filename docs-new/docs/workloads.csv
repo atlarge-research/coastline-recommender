@@ -1,7 +1,0 @@
-model_name,method,gpu_model,tokens_per_sample,batch_size
-mistral-7b-v0.1,lora,NVIDIA-A100-SXM4-80GB,1024,16
-granite-3.3-8b,full,NVIDIA-A100-SXM4-80GB,4096,4
-granite-3.1-2b,lora,NVIDIA-A100-SXM4-80GB,1024,16
-llama3.2-3b,lora,NVIDIA-A100-SXM4-80GB,2048,8
-mistral-7b-v0.1,lora,L40S,1024,16
-mistral-7b-v0.1,gptq-lora,NVIDIA-H100-PCIe,1024,16

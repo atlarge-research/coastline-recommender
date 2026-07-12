@@ -3,16 +3,16 @@
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union
 
-from coastline.sdk.models.recommendation import Recommendation
+from coastline.sdk.models.recommendation import Recommendation, round_floats_for_display
 
 
 def recommendation_payload(
     recommendation: Recommendation,
     include_metadata: bool = True,
     rationale: Optional[str] = None,
-) -> dict:
+) -> dict[str, Any]:
     """The JSON-serialisable dict for one recommendation (shared by file + stdout output)."""
     data = {
         "timestamp": datetime.now().isoformat(),
@@ -38,7 +38,11 @@ def recommendation_payload(
 
     if include_metadata:
         data["metadata"] = recommendation.metadata
-    return data
+    # Presentation layer: round float noise (watts, throughput, scores) to 2
+    # decimals for the emitted JSON. round_floats_for_display copies, so the
+    # source Recommendation's metadata is left untouched at full precision.
+    rounded: dict[str, Any] = round_floats_for_display(data)
+    return rounded
 
 
 def save_recommendation_to_json(
@@ -77,4 +81,4 @@ def save_batch_recommendations(recommendations: List[Recommendation], filepath: 
 
     Path(filepath).parent.mkdir(parents=True, exist_ok=True)
     with open(filepath, "w") as f:
-        json.dump(data, f, indent=2)
+        json.dump(round_floats_for_display(data), f, indent=2)  # presentation-only float rounding

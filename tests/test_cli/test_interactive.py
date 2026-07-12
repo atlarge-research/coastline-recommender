@@ -108,11 +108,15 @@ def test_save_writes_json_schema_mapping_the_recommendation_fields(tmp_path):
     assert cfg["workers"] == rec.number_of_nodes
     # Schema invariant: the serialized layout still multiplies out.
     assert cfg["gpus_per_node"] * cfg["workers"] == cfg["total_gpus"]
-    assert payload["performance"]["throughput_tokens_per_sec"] == rec.predicted_throughput
+    # The serializer rounds floats to 2 decimals for display, so the payload
+    # maps rec's values rounded (not raw).
+    assert payload["performance"]["throughput_tokens_per_sec"] == round(rec.predicted_throughput, 2)
     # Efficiency is tokens/watt; derive it independently from throughput & power.
     power = rec.metadata["predicted_power_watts"]
-    assert payload["energy"]["power_watts"] == power
-    assert payload["energy"]["efficiency_tokens_per_watt"] == pytest.approx(rec.predicted_throughput / power)
+    assert payload["energy"]["power_watts"] == round(power, 2)
+    assert payload["energy"]["efficiency_tokens_per_watt"] == pytest.approx(
+        round(rec.predicted_throughput / power, 2)
+    )
 
 
 def test_cli_no_interactive_with_save_writes_a_valid_config(tmp_path, monkeypatch):

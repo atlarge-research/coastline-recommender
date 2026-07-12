@@ -1,0 +1,7 @@
+/* Console blocks: the `$ ` prompt (.gp) and output lines (.go) render but are
+   excluded from selection and from the copy button — only commands get copied. */
+.highlight .gp,
+.highlight .go {
+  user-select: none;
+  -webkit-user-select: none;
+}

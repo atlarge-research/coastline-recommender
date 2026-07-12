@@ -1,78 +1,51 @@
 # Coastline
 
-**A context-aware recommender for GPU / datacenter configurations for LLM fine-tuning.**
+Coastline is the first scientific instrument for context-, policy-, and objective-aware recommendations of LLM
+fine-tuning workloads.
 
-Given a workload — an LLM, a PEFT method, a GPU model, tokens/sample, batch size — Coastline
-grid-searches candidate configurations, filters the infeasible ones, predicts **throughput +
-power**, and ranks them on a performance↔energy score. Throughput comes from **Kavier**
-(analytical physics) or a data-driven ML model; energy from Kavier-power or the **OpenDC**
-simulator; feasibility from IBM **AutoConf** (an OOM-aware validity classifier).
+## Features
 
-[Get started](getting-started.md){ .md-button .md-button--primary }
-[Architecture](architecture.md){ .md-button }
+[//]: # (TODO: Update links)
 
-## What it is {#what}
+1. Supports a [multi-objective](todo_link) recommendation policy;
+2. Supports a [min-GPU](todo_link) recommendation policy;
+3. Recommends feasible configurations, using [IBM AutoConf](todo_link);
+4. Makes [multi-objective recommendations](todo_link) using a [diverse set of simulation models]();
+5. Can simulate [performance](todo_link) and [energy](todo_link);
+6. Interfaces for everybody: [programmatic interface](todo_link), [graphical interface](),
+   and [command line interface]();
+7. Integrated with [IBM ado](https://research.ibm.com/blog/ado-accelerated-discovery-orchestrator-experiments) as a plugin experiment, via the [programmatic interface](6_specifications.md).
 
-Fine-tuning workloads are complex and largely unpredictable, so users — even experts — routinely
-over- or under-provision GPUs, wasting hours or failing jobs outright. Coastline is an
-*advisor-on-the-side*: a context-aware, request-compliant recommender that predicts system
-behaviour and selects the configuration best fit to your objective. Internal IBM Research
-exploration shows early recommenders can cut GPU-hours by **~14%** and under-provisioning
-failures by **~80%**.[^thesis]
+!!! tip
+    Coastline is an open-source project and we encourage you to explore our [GitHub repository](https://github.com/atlarge-research/coastline-recommender). 
+    We welcome contributions, feedback, and suggestions from the community. 
+    If you encounter any issues or have ideas for improvements, please feel free to open an issue or submit a pull request.
 
-## The mental model {#model}
+## Installation
 
-<div class="grid cards" markdown>
+Coastline requires Python >=3.11.
+Install Coastline using `pip`:
 
--   :material-view-grid-outline: __Grid → Feasibility → Predict → Rank__
-
-    One linear pipeline. Everything routes through `PolicyFactory` and a single
-    `GridWorkflowPipeline`. [See the pipeline →](components/pipeline.md)
-
--   :material-speedometer: __Two predictor families, one interface__
-
-    Analytical **Kavier** physics vs. **data-driven** ML, with a **cache** short-circuit and an
-    **OpenDC** energy path — all behind `BasePredictor`. [Predictors →](components/performance.md)
-
-</div>
-
-## Explore the components {#components}
-
-<div class="grid cards" markdown>
-
-- :material-pipe: [__Recommendation pipeline__](components/pipeline.md) — grid → feasibility → predict → rank
-- :material-chip: [__Performance predictors__](components/performance.md) — physics · cache · ML · composite
-- :material-lightning-bolt: [__Energy predictors__](components/energy.md) — Kavier-power · OpenDC
-- :material-shield-check: [__Feasibility__](components/feasibility.md) — AutoConf OOM · divisibility rules
-- :material-scale-balance: [__Ranking policies__](components/policies.md) — min-GPU · multi-objective
-- :material-database: [__Library & data models__](components/library.md) — GPU/LLM specs · WorkloadSpec
-
-</div>
-
-## How it fits together {#architecture}
-
-```mermaid
-flowchart LR
-    W[WorkloadSpec + SystemContext] --> G[grid: candidate layouts]
-    G --> F{feasibility}
-    F -- infeasible --> X[drop]
-    F -- feasible --> P[predict throughput + power]
-    P --> R[normalize + rank on α·power + β·throughput]
-    R --> O[Recommendation ranked best-first]
+```console
+pip install coastline-recommender
 ```
 
-## Validated against {#validation}
+## In this documentation
 
-<div class="grid cards" markdown>
+[//]: # (TOOD: Update TOC)
 
-- __~6.2% MdAPE__ — Kavier throughput on a 15% holdout (default `intelligent` path)
-- __~2.1% MdAPE__ — best ML predictor (TabPFN); XGBoost 7.2%, CatBoost 8.4%
-- __30,000 experiments__ — profiling trace the reference architecture was validated on
+In this documentation, you will learn how to install, configure, and use Coastline.
+In this documentation you will find:
 
-</div>
+1. [Getting started](2_getting-started.md) — install Coastline and make your first recommendation.
+2. [Setting up an experiment](3_experiment.md) — the config folder, file by file.
+3. [Recommendation policies](4_recommendation_policies.md) — min-GPU and multi-objective.
+4. [Simulation models](5_simulation_models.md) — the performance, energy, and feasibility predictors.
+5. [Feasibility checker](6_feasibility_checker.md) — IBM AutoConf.
+6. [Specifications](6_specifications.md) — the CLI, configuration, and SDK reference.
+7. [Terminology](7_terminology.md) — one canonical term per thing.
 
-Built following FAIR + FOSS principles and integrated with **IBM Ado**.[^thesis]
 
-[^thesis]: R. Nicolae, A. Iosup, A. Trivedi, J. Donkervliet. *A reference architecture and recommender
-for LLM fine-tuning workloads* (VU Amsterdam · IBM Research), 2025. The recommender adopts three
-engines: **Kavier** (performance), **OpenDC** (sustainability), and **IBM AutoConf** (feasibility).
+!!! info
+    Coastline is jointly backed by [AtLarge Research Group](https://www.atlarge-research.com/) and [IBM Research](https://research.ibm.com/).
+    Main contributors: [Radu Nicolae](https://radu-nicolae.com) and [Daniele Lotito](https://danielelotito.github.io/dl-codespace/).
