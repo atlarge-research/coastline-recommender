@@ -4,7 +4,7 @@ name: Deploy docs
 # Pages source must be set to "GitHub Actions" (Settings -> Pages -> Build and deployment).
 on:
   push:
-    branches: [master]
+    branches: [main]
     paths:
       - "docs/**"
       - "mkdocs.yml"
