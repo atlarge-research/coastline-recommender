@@ -8,6 +8,7 @@ from typing import Optional, Union
 
 import yaml
 
+from coastline.sdk.constants import EnergyBackend, SelectionPolicy, Strategy
 from coastline.sdk.io.run_config import builtin_default_config
 from coastline.sdk.pipeline.feasibility import create_feasibility_checker
 from coastline.sdk.pipeline.workflow import GridWorkflowPipeline
@@ -85,18 +86,20 @@ class PolicyFactory:
         predictor_config = config.get("predictors", {})
 
         if strategy_name is None:
-            strategy_name = strategy_config.get("name", "multi_objective")
+            strategy_name = strategy_config.get("name", Strategy.MULTI_OBJECTIVE.value)
 
         logger.info(f"Creating strategy: {strategy_name}")
 
-        if strategy_name == "min_gpu":
+        if strategy_name == Strategy.MIN_GPU:
             return PolicyFactory._create_min_gpu_strategy(config, predictor_config)
-        elif strategy_name == "multi_objective":
+        elif strategy_name == Strategy.MULTI_OBJECTIVE:
             return PolicyFactory._create_multi_objective_strategy(
                 config, strategy_config, predictor_config, preset, alpha, beta
             )
         else:
-            raise ValueError(f"Unknown strategy: '{strategy_name}'. Supported: 'min_gpu', 'multi_objective'")
+            raise ValueError(
+                f"Unknown strategy: '{strategy_name}'. Supported: {[s.value for s in Strategy]}"
+            )
 
     @staticmethod
     def _lookup_path(predictor_config: dict) -> Optional[Path]:
@@ -152,10 +155,12 @@ class PolicyFactory:
 
     @staticmethod
     def power_predictor(predictor_config: dict):
-        energy_type = predictor_config.get("energy", "kavier_power")
-        if energy_type == "kavier_power":
+        energy_type = predictor_config.get("energy", EnergyBackend.KAVIER_POWER.value)
+        if energy_type == EnergyBackend.KAVIER_POWER:
             return KavierPowerPredictor()
-        raise ValueError(f"Unknown energy predictor: '{energy_type}'. Supported: 'kavier_power'")
+        raise ValueError(
+            f"Unknown energy predictor: '{energy_type}'. Supported: {[e.value for e in EnergyBackend]}"
+        )
 
     @staticmethod
     def _create_min_gpu_strategy(config: dict, predictor_config: dict) -> MinGPUStrategy:
@@ -165,8 +170,8 @@ class PolicyFactory:
 
         pipeline = GridWorkflowPipeline.from_config(
             config=config,
-            selection_policy="min_gpu",
-            strategy_name="min_gpu",
+            selection_policy=SelectionPolicy.MIN_GPU.value,
+            strategy_name=Strategy.MIN_GPU.value,
             throughput_predictor=throughput,
             power_predictor=power,
             feasibility_checker=feasibility,
