@@ -286,6 +286,27 @@ def runtime_energy(rec: Recommendation, total_tokens: int) -> tuple[Optional[flo
     return runtime, energy
 
 
+def flatten_recommendation(rec: Recommendation, total_tokens: int = 0) -> dict[str, Any]:
+    """The one extraction every surface's serializer wraps: canonical raw values for one
+    Recommendation. Runtime/energy via runtime_energy (``total_tokens=0`` → the model's own
+    ``predicted_runtime_seconds``). Callers rename these keys to their own contract spelling."""
+    runtime, energy_wh = runtime_energy(rec, total_tokens)
+    meta = rec.metadata or {}
+    return {
+        "total_gpus": rec.total_gpus,
+        "gpus_per_node": rec.gpus_per_node,
+        "number_of_nodes": rec.number_of_nodes,
+        "batch_size": meta.get("batch_size"),
+        "throughput": rec.predicted_throughput,
+        "runtime_s": runtime,
+        "power_w": meta.get("predicted_power_watts"),
+        "energy_wh": energy_wh,
+        "energy_kwh": None if energy_wh is None else energy_wh / 1000.0,
+        "tokens_per_watt": meta.get("tokens_per_watt"),
+        "combined_score": meta.get("combined_score"),
+    }
+
+
 def recommendation_rationale(recs: list[Recommendation], meta: dict[str, Any]) -> str:
     """One-line rationale for the top recommendation vs runner-up."""
     if not recs:

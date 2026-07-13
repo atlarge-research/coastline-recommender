@@ -143,20 +143,19 @@ def _answers_for(
 
 
 def _predict(rec, total_tokens: int) -> dict[str, Any]:
-    """Flatten one Recommendation to the output columns (runtime/energy via the engine)."""
-    runtime, energy_wh = engine.runtime_energy(rec, total_tokens)
-    meta = rec.metadata or {}
+    """The batch-API column names over the shared flattener (kavier-style throughput_tok_s)."""
+    f = engine.flatten_recommendation(rec, total_tokens)
     return {
-        "total_gpus": rec.total_gpus,
-        "gpus_per_node": rec.gpus_per_node,
-        "number_of_nodes": rec.number_of_nodes,
-        "batch_size": meta.get("batch_size"),
-        "throughput_tok_s": rec.predicted_throughput,
-        "runtime_s": runtime,
-        "energy_wh": energy_wh,
-        "energy_kwh": None if energy_wh is None else energy_wh / 1000.0,
-        "tokens_per_watt": meta.get("tokens_per_watt"),
-        "power_w": meta.get("predicted_power_watts"),
+        "total_gpus": f["total_gpus"],
+        "gpus_per_node": f["gpus_per_node"],
+        "number_of_nodes": f["number_of_nodes"],
+        "batch_size": f["batch_size"],
+        "throughput_tok_s": f["throughput"],
+        "runtime_s": f["runtime_s"],
+        "energy_wh": f["energy_wh"],
+        "energy_kwh": f["energy_kwh"],
+        "tokens_per_watt": f["tokens_per_watt"],
+        "power_w": f["power_w"],
     }
 
 

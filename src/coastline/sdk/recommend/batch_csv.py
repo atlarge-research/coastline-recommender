@@ -122,23 +122,29 @@ def _read_workloads(input_csv, column_map) -> Iterator[tuple[dict, dict[str, Any
             yield row, fields
 
 
+def _blank(value):
+    """CSV blank for a missing prediction: None -> "" (an empty cell), else the value."""
+    return "" if value is None else value
+
+
 def _output_row(original: dict, recs, meta) -> dict:
     row = dict(original)
     if not recs:
         row.update({field: "" for field in _OUTPUT_FIELDS})
         row["feasible"] = False
         return row
-    rec = recs[0]
-    runtime = rec.predicted_runtime_seconds
+    # The recommended_*/predicted_* CSV names over the shared flattener; None -> "" (blank cell).
+    # total_tokens=0 so runtime_s is the model's predicted_runtime_seconds (this surface has no dataset).
+    f = engine.flatten_recommendation(recs[0])
     row.update(
-        recommended_total_gpus=rec.total_gpus,
-        recommended_gpus_per_node=rec.gpus_per_node,
-        recommended_number_of_nodes=rec.number_of_nodes,
-        recommended_batch_size=rec.metadata.get("batch_size", ""),
-        predicted_throughput=rec.predicted_throughput,
-        predicted_runtime_seconds="" if runtime is None else runtime,
-        predicted_power_watts=rec.metadata.get("predicted_power_watts", ""),
-        tokens_per_watt=rec.metadata.get("tokens_per_watt", ""),
+        recommended_total_gpus=f["total_gpus"],
+        recommended_gpus_per_node=f["gpus_per_node"],
+        recommended_number_of_nodes=f["number_of_nodes"],
+        recommended_batch_size=_blank(f["batch_size"]),
+        predicted_throughput=f["throughput"],
+        predicted_runtime_seconds=_blank(f["runtime_s"]),
+        predicted_power_watts=_blank(f["power_w"]),
+        tokens_per_watt=_blank(f["tokens_per_watt"]),
         feasible=True,
         rationale=engine.recommendation_rationale(recs, meta),
     )
