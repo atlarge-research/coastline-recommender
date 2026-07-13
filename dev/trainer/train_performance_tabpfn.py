@@ -42,7 +42,7 @@ from .common import (  # noqa: E402
 )
 
 
-def train_tabpfn():
+def train_tabpfn(ckpt: str | None = None):
     if not TABPFN_AVAILABLE:
         print("\n❌ TabPFN not available. Install with: pip install tabpfn")
         return
@@ -70,26 +70,27 @@ def train_tabpfn():
         device = "cpu"
 
     # One model per target — TabPFN does not support multi-output.
-    # Prefer a local checkpoint under ~/.data/tabpfn/ (no download needed).
-    # Fall back to downloading v2 weights (the only redistributable version — v2.5/v2.6/v3
-    # weights are research-only and cannot be shipped inside the saved pickle).
+    # Use v2 weights by default (the only redistributable version).
+    # If a checkpoint path is explicitly provided and exists, use it instead.
     model_cls = cast(Any, TabPFNRegressor)
 
-    _local_ckpt_dir = Path.home() / ".data" / "tabpfn"
-    _local_ckpt = next(_local_ckpt_dir.glob("tabpfn-*-regressor-*.ckpt"), None) if _local_ckpt_dir.exists() else None
-
-    if _local_ckpt is not None:
-        print(f"  using local TabPFN checkpoint: {_local_ckpt}")
+    _ckpt_path = Path(ckpt) if ckpt is not None else None
+    if _ckpt_path is not None and _ckpt_path.exists():
+        print(f"  using checkpoint: {_ckpt_path}")
 
         def make_regressor():
-            return model_cls(model_path=str(_local_ckpt), device=device, ignore_pretraining_limits=True)
+            return model_cls(model_path=str(_ckpt_path), device=device, ignore_pretraining_limits=True)
+
+        ckpt_desc = _ckpt_path.name
     else:
-        print("  no local checkpoint found under ~/.data/tabpfn — downloading v2 weights")
+        if _ckpt_path is not None:
+            print(f"  WARNING: checkpoint not found: {_ckpt_path} — falling back to v2 weights")
 
         def make_regressor():
             return model_cls.create_default_for_version(ModelVersion.V2, device=device, ignore_pretraining_limits=True)
 
-    ckpt_desc = f"local {_local_ckpt.name}" if _local_ckpt is not None else "v2 weights (download)"
+        ckpt_desc = "v2 weights"
+
     print(f"Training TabPFN ({ckpt_desc}) on {len(X_train)} samples...")
     start_time = time.time()
 
@@ -170,4 +171,9 @@ def train_tabpfn():
 
 
 if __name__ == "__main__":
-    train_tabpfn()
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--ckpt", type=str, default=None, help="Path to a local TabPFN .ckpt file")
+    args = parser.parse_args()
+    train_tabpfn(ckpt=args.ckpt)
