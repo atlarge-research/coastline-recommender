@@ -194,10 +194,13 @@ def simulate_fifo(jobs: List[QueueJob], n_gpus_cluster: int) -> SimulationResult
         }
         for i, j in enumerate(jobs)
     ]
+    # kavier models the cluster as num_nodes x node_gpus; the UI's flat pool of
+    # n_gpus_cluster GPUs is one node holding them all (any job up to the total fits).
     result = cluster_schedule(
         rows,
         policy="fcfs",
-        num_gpus=n_gpus_cluster,
+        num_nodes=1,
+        node_gpus=n_gpus_cluster,
         oversized="drop",
         default_watts_per_gpu=_AVG_WATTS_PER_GPU,
     )
