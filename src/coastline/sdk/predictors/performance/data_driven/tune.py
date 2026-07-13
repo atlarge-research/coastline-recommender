@@ -379,7 +379,7 @@ def tune(
     X_train, X_test, ylog_train, y_test = _split(X, y, y_log, train_percentage, seed)
 
     tune_id = f"{model}-{time.strftime('%Y%m%d-%H%M%S')}"
-    # tuned artifacts land in models/custom/ — they shadow the coastline-bundled portfolio
+    # tuned artifacts land in models/custom/ — they shadow the packaged portfolio
     path = Path(output) if output else custom_models_dir() / f"{model}.pkl"
     step(
         f"tune id {tune_id} · train {len(X_train)} rows / holdout {0 if X_test is None else len(X_test)} rows "

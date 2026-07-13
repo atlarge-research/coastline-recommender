@@ -133,9 +133,21 @@ kavier = { path = "../kavier", editable = true }
 # The distribution is `coastline-recommender` but the import package is `coastline`.
 module-name = "coastline"
 # The co-located trainer tests are the only tests inside the package tree; keep them
-# (and cache noise) out of the built wheel. The bundled parametric models under
-# sdk/predictors/performance/data_driven/portfolio/ (the only .pkl/.pth under src) DO ship.
-wheel-exclude = ["**/__pycache__/**", "**/*.pyc", "**/.gitignore", "**/tests/**"]
+# (and cache noise) out of the built wheel. All 10 bundled models live under
+# sdk/predictors/performance/data_driven/portfolio/; the 5 parametric ones DO ship, the 5
+# heavy/instance-based ones (tabpfn, random_forest, gaussian_process, svr, knn) are excluded
+# so a plain `pip install coastline[ml]` stays lean.
+wheel-exclude = [
+    "**/__pycache__/**",
+    "**/*.pyc",
+    "**/.gitignore",
+    "**/tests/**",
+    "**/portfolio/tabpfn.pkl",
+    "**/portfolio/random_forest.pkl",
+    "**/portfolio/gaussian_process.pkl",
+    "**/portfolio/svr.pkl",
+    "**/portfolio/knn.pkl",
+]
 source-exclude = ["**/__pycache__/**", "**/*.pyc"]
 
 # ------------------------------------------------------------------

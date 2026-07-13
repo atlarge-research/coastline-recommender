@@ -26,7 +26,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 def _model_is_materialized(stem: str) -> bool:
     """True if the resolved models pickle is a real artifact, not an unpulled Git-LFS pointer
     (CI checks out without LFS, where the file is a small `version https://git-lfs...` text stub).
-    Uses the production resolver so the custom/ > coastline-bundled/ split is honoured."""
+    Uses the production resolver so the custom/ > packaged portfolio split is honoured."""
     from coastline.sdk.predictors.performance.data_driven.ml_common import performance_trained_model_path
 
     path = performance_trained_model_path(stem)

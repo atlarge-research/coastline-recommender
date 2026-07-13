@@ -103,12 +103,10 @@ def gpu_spec_features(gpu_model: Any) -> Dict[str, float]:
 
 
 # Model artifacts are resolved in precedence order:
-#   1. PORTFOLIO_DIR/custom/            — models tuned by the user (`coastline tune`)
-#   2. PORTFOLIO_DIR/coastline-bundled/ — the shipped portfolio (a dev checkout has the FULL
-#      set, incl. the large LFS + instance-based models; parents[6] == repo root)
-#   3. PORTFOLIO_DIR/ flat              — pre-split layout, kept for compatibility
-#   4. the packaged portfolio/ next to this file — the parametric subset that SHIPS in the
-#      wheel, so a plain `pip install coastline[ml]` serves them with no external models/ dir.
+#   1. PORTFOLIO_DIR/custom/  — models tuned by the user (`coastline utils tune`)
+#   2. PORTFOLIO_DIR/ flat    — a user-provided models dir (env PORTFOLIO_DIR)
+#   3. the packaged portfolio/ next to this file — all 10 bundled models in a dev checkout;
+#      the wheel ships the 5 parametric ones (the 5 heavy are wheel-excluded).
 PORTFOLIO_DIR = Path(os.environ.get("PORTFOLIO_DIR", str(Path(__file__).resolve().parents[6] / "models")))
 _BUNDLED_PORTFOLIO_DIR = Path(__file__).resolve().parent / "portfolio"
 
@@ -119,10 +117,10 @@ def custom_models_dir() -> Path:
 
 
 def _resolve_artifact(*names: str) -> Path:
-    """First existing of custom/ > coastline-bundled/ > flat PORTFOLIO_DIR > packaged portfolio,
-    trying each name spelling per directory; falls back to the custom/ path of the first
-    (canonical) name for a clear not-found error."""
-    directories = (PORTFOLIO_DIR / "custom", PORTFOLIO_DIR / "coastline-bundled", PORTFOLIO_DIR, _BUNDLED_PORTFOLIO_DIR)
+    """First existing of custom/ > flat PORTFOLIO_DIR > packaged portfolio, trying each name
+    spelling per directory; falls back to the custom/ path of the first (canonical) name for a
+    clear not-found error."""
+    directories = (PORTFOLIO_DIR / "custom", PORTFOLIO_DIR, _BUNDLED_PORTFOLIO_DIR)
     for directory in directories:
         for name in names:
             candidate = directory / name
