@@ -14,23 +14,16 @@ from typing import Any, Optional
 import pandas as pd
 
 import coastline
+from coastline.sdk.io.adapters import ibm_trace as _ibm
 from coastline.sdk.io.infrastructure import resolve_cluster_caps
 
 logger = logging.getLogger(__name__)
 
-# --- trace schema -> coastline workload fields ---
-_MODEL = "metadata.model_name"
-_METHOD = "metadata.method"
-_GPU = "resources.gpu_model"
-_TOKENS = "metadata.tokens_per_sample"  # the int the user wants; nominal seq length is fine here
-_BATCH = "metadata.batch_size"
-_GPN = "resources.num_gpus_per_node"
-_NODES = "resources.num_nodes"
-# ground-truth work (config-independent): tokens the job actually processed
-_ACT_TPS = "metadata.output.train_tokens_per_second"
-_ACT_RUNTIME = "metadata.train_runtime"
-# observed job duration — the fallback when no recommendation can be made
-_ACT_DURATION = "metadata.output.extrapolated_duration"
+# Trace schema column names live in the ibm_trace adapter (the single home, shared with
+# trace.to_runs); bound here to the historical `_MODEL`/`_GPN`/... spellings used below.
+_MODEL, _METHOD, _GPU = _ibm.MODEL, _ibm.METHOD, _ibm.GPU
+_TOKENS, _BATCH, _GPN, _NODES = _ibm.TOKENS, _ibm.BATCH, _ibm.GPN, _ibm.NODES
+_ACT_TPS, _ACT_RUNTIME, _ACT_DURATION = _ibm.ACT_TPS, _ibm.ACT_RUNTIME, _ibm.ACT_DURATION
 
 # coastline predictor keys for the trace's method names
 _METHOD_TO_PREDICTOR = {"kavier": "kavier", "tabpfn": "tabpfn", "xgb": "xgboost", "xgboost": "xgboost"}
