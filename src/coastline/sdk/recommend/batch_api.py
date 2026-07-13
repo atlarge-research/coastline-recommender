@@ -31,7 +31,7 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     "epochs": ("epochs",),
     "max_gpus": ("max_gpus", "gpu_budget"),
     "goal": ("goal", "goal_label"),
-    "predictor": ("predictor", "throughput_estim"),
+    "predictor": ("predictor",),
     "lookup": ("lookup", "lookup_csv"),
     "max_slowdown": ("max_slowdown", "runtime_guard_k"),
 }

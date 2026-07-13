@@ -40,7 +40,7 @@ Recommend a configuration for a single workload, in Python:
 ```python
 import coastline
 
-rec = coastline(throughput_estim="kavier")
+rec = coastline(predictor="kavier")
 results = rec({"llm_model": "mistral-7b-v0.1", "fine_tuning_method": "lora",
                "gpu_model": "NVIDIA-A100-SXM4-80GB", "tokens_per_sample": 1024, "batch_size": 32},
               total_gpus=[1, 2, 4, 8], preset="balanced")

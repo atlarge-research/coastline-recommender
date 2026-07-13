@@ -50,7 +50,7 @@ Describe the workload through the programmatic interface.
 ```python
 import coastline
 
-my_coastline = coastline(throughput_estim="kavier")
+my_coastline = coastline(predictor="kavier")
 
 workload = {"llm_model": "mistral-7b-v0.1",
             "fine_tuning_method": "lora",

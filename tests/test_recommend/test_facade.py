@@ -1,7 +1,7 @@
 """Tests for the importable `coastline` facade (the supervisor's sketch):
 
     import coastline
-    rec = coastline(throughput_estim="Kavier")   # or "tabpfn"
+    rec = coastline(predictor="Kavier")   # or "tabpfn"
     results = rec(workload, total_gpus=[1, 2, 4, 8])
 
 Kavier throughput/power is an analytical black box: these tests assert the facade
@@ -36,24 +36,24 @@ def _workload():
     }
 
 
-def test_throughput_estim_is_normalized():
+def test_predictor_is_normalized():
     # Oracle: normalization is pure case-folding (strip+lower), independent of any
     # lookup table. "Kavier"/"TabPFN" differ from their keys only in letter case, so
     # a correct normalizer must return the all-lowercase spelling; a normalizer that
     # did nothing (or upper-cased) would leave "Kavier" != "kavier" and fail.
-    assert Coastline(throughput_estim="Kavier").throughput_estim == "kavier"
-    assert Coastline(throughput_estim="TabPFN").throughput_estim == "tabpfn"
-    assert Coastline(throughput_estim="tabpfn").throughput_estim == "tabpfn"  # idempotent on lowercase
+    assert Coastline(predictor="Kavier").predictor == "kavier"
+    assert Coastline(predictor="TabPFN").predictor == "tabpfn"
+    assert Coastline(predictor="tabpfn").predictor == "tabpfn"  # idempotent on lowercase
 
 
 def test_module_is_callable_returns_configured_instance():
     # Contract: the module object itself is callable (PEP 562 _CallableModule) and
-    # forwards throughput_estim into a real Coastline. Oracle: the returned object is
+    # forwards predictor into a real Coastline. Oracle: the returned object is
     # a Coastline whose estimator is the normalized spelling of what we passed — a
     # plain module (non-callable) would raise TypeError here.
-    rec = coastline(throughput_estim="Kavier")
+    rec = coastline(predictor="Kavier")
     assert isinstance(rec, Coastline)
-    assert rec.throughput_estim == "kavier"
+    assert rec.predictor == "kavier"
 
 
 def test_recommend_truncates_to_stable_ranked_prefix():

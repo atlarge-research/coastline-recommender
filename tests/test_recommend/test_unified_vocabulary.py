@@ -27,13 +27,13 @@ def _facade() -> Coastline:
     return Coastline(predictor="kavier", feasibility="rules")
 
 
-def test_predictor_and_throughput_estim_are_the_same_knob():
-    # Both spellings must configure the identical estimator. Oracle: the stored key — if the alias
-    # silently diverged (e.g. throughput_estim ignored), the three would not all be "kavier".
+def test_predictor_is_one_normalized_knob():
+    # `predictor` is the single spelling, positional or keyword, and normalizes case. Oracle:
+    # the stored key — all three forms must resolve to the same estimator.
     assert (
-        Coastline(predictor="kavier").throughput_estim
-        == Coastline(throughput_estim="Kavier").throughput_estim
-        == Coastline("kavier").throughput_estim
+        Coastline(predictor="kavier").predictor
+        == Coastline(predictor="Kavier").predictor
+        == Coastline("kavier").predictor
         == "kavier"
     )
 

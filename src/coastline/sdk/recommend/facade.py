@@ -6,6 +6,12 @@ import math
 from pathlib import Path
 from typing import Any, List, Optional, Union
 
+from coastline.sdk.constants import (
+    DEFAULT_BATCH_SIZES,
+    GPU_BUDGETS,
+    EnergyBackend,
+    FeasibilityMode,
+)
 from coastline.sdk.models.aliases import col_to_field_map
 from coastline.sdk.models.context import SystemContext
 from coastline.sdk.models.recommendation import Recommendation
@@ -15,9 +21,6 @@ from coastline.sdk.recommend import engine
 from coastline.sdk.recommend._goals import goal_to_strategy_preset
 
 WorkloadInput = Union[WorkloadSpec, dict, str, Path]
-
-_DEFAULT_TOTAL_GPUS = [1, 2, 4, 8, 16]
-_DEFAULT_BATCH_SIZES = [4, 8, 16, 32, 64]
 
 # CSV column -> WorkloadSpec field. The canonical alias map (shared with the batch CSV
 # recommender) covers the trace convention (model_name / number_gpus / ...) plus the
@@ -79,13 +82,10 @@ class Coastline:
         self,
         predictor: str = "kavier",
         *,
-        throughput_estim: Optional[str] = None,
-        energy: str = "kavier_power",
-        feasibility: str = "autoconf",
+        energy: str = EnergyBackend.KAVIER_POWER.value,
+        feasibility: str = FeasibilityMode.AUTOCONF.value,
     ) -> None:
-        # `predictor` is the primary spelling; `throughput_estim` is the back-compat alias.
-        chosen = throughput_estim if throughput_estim is not None else predictor
-        self.throughput_estim = normalize_predictor(chosen)
+        self.predictor = normalize_predictor(predictor)
         self.energy = energy
         self.feasibility = feasibility
 
@@ -123,13 +123,14 @@ class Coastline:
         config = {
             "strategy": {"name": strategy, "preset": preset},
             "predictors": {
-                "performance": self.throughput_estim,
+                "performance": self.predictor,
                 "energy": self.energy,
                 "feasibility": self.feasibility,
             },
             "grid": {
-                "batch_sizes": batch_sizes or _DEFAULT_BATCH_SIZES,
-                "total_gpus": total_gpus or _DEFAULT_TOTAL_GPUS,
+                # No explicit grid -> search the full menu; generate_candidates clips it to max_gpus.
+                "batch_sizes": batch_sizes or list(DEFAULT_BATCH_SIZES),
+                "total_gpus": total_gpus or list(GPU_BUDGETS),
                 "top_k": top_k,
             },
         }

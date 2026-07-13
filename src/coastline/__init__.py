@@ -3,7 +3,7 @@
 A bare ``import coastline`` stays light: the public verbs/classes are resolved lazily
 from :mod:`coastline.sdk.recommend` on first access (PEP 562), so pandas / kavier / the
 predictor backends are not imported until you actually call one. The module is also
-callable — ``coastline(throughput_estim=...)`` returns a configured :class:`Coastline`.
+callable — ``coastline(predictor=...)`` returns a configured :class:`Coastline`.
 """
 
 from __future__ import annotations
@@ -58,16 +58,16 @@ def __dir__() -> list[str]:
 
 
 class _CallableModule(_sys.modules[__name__].__class__):
-    """Make ``coastline(throughput_estim=...)`` return a configured Coastline.
+    """Make ``coastline(predictor=...)`` return a configured Coastline.
 
     Subclassing the module type preserves PEP 562 ``__getattr__`` (the lazy attrs above)
     while adding ``__call__``.
     """
 
-    def __call__(self, throughput_estim: str = "kavier", **kwargs: Any) -> "Coastline":
+    def __call__(self, predictor: str = "kavier", **kwargs: Any) -> "Coastline":
         from coastline.sdk.recommend import Coastline
 
-        return Coastline(throughput_estim=throughput_estim, **kwargs)
+        return Coastline(predictor, **kwargs)
 
 
 _sys.modules[__name__].__class__ = _CallableModule
