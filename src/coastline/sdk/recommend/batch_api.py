@@ -10,7 +10,7 @@ from typing import Any, Optional, Union
 
 import pandas as pd
 
-from coastline.sdk.policies import list_predictor_names
+from coastline.sdk.policies import normalize_predictor
 from coastline.sdk.recommend import engine
 from coastline.sdk.recommend._goals import goal_to_label
 
@@ -120,17 +120,6 @@ def _resolve_goal(value: Any) -> str:
     return goal_to_label(value)
 
 
-# Accepted throughput-predictor spellings (specials + trained models + the physics aliases).
-_ACCEPTED_PREDICTORS = set(list_predictor_names()) | {"physics", "physics_driven"}
-
-
-def _validate_predictor(value: Any) -> None:
-    """Raise (listing the options) on an unknown predictor, so a typo fails visibly per row rather
-    than the engine silently falling back to the default."""
-    if value is not None and str(value).strip().lower() not in _ACCEPTED_PREDICTORS:
-        raise ValueError(f"unknown predictor {value!r}; choose from {list(list_predictor_names())}")
-
-
 def _missing_required(row: dict[str, Any], kwargs: dict[str, Any]) -> Optional[str]:
     """First core field absent from both the row (any alias) and the batch kwargs, else None.
 
@@ -157,7 +146,9 @@ def _answers_for(
             continue
         answers[answer_key] = int(value) if column in _INT_COLUMNS else value
     answers["goal_label"] = _resolve_goal(answers["goal_label"])
-    _validate_predictor(answers.get("predictor"))
+    if answers.get("predictor") is not None:
+        # Fail a typo'd predictor visibly per row rather than silently defaulting in the engine.
+        normalize_predictor(answers["predictor"])
 
     slowdown = _pick(row, "max_slowdown")
     if slowdown is None:

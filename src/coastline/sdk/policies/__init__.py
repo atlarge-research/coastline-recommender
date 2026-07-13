@@ -264,6 +264,20 @@ def list_predictor_names() -> tuple[str, ...]:
     return _SPECIAL_PREDICTORS + tuple(_NAMED_ML_PREDICTORS)
 
 
+# physics/physics_driven are internal config aliases for the Kavier physics predictor.
+_PREDICTOR_ALIASES: frozenset[str] = frozenset({"physics", "physics_driven"})
+
+
+def normalize_predictor(name: str) -> str:
+    """Lowercase a public predictor spelling to its key and validate it, so a typo fails loudly
+    (listing the options) rather than silently falling back to the default. The single validator
+    shared by the facade and the batch API."""
+    key = str(name).strip().lower()
+    if key not in set(list_predictor_names()) | _PREDICTOR_ALIASES:
+        raise ValueError(f"unknown predictor {name!r}; choose from {list(list_predictor_names())}")
+    return key
+
+
 def _build_named_ml_predictor(name: str):
     """Construct a data-driven predictor by name, or None if unknown. Lazy import avoids pulling all ML runtimes."""
     import importlib

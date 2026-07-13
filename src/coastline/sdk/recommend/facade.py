@@ -10,7 +10,7 @@ from coastline.sdk.models.aliases import col_to_field_map
 from coastline.sdk.models.context import SystemContext
 from coastline.sdk.models.recommendation import Recommendation
 from coastline.sdk.models.workload import WorkloadSpec
-from coastline.sdk.policies import list_predictor_names
+from coastline.sdk.policies import normalize_predictor
 from coastline.sdk.recommend import engine
 from coastline.sdk.recommend._goals import goal_to_strategy_preset
 
@@ -23,19 +23,6 @@ _DEFAULT_BATCH_SIZES = [4, 8, 16, 32, 64]
 # recommender) covers the trace convention (model_name / number_gpus / ...) plus the
 # flexible spellings (model / llm_model / gpu / ...).
 _CSV_COLUMNS = col_to_field_map()
-
-
-# physics/physics_driven are internal config aliases for the Kavier physics predictor.
-_PREDICTOR_ALIASES = {"physics", "physics_driven"}
-
-
-def _normalize_predictor(name: str) -> str:
-    """Lowercase a public predictor spelling to its key and validate it, so a typo fails
-    loudly with the options listed rather than silently falling back to the default."""
-    key = str(name).strip().lower()
-    if key not in set(list_predictor_names()) | _PREDICTOR_ALIASES:
-        raise ValueError(f"unknown predictor {name!r}; choose from {list(list_predictor_names())}")
-    return key
 
 
 def _coerce_workload(workload: WorkloadInput) -> WorkloadSpec:
@@ -98,7 +85,7 @@ class Coastline:
     ) -> None:
         # `predictor` is the primary spelling; `throughput_estim` is the back-compat alias.
         chosen = throughput_estim if throughput_estim is not None else predictor
-        self.throughput_estim = _normalize_predictor(chosen)
+        self.throughput_estim = normalize_predictor(chosen)
         self.energy = energy
         self.feasibility = feasibility
 
