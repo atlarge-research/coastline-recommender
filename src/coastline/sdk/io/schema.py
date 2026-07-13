@@ -37,16 +37,6 @@ KNOB_ALIASES: dict[str, tuple[str, ...]] = {
     "max_slowdown": ("max_slowdown", "runtime_guard_k"),
 }
 
-# Core workload fields a tabular caller MUST supply (matches the batch API contract). A row
-# missing one of these is a failed row, never a silent default. ``fine_tuning_method`` is
-# intentionally NOT required — the engine defaults it — preserving today's batch behaviour.
-REQUIRED_WORKLOAD_FIELDS: tuple[str, ...] = (
-    "llm_model",
-    "gpu_model",
-    "tokens_per_sample",
-    "batch_size",
-)
-
 # Canonical recommendation output columns (the Kavier-style spelling the batch API emits).
 # Surface-specific renamings (``recommended_*`` / ``predicted_*`` for the CSV writer, nested
 # JSON for the run artifact) are presentation wrappers over this set.

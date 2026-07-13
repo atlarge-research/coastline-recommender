@@ -49,9 +49,6 @@ OPTIONS: dict[str, list] = {}
 INFRA: Optional[Infrastructure] = None
 STRATEGY_CONFIG: dict[str, Any] = {}
 
-# Repo root holding config/ (src/coastline/ui/app.py -> parents[3]).
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-
 # Selectable prediction models for the UI (id → display name). Only Kavier
 # produces results today; the ML models populate once the featv3 models exist.
 # Order mirrors the thesis design-section model-mapping table (tab:exp1:model_mapping):

@@ -440,7 +440,9 @@ def test_recommend_min_gpu_strategy_kavier(client):
 def test_load_strategy_config_uses_repo_experiment_yaml(clean_strategy_env):
     """With no env override, the shared resolver returns the repo's experiment.yaml — the one
     canonical recommendation-policy config (there is no separate default.yaml/config.yaml)."""
-    experiment = main._REPO_ROOT / "config" / "coastline_functionality" / "experiment.yaml"
+    from coastline.sdk.io import run_config
+
+    experiment = run_config._CANONICAL_CONFIG
     assert experiment.is_file(), f"expected {experiment} to exist"
 
     config = _load_strategy_config()
