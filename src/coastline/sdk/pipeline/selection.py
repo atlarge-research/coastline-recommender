@@ -75,13 +75,11 @@ def _time_cost(c: "EvaluatedCandidate") -> float:
 def normalize_candidates(
     candidates: List["EvaluatedCandidate"],
     mode: NormalizationMode = "grid",
-    energy_objective: str = "energy",
 ) -> None:
     """Populate throughput_score and power_score in [0,1] (higher=better).
 
     Axes: power = per-GPU watts × total_gpus; time = 1/throughput (work cancels).
     mode: ``grid`` = min-max over all feasible; ``frontier`` = drop dominated first.
-    energy_objective ignored (kept for back-compat).
     """
     if not candidates:
         return

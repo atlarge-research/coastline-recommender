@@ -39,7 +39,6 @@ class GridWorkflowPipeline:
         beta: float = 0.5,
         preset: Optional[str] = None,
         normalization: str = "grid",
-        energy_objective: str = "energy",
         runtime_guard_k: Optional[float] = None,
     ):
         self.throughput_predictor = throughput_predictor
@@ -52,7 +51,6 @@ class GridWorkflowPipeline:
         self.beta = beta
         self.preset = preset
         self.normalization = normalization
-        self.energy_objective = energy_objective
         # Optional runtime guardrail: cap how slow a recommended config may be
         # relative to the fastest feasible one (None = off; see recommend()).
         self.runtime_guard_k = runtime_guard_k
@@ -106,7 +104,6 @@ class GridWorkflowPipeline:
         beta: Optional[float] = None,
         preset: Optional[str] = None,
         normalization: Optional[str] = None,
-        energy_objective: Optional[str] = None,
         runtime_guard_k: Optional[float] = None,
     ) -> "GridWorkflowPipeline":
         strategy_cfg = config.get("strategy", {})
@@ -125,9 +122,6 @@ class GridWorkflowPipeline:
             beta=beta,
             preset=preset,
             normalization=normalization if normalization is not None else strategy_cfg.get("normalization", "grid"),
-            energy_objective=(
-                energy_objective if energy_objective is not None else strategy_cfg.get("energy_objective", "energy")
-            ),
             runtime_guard_k=runtime_guard_k if runtime_guard_k is not None else strategy_cfg.get("runtime_guard_k"),
         )
 
@@ -204,7 +198,7 @@ class GridWorkflowPipeline:
                 evaluated = guarded
 
         # Normalize throughput/power scores across the whole feasible set.
-        normalize_candidates(evaluated, self.normalization, self.energy_objective)
+        normalize_candidates(evaluated, self.normalization)
 
         # top_k applies to every policy; min_gpu already sorts by (total_gpus, -throughput),
         # so top_k>1 gives a ranked shortlist.
