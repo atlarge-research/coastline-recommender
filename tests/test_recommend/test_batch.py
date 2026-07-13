@@ -251,9 +251,10 @@ def test_rationale_states_min_gpu_goal_and_recommended_config(tmp_path):
 # CLI entry point wires config/input/output through to the same result.
 # --------------------------------------------------------------------------- #
 def test_cli_entrypoint_matches_direct_api(tmp_path):
-    # The `coastline recommend` CLI is a thin wrapper over recommend_csv; running it must
-    # yield the SAME recommendation the direct API produces for identical inputs. Any
-    # arg-wiring bug (swapped input/output, dropped config) would diverge from this oracle.
+    # The `coastline recommend-job --input/--output` batch mode is a thin wrapper over
+    # recommend_csv; running it must yield the SAME recommendation the direct API produces
+    # for identical inputs. Any arg-wiring bug (swapped input/output, dropped config) would
+    # diverge from this oracle.
     config = tmp_path / "config.yaml"
     config.write_text(yaml.safe_dump(_base_config()))
     inp = tmp_path / "in.csv"
@@ -266,7 +267,7 @@ def test_cli_entrypoint_matches_direct_api(tmp_path):
     from coastline.cli import main
 
     cli_out = tmp_path / "cli_out.csv"
-    main(["recommend", "--config", str(config), "--input", str(inp), "--output", str(cli_out)])
+    main(["recommend-job", "--config", str(config), "--input", str(inp), "--output", str(cli_out)])
     cli_row = next(csv.DictReader(open(cli_out)))
 
     assert cli_row["feasible"] == "True"

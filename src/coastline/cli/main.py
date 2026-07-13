@@ -14,14 +14,8 @@ from coastline import __version__
 _Handler = Callable[[Optional[Sequence[str]]], None]
 
 
-def _run_recommend(argv: Optional[Sequence[str]]) -> None:
-    from coastline.cli.recommend import main
-
-    main(argv)
-
-
-def _run_run(argv: Optional[Sequence[str]]) -> None:
-    from coastline.cli.run import main
+def _run_recommend_job(argv: Optional[Sequence[str]]) -> None:
+    from coastline.cli.recommend_job import main
 
     main(argv)
 
@@ -32,41 +26,22 @@ def _run_recommend_trace(argv: Optional[Sequence[str]]) -> None:
     main(argv)
 
 
-def _run_plot(argv: Optional[Sequence[str]]) -> None:
-    from coastline.cli.plot_trace import main
-
-    main(argv)
-
-
-def _run_interactive(argv: Optional[Sequence[str]]) -> None:
-    from coastline.cli.interactive import run
-
-    run(argv)
-
-
-def _run_tune(argv: Optional[Sequence[str]]) -> None:
-    from coastline.cli.tune import main
-
-    main(argv)
-
-
-def _run_trace_to_runs(argv: Optional[Sequence[str]]) -> None:
-    from coastline.cli.trace_to_runs import main
+def _run_utils(argv: Optional[Sequence[str]]) -> None:
+    from coastline.cli.utils import main
 
     main(argv)
 
 
 _COMMANDS: dict[str, tuple[str, _Handler]] = {
-    "recommend": ("Batch-recommend GPU/node configs for a CSV of workloads (CSV in -> CSV out).", _run_recommend),
-    "run": ("Run one config-file experiment; write a recommendation.json run artifact.", _run_run),
-    "recommend-trace": ("Recommend a config for every job in a fine-tuning trace CSV.", _run_recommend_trace),
-    "plot-trace": ("Plot a recommended trace: cluster timeline, GPUs in use + jobs queued ([plot] extra).", _run_plot),
-    "interactive": ("Guided keyboard-driven REPL over the recommender.", _run_interactive),
-    "tune": ("Tune a data-driven predictor (tabpfn) on your own measured-runs CSV ([ml] extra).", _run_tune),
-    "trace-to-runs": (
-        "Convert a fine-tuning trace CSV to the flat measured-runs schema (tune/lookup/calibrate).",
-        _run_trace_to_runs,
+    "recommend-job": (
+        "Recommend GPU/node configs for ONE job: --interactive | --config | --input/--output CSV.",
+        _run_recommend_job,
     ),
+    "recommend-trace": (
+        "Recommend a config for every job in a fine-tuning trace CSV (--visual for the timeline).",
+        _run_recommend_trace,
+    ),
+    "utils": ("Auxiliary tooling: tune | trace-to-runs | plot-trace.", _run_utils),
 }
 
 
@@ -87,9 +62,6 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         print(f"coastline {__version__}")
         return
     command, rest = args[0], args[1:]
-    if command == "enrich-trace":  # pre-rename spelling, kept working but not advertised
-        print("note: `enrich-trace` is now `recommend-trace`", file=sys.stderr)
-        command = "recommend-trace"
     entry = _COMMANDS.get(command)
     if entry is None:
         print(f"coastline: error: unknown command {command!r}\n", file=sys.stderr)
