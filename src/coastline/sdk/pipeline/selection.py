@@ -3,20 +3,36 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Literal, Optional
+from enum import Enum
+from typing import List, Optional
 
-SelectionPolicy = Literal["min_gpu", "performance", "energy", "balanced"]
-NormalizationMode = Literal["grid", "frontier"]
 
+class SelectionPolicy(str, Enum):
+    """How the winning candidate is chosen: ``min_gpu`` = fewest feasible GPUs; the rest rank
+    on the weighted throughput↔energy score. (``str`` base: members compare/serialize as their
+    wire string, so ``SelectionPolicy.MIN_GPU == "min_gpu"``.)"""
+
+    MIN_GPU = "min_gpu"
+    PERFORMANCE = "performance"
+    ENERGY = "energy"
+    BALANCED = "balanced"
+
+
+class NormalizationMode(str, Enum):
+    """Score-normalization set: over all feasible candidates (``grid``) or the non-dominated frontier."""
+
+    GRID = "grid"
+    FRONTIER = "frontier"
+
+
+# -frontier variants share the same selection; they differ only in the NormalizationMode.
 PRESET_TO_POLICY: dict[str, SelectionPolicy] = {
-    "energy": "energy",
-    "balanced": "balanced",
-    "performance": "performance",
-    # -frontier variants share the same weights/selection; they differ only in the
-    # normalization set (non-dominated frontier rather than all feasible).
-    "energy-frontier": "energy",
-    "balanced-frontier": "balanced",
-    "performance-frontier": "performance",
+    "energy": SelectionPolicy.ENERGY,
+    "balanced": SelectionPolicy.BALANCED,
+    "performance": SelectionPolicy.PERFORMANCE,
+    "energy-frontier": SelectionPolicy.ENERGY,
+    "balanced-frontier": SelectionPolicy.BALANCED,
+    "performance-frontier": SelectionPolicy.PERFORMANCE,
 }
 
 PRESET_WEIGHTS = {
