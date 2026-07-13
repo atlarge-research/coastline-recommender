@@ -57,6 +57,41 @@ class GridWorkflowPipeline:
         # relative to the fastest feasible one (None = off; see recommend()).
         self.runtime_guard_k = runtime_guard_k
 
+    @staticmethod
+    def _resolve_weights(
+        strategy_cfg: dict, preset: Optional[str], alpha: Optional[float], beta: Optional[float]
+    ) -> tuple[float, float]:
+        """Normalized (alpha, beta): explicit args win, else the preset, else the config, else balanced."""
+        if alpha is None or beta is None:
+            if preset and preset in PRESET_WEIGHTS:
+                a, b = PRESET_WEIGHTS[preset]
+            else:
+                a, b = strategy_cfg.get("alpha"), strategy_cfg.get("beta")
+                if a is not None and b is not None:
+                    a, b = float(a), float(b)
+                else:
+                    a, b = PRESET_WEIGHTS.get("balanced", (0.5, 0.5))
+            alpha = a if alpha is None else alpha
+            beta = b if beta is None else beta
+        total = alpha + beta
+        return (alpha / total, beta / total) if total > 0 else (alpha, beta)
+
+    @staticmethod
+    def _build_predictors(
+        predictor_config: dict,
+        throughput_predictor: Optional[BasePredictor],
+        power_predictor: Optional[BasePredictor],
+        feasibility_checker: Optional[FeasibilityChecker],
+    ) -> tuple[BasePredictor, BasePredictor, FeasibilityChecker]:
+        """Fill any predictor left unset from the config (a passed-in one is reused as-is)."""
+        if throughput_predictor is None:
+            throughput_predictor = _create_throughput_predictor(predictor_config)
+        if power_predictor is None:
+            power_predictor = _create_power_predictor(predictor_config)
+        if feasibility_checker is None:
+            feasibility_checker = create_feasibility_checker(predictor_config)
+        return throughput_predictor, power_predictor, feasibility_checker
+
     @classmethod
     def from_config(
         cls,
@@ -74,53 +109,26 @@ class GridWorkflowPipeline:
         energy_objective: Optional[str] = None,
         runtime_guard_k: Optional[float] = None,
     ) -> "GridWorkflowPipeline":
-        predictor_config = config.get("predictors", {})
-        grid_config = grid_config_from_dict(config)
-        if normalization is None:
-            normalization = config.get("strategy", {}).get("normalization", "grid")
-        if energy_objective is None:
-            energy_objective = config.get("strategy", {}).get("energy_objective", "energy")
-        if runtime_guard_k is None:
-            runtime_guard_k = config.get("strategy", {}).get("runtime_guard_k")
-
-        if throughput_predictor is None:
-            throughput_predictor = _create_throughput_predictor(predictor_config)
-        if power_predictor is None:
-            power_predictor = _create_power_predictor(predictor_config)
-        if feasibility_checker is None:
-            feasibility_checker = create_feasibility_checker(predictor_config)
-
-        if alpha is None or beta is None:
-            strategy_cfg = config.get("strategy", {})
-            if preset and preset in PRESET_WEIGHTS:
-                a, b = PRESET_WEIGHTS[preset]
-            else:
-                a = strategy_cfg.get("alpha")
-                b = strategy_cfg.get("beta")
-                if a is not None and b is not None:
-                    a, b = float(a), float(b)
-                else:
-                    a, b = PRESET_WEIGHTS.get("balanced", (0.5, 0.5))
-            alpha = a if alpha is None else alpha
-            beta = b if beta is None else beta
-
-        total = alpha + beta
-        if total > 0:
-            alpha, beta = alpha / total, beta / total
-
+        strategy_cfg = config.get("strategy", {})
+        alpha, beta = cls._resolve_weights(strategy_cfg, preset, alpha, beta)
+        throughput_predictor, power_predictor, feasibility_checker = cls._build_predictors(
+            config.get("predictors", {}), throughput_predictor, power_predictor, feasibility_checker
+        )
         return cls(
             throughput_predictor=throughput_predictor,
             power_predictor=power_predictor,
             feasibility_checker=feasibility_checker,
-            grid_config=grid_config,
+            grid_config=grid_config_from_dict(config),
             selection_policy=selection_policy,
             strategy_name=strategy_name,
             alpha=alpha,
             beta=beta,
             preset=preset,
-            normalization=normalization,
-            energy_objective=energy_objective,
-            runtime_guard_k=runtime_guard_k,
+            normalization=normalization if normalization is not None else strategy_cfg.get("normalization", "grid"),
+            energy_objective=(
+                energy_objective if energy_objective is not None else strategy_cfg.get("energy_objective", "energy")
+            ),
+            runtime_guard_k=runtime_guard_k if runtime_guard_k is not None else strategy_cfg.get("runtime_guard_k"),
         )
 
     def recommend(
