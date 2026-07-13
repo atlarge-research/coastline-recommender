@@ -8,6 +8,7 @@ from typing import Any, List, Optional, Union
 
 from coastline.sdk.constants import (
     DEFAULT_BATCH_SIZES,
+    DEFAULT_GPUS_PER_NODE,
     GPU_BUDGETS,
     EnergyBackend,
     FeasibilityMode,
@@ -68,8 +69,8 @@ def _default_context(workload: WorkloadSpec, max_gpus: int) -> SystemContext:
     return SystemContext.for_gpus(
         [workload.gpu_model],
         max_gpus=max_gpus,
-        gpus_per_node=8,
-        max_nodes=max(1, math.ceil(max_gpus / 8)),
+        gpus_per_node=DEFAULT_GPUS_PER_NODE,
+        max_nodes=max(1, math.ceil(max_gpus / DEFAULT_GPUS_PER_NODE)),
     )
 
 

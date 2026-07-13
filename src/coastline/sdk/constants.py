@@ -94,6 +94,9 @@ PRESET_TO_POLICY: dict[str, "SelectionPolicy"] = {
 }
 
 
+# The standard node topology (a DGX-style node holds 8 GPUs); a context/config may override it.
+DEFAULT_GPUS_PER_NODE: int = 8
+
 # --- default search space (a config's ``grid`` overrides these per run) ---
 GPU_BUDGETS: tuple[int, ...] = (1, 2, 4, 8, 16, 32, 64, 128, 256)
 DEFAULT_BATCH_SIZES: list[int] = [1, 2, 4, 8, 16, 32, 64, 128, 256]

@@ -4,6 +4,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+from coastline.sdk.constants import DEFAULT_GPUS_PER_NODE
 from coastline.sdk.library.hardware import get_gpu_memory
 
 
@@ -11,7 +12,7 @@ class Constraints(BaseModel):
     """Available infrastructure limits."""
 
     max_gpus: int = Field(..., ge=1, description="Maximum total GPUs available")
-    gpus_per_node: int = Field(8, ge=1, description="GPUs per node")
+    gpus_per_node: int = Field(DEFAULT_GPUS_PER_NODE, ge=1, description="GPUs per node")
     max_nodes: int = Field(16, ge=1, description="Maximum number of nodes")
 
 
@@ -29,7 +30,7 @@ class SystemContext(BaseModel):
         gpu_models: list[str],
         *,
         max_gpus: int,
-        gpus_per_node: int = 8,
+        gpus_per_node: int = DEFAULT_GPUS_PER_NODE,
         max_nodes: Optional[int] = None,
     ) -> "SystemContext":
         """Build a SystemContext from gpu_models; derives max_nodes when not given."""

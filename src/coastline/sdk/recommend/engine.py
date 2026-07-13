@@ -6,7 +6,13 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
 
-from coastline.sdk.constants import DEFAULT_BATCH_SIZES, DEFAULT_TOKENS_PER_SAMPLE, GPU_BUDGETS, Method
+from coastline.sdk.constants import (
+    DEFAULT_BATCH_SIZES,
+    DEFAULT_GPUS_PER_NODE,
+    DEFAULT_TOKENS_PER_SAMPLE,
+    GPU_BUDGETS,
+    Method,
+)
 from coastline.sdk.models.context import SystemContext
 from coastline.sdk.models.recommendation import Recommendation
 from coastline.sdk.models.workload import WorkloadSpec
@@ -152,14 +158,16 @@ def build_workload(answers: dict[str, Any]) -> WorkloadSpec:
         gpu_model=answers["gpu_model"],
         tokens_per_sample=int(answers["tokens_per_sample"]),
         batch_size=int(answers["batch_size"]),
-        gpus_per_node=min(8, answers["max_gpus"]),
+        gpus_per_node=min(DEFAULT_GPUS_PER_NODE, answers["max_gpus"]),
         number_of_nodes=1,
     )
 
 
 def build_context(answers: dict[str, Any]) -> SystemContext:
     max_gpus = int(answers["max_gpus"])
-    return SystemContext.for_gpus([answers["gpu_model"]], max_gpus=max_gpus, gpus_per_node=min(8, max_gpus))
+    return SystemContext.for_gpus(
+        [answers["gpu_model"]], max_gpus=max_gpus, gpus_per_node=min(DEFAULT_GPUS_PER_NODE, max_gpus)
+    )
 
 
 @dataclass
