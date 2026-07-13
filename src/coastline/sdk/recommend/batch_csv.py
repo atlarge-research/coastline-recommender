@@ -16,8 +16,7 @@ from coastline.sdk.io.infrastructure import resolve_cluster_caps
 from coastline.sdk.models.aliases import col_to_field_map
 from coastline.sdk.models.context import SystemContext
 from coastline.sdk.models.workload import WorkloadSpec
-from coastline.sdk.policies import PolicyFactory
-from coastline.sdk.recommend.engine import recommendation_rationale
+from coastline.sdk.recommend import engine
 
 _INT_FIELDS = ("tokens_per_sample", "batch_size", "gpus_per_node", "number_of_nodes")
 
@@ -43,11 +42,16 @@ def recommend_csv(config_path, input_csv, output_csv, *, cluster_gpus=None) -> N
     cluster has; the config ``grid.total_gpus`` still applies but is capped to the cluster.
     """
     config = _load_config(config_path)
-    strategy = _build_strategy(config)
+    name = config["strategy"].get("name", "multi_objective")
+    preset = config["strategy"].get("preset")
+    # Build the strategy ONCE and reuse it across rows (predictors + AutoConf load a
+    # single time) — the reason the engine exposes build_strategy/execute_strategy split.
+    strategy = engine.build_strategy(config, name, preset)
     column_map = _column_map(config)
     max_gpus, gpus_per_node, max_nodes = resolve_cluster_caps(cluster_gpus)
-    # Goal context for the one-line rationale (same phrasing as the API/UI/JSON).
-    meta = {"preset": config["strategy"].get("preset"), "strategy_name": config["strategy"].get("name")}
+    predictor = (config.get("predictors") or {}).get("performance")
+    # Fallback goal context for the one-line rationale on rows that never reach the engine.
+    fallback_meta = {"preset": preset, "strategy_name": name}
 
     results = []
     for original, fields in _read_workloads(input_csv, column_map):
@@ -60,9 +64,17 @@ def recommend_csv(config_path, input_csv, output_csv, *, cluster_gpus=None) -> N
             context = SystemContext.for_gpus(
                 [workload.gpu_model], max_gpus=max_gpus, gpus_per_node=gpus_per_node, max_nodes=max_nodes
             )
-            recs = strategy.recommend(workload, context)
+            recs, meta = engine.execute_strategy(
+                strategy,
+                workload,
+                context,
+                strategy_name=name,
+                preset=preset,
+                grid=config["grid"],
+                predictor=predictor,
+            )
         except (RuntimeError, ValueError, RecommenderSystemError):
-            recs = []  # invalid/incomplete row, or no feasible configuration in the grid
+            recs, meta = [], fallback_meta  # invalid/incomplete row, or no feasible config in the grid
         results.append((original, recs, meta))
 
     _write_output(output_csv, results)
@@ -78,15 +90,6 @@ def _load_config(path) -> dict[str, Any]:
     if "max_slowdown" in config["strategy"]:
         config["strategy"]["runtime_guard_k"] = float(config["strategy"]["max_slowdown"])
     return config
-
-
-def _build_strategy(config: dict[str, Any]):
-    strategy = config["strategy"]
-    return PolicyFactory.create_strategy(
-        strategy_name=strategy.get("name", "multi_objective"),
-        preset=strategy.get("preset"),
-        config=config,
-    )
 
 
 def _column_map(config: dict[str, Any]) -> dict[str, str]:
@@ -137,7 +140,7 @@ def _output_row(original: dict, recs, meta) -> dict:
         predicted_power_watts=rec.metadata.get("predicted_power_watts", ""),
         tokens_per_watt=rec.metadata.get("tokens_per_watt", ""),
         feasible=True,
-        rationale=recommendation_rationale(recs, meta),
+        rationale=engine.recommendation_rationale(recs, meta),
     )
     return row
 
