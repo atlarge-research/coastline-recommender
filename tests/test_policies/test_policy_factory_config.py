@@ -8,10 +8,9 @@ The bug being guarded: ``load_config`` defaulted to a package-relative
 ``FileNotFoundError`` at ``open()`` time.
 
 The fix makes the *no-config* path robust:
-  - try a list of default config files (package-relative ``experiment.yaml``,
-    then the repo-root ``config/coastline_functionality/experiment.yaml`` and
-    ``config/coastline_functionality/default.yaml``),
-  - and fall back to a built-in default config when none of them exist —
+  - resolve the one canonical config (``config/coastline_functionality/experiment.yaml``,
+    env-overridable),
+  - and fall back to a built-in default config when it does not exist —
     instead of crashing.
 
 Behaviour when an *explicit* config path is passed is unchanged (the file is
@@ -88,33 +87,17 @@ class TestLoadConfigExplicitPath:
 # load_config() — no path: default resolution + built-in fallback (the fix)
 # ===========================================================================
 class TestLoadConfigDefaultResolution:
-    def test_no_arg_uses_first_existing_default_file(self):
-        """With the real repo layout, the first existing default file wins.
-
-        ``config/coastline_functionality/experiment.yaml`` precedes
-        ``config/coastline_functionality/default.yaml`` in the candidate order,
-        and declares ``multi_objective`` (default.yaml declares ``min_gpu``), so
-        this also pins the ordering. It also covers the core FileNotFoundError
-        regression: this call is the no-arg path that used to crash.
-        """
+    def test_no_arg_uses_the_canonical_experiment_yaml(self):
+        """The no-arg path resolves to the one canonical config: experiment.yaml. Returned
+        verbatim (no translation). Also covers the FileNotFoundError regression — this no-arg
+        call used to crash."""
         experiment = _REPO_ROOT / "config" / "coastline_functionality" / "experiment.yaml"
-        default = _REPO_ROOT / "config" / "coastline_functionality" / "default.yaml"
         assert experiment.is_file(), f"expected {experiment} to exist"
-        assert default.is_file(), f"expected {default} to exist"
 
         config = PolicyFactory.load_config()
         expected = yaml.safe_load(experiment.read_text(encoding="utf-8"))
-        # Oracle: independent re-read of experiment.yaml. Returned verbatim (no
-        # translation) AND it is experiment.yaml, not default.yaml — the two files
-        # declare different strategies, so the strategy name discriminates which
-        # file won the ordering race.
         assert config == expected
         assert config["strategy"]["name"] == "multi_objective"
-        # Cross-check: default.yaml (the LATER candidate) declares min_gpu, so if
-        # ordering were reversed this would have surfaced instead.
-        default_cfg = yaml.safe_load(default.read_text(encoding="utf-8"))
-        assert default_cfg["strategy"]["name"] == "min_gpu"
-        assert config["strategy"]["name"] != default_cfg["strategy"]["name"]
 
     def test_falls_back_to_default_yaml_when_experiment_absent(self, tmp_path, monkeypatch):
         """When only ``default.yaml`` exists, it is used (next in candidate order)."""
@@ -168,21 +151,11 @@ class TestLoadConfigDefaultResolution:
         # And a second call is unaffected by the first caller's mutation.
         assert PolicyFactory.load_config()["strategy"]["name"] == original_name
 
-    def test_default_candidates_include_repo_top_level_config(self):
-        """The repo's top-level config/ dir is among the default candidates.
-
-        This is the directory that actually holds experiment.yaml/default.yaml,
-        so its presence in the list is what makes the no-arg path resolve.
-        """
+    def test_default_candidates_point_at_the_canonical_experiment_yaml(self):
+        """The no-arg default resolution points at the one canonical config file."""
         candidates = [Path(p) for p in PolicyFactory._default_config_candidates()]
         experiment = _REPO_ROOT / "config" / "coastline_functionality" / "experiment.yaml"
-        default = _REPO_ROOT / "config" / "coastline_functionality" / "default.yaml"
-        assert default in candidates
         assert experiment in candidates
-        # Precedence contract: experiment.yaml must be tried BEFORE default.yaml.
-        # This is the ordering that test_no_arg_uses_first_existing_default_file
-        # relies on; pin it here independently of which files happen to exist.
-        assert candidates.index(experiment) < candidates.index(default)
 
 
 # ===========================================================================

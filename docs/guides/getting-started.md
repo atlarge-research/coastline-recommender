@@ -92,7 +92,7 @@ Learn the batch workflow in [setting up an experiment](3_experiment.md).
 The simplest command runs the bundled fallback config and prints the recommendation as JSON:
 
 ```console
-coastline recommend-job --config config/coastline_functionality/default.yaml
+coastline recommend-job --config config/coastline_functionality/experiment.yaml
 ```
 
 The tool will output, for the default configuration:
@@ -134,7 +134,7 @@ The tool will output, for the default configuration:
 Or, Coastline can run a declared experiment (see [setting up an experiment](3_experiment.md)):
 
 ```console
-coastline recommend-job --config config/coastline_functionality/config.yaml
+coastline recommend-job --config config/coastline_functionality/experiment.yaml
 ```
 ```json
 {

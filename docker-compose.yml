@@ -3,7 +3,7 @@ name: coastline
 # Two runtime services off one multi-stage build (Dockerfile targets `cli` and `ui`) — the image
 # installs the built wheel, so there is no source bind-mount and no PYTHONPATH. Plus a `docs` service
 # serving the MkDocs site.
-#     docker compose run --rm recommender run --config /config/coastline_functionality/config.yaml
+#     docker compose run --rm recommender recommend-job --config /config/coastline_functionality/experiment.yaml
 #     docker compose up api            # dashboard on :8000
 #     docker compose up docs           # docs on :8080
 #
@@ -31,7 +31,7 @@ services:
       - ./recommender/runs:/runs
       - ./models:/models:ro
       - ../trace-archive:/trace-archive:ro
-    command: ["run", "--config", "/config/coastline_functionality/config.yaml"]
+    command: ["recommend-job", "--config", "/config/coastline_functionality/experiment.yaml"]
 
   # The FastAPI dashboard — `coastline-ui` (see the Dockerfile `ui` target).
   api:
@@ -44,7 +44,7 @@ services:
       - "${API_PORT:-8000}:8000"
     environment:
       - DATA_DIR=/trace-archive
-      - STRATEGY_CONFIG=/config/coastline_functionality/config.yaml
+      - STRATEGY_CONFIG=/config/coastline_functionality/experiment.yaml
       - PORTFOLIO_DIR=/models
       - COASTLINE_ALLOW_RULES_FALLBACK=1
     volumes:

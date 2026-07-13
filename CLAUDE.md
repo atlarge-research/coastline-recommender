@@ -19,7 +19,7 @@ uv run --all-extras pytest dev/benchmark/tests   # dev benchmark tests (own invo
 uv run --all-extras pytest -m ml_isolated -p no:cacheprovider   # native-ML predictor tests (own process)
 uv run --project dev/ado_plugin pytest dev/ado_plugin           # ado experiment-plugin tests (needs IBM's ado core)
 uv run ruff check . / uv run ruff format . / uv run mypy        # lint / format / typecheck
-uv run coastline recommend-job --config config/coastline_functionality/default.yaml   # config-driven engine run
+uv run coastline recommend-job --config config/coastline_functionality/experiment.yaml   # config-driven engine run
 uv run coastline recommend-job --interactive     # interactive guided recommender (terminal REPL)
 uv run coastline-ui                              # FastAPI dashboard on http://127.0.0.1:8000
 uv run python docs/usage.py                      # runnable API tour

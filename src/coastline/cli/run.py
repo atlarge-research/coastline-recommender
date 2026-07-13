@@ -15,7 +15,7 @@ import yaml
 
 from coastline.sdk.io.infrastructure import resolve_cluster_caps
 from coastline.sdk.io.interface.json_output import recommendation_payload, save_recommendation_to_json
-from coastline.sdk.io.run_config import load_strategy_config
+from coastline.sdk.io.run_config import default_experiment_path, load_strategy_config
 from coastline.sdk.logging import setup_logging
 from coastline.sdk.models.context import SystemContext
 from coastline.sdk.models.workload import WorkloadSpec
@@ -75,9 +75,7 @@ def _workload_and_context(
 def main(argv: Sequence[str] | None = None) -> None:
     setup_logging()
     parser = argparse.ArgumentParser(prog="coastline recommend-job", description="GPU Recommendation Engine")
-    parser.add_argument(
-        "--config", default=os.environ.get("CONFIG_FILE", "./config/coastline_functionality/default.yaml")
-    )
+    parser.add_argument("--config", default=str(default_experiment_path()))
     parser.add_argument("--input", help="JSON input file (overrides workload/context)")
     parser.add_argument(
         "--output-dir",
@@ -124,7 +122,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     else:
         workload, context = _workload_and_context(config_path, raw, args.cluster_gpus)
 
-    strategy_name = strategy_config.get("strategy", {}).get("name", "min_gpu")
+    strategy_name = strategy_config.get("strategy", {}).get("name", "multi_objective")
     preset = strategy_config.get("strategy", {}).get("preset")
     recs, _ = engine.run_request(
         engine.RecommendRequest(

@@ -3,24 +3,20 @@
 In this section, you will learn how to set up an experiment. In this section you will find:
 
 1. [The structure of the config folder](#1-the-structure-of-the-config-folder) — where each config lives.
-2. [config.yaml](#config-yaml) — the entry point: the everyday config the CLI and the API load.
-3. [default.yaml](#default-yaml) — the fallback when no config is given.
-4. [experiment.yaml](#experiment-yaml) — the preferred policy config when unspecified.
-5. [infrastructure.yaml](#infrastructure-yaml) — the cluster caps the API enforces.
-6. [batch_config.yaml](#batch-config-yaml) — the config for batch experiments.
-7. [demo.yaml](#demo-yaml) — the annotated reference in the user playground.
+2. [experiment.yaml](#experiment-yaml) — the one recommendation-policy config every surface loads.
+3. [infrastructure.yaml](#infrastructure-yaml) — the cluster caps the API enforces.
+4. [batch_config.yaml](#batch-config-yaml) — the config for batch experiments.
+5. [demo.yaml](#demo-yaml) — the annotated reference in the user playground.
 
 ## 1. The structure of the config folder
 
-Coastline is shipped with a `config` folder, which contains two subfolders, one necessary for coastline_functionality (please edit with care) and a user playground.
+Coastline ships a `config` folder with two subfolders: one the code loads (edit with care) and a user playground. There are exactly **two** load-bearing files — `experiment.yaml` (how to recommend) and `infrastructure.yaml` (where you run).
 
 ```text
 config/
 ├── batch_config.yaml            # batch CSV experiments (coastline recommend-job)
 ├── coastline_functionality/     # configs the code loads — edit with care
-│   ├── config.yaml              # everyday config the CLI and API load
-│   ├── default.yaml             # fallback when no config is given
-│   ├── experiment.yaml          # preferred policy config when unspecified
+│   ├── experiment.yaml          # the recommendation policy (CLI, API, UI all load this)
 │   ├── infrastructure.yaml      # cluster GPU caps the API enforces
 │   └── run_database.csv         # measured-runs lookup DB (cache/intelligent)
 └── user_playground/
@@ -30,7 +26,7 @@ config/
 Run an experiment by pointing `coastline recommend-job --config` at a config:
 
 ```console
-coastline recommend-job --config config/coastline_functionality/config.yaml
+coastline recommend-job --config config/coastline_functionality/experiment.yaml
 ```
 
 The recommendation prints as JSON:
@@ -74,12 +70,12 @@ The recommendation prints as JSON:
 
 Write an artifact instead with `--output-dir`.
 
-## 2. config.yaml { #config-yaml }
+## 2. experiment.yaml { #experiment-yaml }
 
-The everyday config the CLI and the API load. The config declares four blocks: `workload` (the fine-tuning job), `strategy` (the [recommendation policy](4_recommendation_policies.md)), `predictors` (the [simulation models](5_simulation_models.md)), and `grid` (the search space). The grid sweeps `batch_sizes` × `total_gpus`; the workload fields seed the layout.
+The one recommendation-policy config. Every surface — the CLI, the API, and the UI — falls back to this file when a run specifies no config (override the path with the `EXPERIMENT_CONFIG` env var). It declares how to recommend in three blocks: `strategy` (the [recommendation policy](4_recommendation_policies.md)), `predictors` (the [simulation models](5_simulation_models.md)), and `grid` (the search space). An optional `workload` block declares a single job for `recommend-job --config` single-run mode; batch, trace, and UI runs supply their own workloads instead.
 
 ```yaml
-workload:
+workload:            # optional — a declared single job for `recommend-job --config`
   llm_model: "mistral-7b-v0.1"
   fine_tuning_method: "lora"
   tokens_per_sample: 2048
@@ -101,7 +97,7 @@ grid:
   top_k: 3
 ```
 
-Below, specs for all of the config fields, individually:
+Below, specs for all of the config fields, individually.
 
 ### 2.1 workload { #config-workload }
 
@@ -147,15 +143,7 @@ The `predictors:` block selects one [simulation model](5_simulation_models.md) p
 | `total_gpus` | List<Int> | no | GPU counts to sweep. |
 | `top_k` | Int | no | Number of ranked recommendations to return. |
 
-## 3. default.yaml { #default-yaml }
-
-The fallback config when the CLI runs without `--config`, and the last candidate in the API config lookup. Same schema as [config.yaml](#config-yaml). The policy is `min_gpu` on purpose: the distinct policy distinguishes the fallback from `experiment.yaml`, and the test suite relies on the distinction.
-
-## 4. experiment.yaml { #experiment-yaml }
-
-The preferred policy config when a run specifies no policy. Same schema as [config.yaml](#config-yaml), extended with a descriptive `system` block (`available_gpu_models`, `max_gpus`, `gpu_memory`, `constraints`) and a legacy `orchestration` block. The CLI parses neither extension; both document the cluster for the API.
-
-## 5. infrastructure.yaml { #infrastructure-yaml }
+## 3. infrastructure.yaml { #infrastructure-yaml }
 
 Cluster caps the API loads and enforces. Edit with care: wrong values change what the API allows.
 
@@ -166,10 +154,9 @@ Cluster caps the API loads and enforces. Edit with care: wrong values change wha
 | `max_gpus_per_node` | Int | yes | Maximum GPUs per node. |
 | `gpu_models` | List<String> | yes | GPU types physically present in the cluster; the UI picker lists these. |
 
+## 4. batch_config.yaml { #batch-config-yaml }
 
-## 6. batch_config.yaml { #batch-config-yaml }
-
-The config for batch experiments: one recommendation per row of a workload CSV. Same `strategy`/`predictors`/`grid` schema as [config.yaml](#config-yaml), plus an optional `input.columns` remap for arbitrary CSV headers.
+The config for batch experiments: one recommendation per row of a workload CSV. Same `strategy`/`predictors`/`grid` schema as [experiment.yaml](#experiment-yaml), plus an optional `input.columns` remap for arbitrary CSV headers.
 
 ```text
 # workloads.csv
@@ -190,7 +177,7 @@ model_name,...,recommended_total_gpus,recommended_batch_size,predicted_throughpu
 mistral-7b-v0.1,...,8,32,37577.5,220.8,True,"8 GPUs (8×1, batch 32) picked for the best throughput-vs-energy balance, 4% faster than the runner-up (8 GPUs, batch 16)."
 ```
 
-### 6.1 The input workload CSV { #input-csv }
+### 4.1 The input workload CSV { #input-csv }
 
 One workload per row. Coastline accepts the canonical column names and the listed alternate spellings; remap any other header under `input.columns` in the batch config.
 
@@ -217,6 +204,6 @@ granite-3.1-2b,lora,NVIDIA-A100-SXM4-80GB,1024,16
 coastline recommend-job --config config/batch_config.yaml --input config/coastline_functionality/sample_workloads.csv --output recommendations.csv
 ```
 
-## 7. demo.yaml { #demo-yaml }
+## 5. demo.yaml { #demo-yaml }
 
 An annotated reference in `config/user_playground/`: every option with the allowed values, safe to edit. Nothing in the playground is loaded by default, so experiments there never affect a real run.

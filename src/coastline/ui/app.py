@@ -31,7 +31,7 @@ from pydantic import BaseModel, Field, field_validator
 from coastline.sdk.exceptions import UnsupportedGPUError
 from coastline.sdk.io.infrastructure import Infrastructure, load_infrastructure
 from coastline.sdk.io.options_loader import load_available_options
-from coastline.sdk.io.run_config import load_strategy_config
+from coastline.sdk.io.run_config import default_experiment_path, load_strategy_config
 from coastline.sdk.logging import setup_logging
 from coastline.sdk.models.context import SystemContext
 from coastline.sdk.models.workload import WorkloadSpec
@@ -90,36 +90,22 @@ _DEFAULT_STRATEGY_CONFIG: dict[str, Any] = {
 
 
 def _load_strategy_config() -> dict[str, Any]:
-    """Discover a strategy YAML (env keys, then bundled config/) and load it.
+    """Resolve the one recommendation-policy config and load it.
 
-    File load + the legacy ``orchestrator:`` -> ``predictors:`` translation are delegated
-    to :func:`coastline.sdk.io.run_config.load_strategy_config` (the single source of that
-    mapping, shared with the CLI), merged over this module's multi_objective default.
+    Discovery (env override → the repo's ``experiment.yaml``) is the shared
+    :func:`coastline.sdk.io.run_config.default_experiment_path`; file load + the legacy
+    ``orchestrator:`` -> ``predictors:`` translation are the shared ``load_strategy_config``.
+    Both are shared with the CLI so every door resolves the same config. Merged over this
+    module's multi_objective default; falls back to it when no file is found.
     """
-    candidates: list[Path] = []
-    for env_key in ("STRATEGY_CONFIG", "EXPERIMENT_CONFIG", "CONFIG_FILE"):
-        env_path = os.environ.get(env_key)
-        if env_path:
-            candidates.append(Path(env_path))
-    candidates.extend(
-        [
-            _REPO_ROOT / "config" / "coastline_functionality" / "config.yaml",
-            _REPO_ROOT / "config" / "coastline_functionality" / "experiment.yaml",
-            _REPO_ROOT / "config" / "coastline_functionality" / "default.yaml",
-        ]
-    )
-
-    for path in candidates:
-        if not path.is_file():
-            continue
+    path = default_experiment_path()
+    if path.is_file():
         try:
             config = load_strategy_config(path, default=_DEFAULT_STRATEGY_CONFIG)
-        except Exception as exc:  # a malformed candidate must not abort the fallback search
+            logger.info("Loaded strategy config from %s", path)
+            return config
+        except Exception as exc:  # a malformed config must not abort startup
             logger.warning("Could not read strategy config %s: %s", path, exc)
-            continue
-        logger.info("Loaded strategy config from %s", path)
-        return config
-
     logger.warning("Using built-in default strategy config")
     return copy.deepcopy(_DEFAULT_STRATEGY_CONFIG)
 

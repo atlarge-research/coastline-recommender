@@ -17,8 +17,6 @@ Production code in ``coastline/api/main.py`` is not modified.
 
 from __future__ import annotations
 
-import shutil
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -440,50 +438,16 @@ def test_recommend_min_gpu_strategy_kavier(client):
 
 
 def test_load_strategy_config_uses_repo_experiment_yaml(clean_strategy_env):
-    """With the real repo layout and no env overrides, config/coastline_functionality/experiment.yaml wins.
-
-    This guards the recent move of the strategy config to
-    config/coastline_functionality/experiment.yaml (ahead of
-    config/coastline_functionality/default.yaml in the candidate list).
-    """
+    """With no env override, the shared resolver returns the repo's experiment.yaml — the one
+    canonical recommendation-policy config (there is no separate default.yaml/config.yaml)."""
     experiment = main._REPO_ROOT / "config" / "coastline_functionality" / "experiment.yaml"
-    default = main._REPO_ROOT / "config" / "coastline_functionality" / "default.yaml"
     assert experiment.is_file(), f"expected {experiment} to exist"
-    assert default.is_file(), f"expected {default} to exist"
 
     config = _load_strategy_config()
-    # experiment.yaml declares multi_objective/balanced; default.yaml declares min_gpu.
+    # experiment.yaml declares multi_objective/balanced with an explicit predictors block.
     assert config["strategy"]["name"] == "multi_objective"
     assert config["strategy"]["preset"] == "balanced"
-    # experiment.yaml has an explicit predictors block (not the orchestrator shim).
     assert config["predictors"]["performance"] == "intelligent"
-
-
-def test_load_strategy_config_falls_back_to_default_yaml(tmp_path, monkeypatch, clean_strategy_env):
-    """When experiment.yaml is absent, the loader uses config/coastline_functionality/default.yaml.
-
-    default.yaml uses the new ``predictors:`` schema directly; the legacy
-    ``orchestrator:`` translation is covered by
-    coastline_recommender/tests/test_run_config.py.
-    """
-    cfg_dir = tmp_path / "config" / "coastline_functionality"
-    cfg_dir.mkdir(parents=True)
-    shutil.copy(
-        main._REPO_ROOT / "config" / "coastline_functionality" / "default.yaml",
-        cfg_dir / "default.yaml",
-    )
-    # No experiment.yaml in this fake repo root.
-    assert not (cfg_dir / "experiment.yaml").exists()
-
-    monkeypatch.setattr(main, "_REPO_ROOT", tmp_path)
-    config = _load_strategy_config()
-
-    # default.yaml's strategy is min_gpu (distinguishes it from the built-in default).
-    assert config["strategy"]["name"] == "min_gpu"
-    # default.yaml declares predictors.performance "intelligent".
-    assert config["predictors"]["performance"] == "intelligent"
-    # grid section came from default.yaml.
-    assert config["grid"]["total_gpus"] == [1, 2, 4, 8, 16]
 
 
 def test_load_strategy_config_env_var_takes_precedence(tmp_path, monkeypatch, clean_strategy_env):
@@ -498,11 +462,10 @@ def test_load_strategy_config_env_var_takes_precedence(tmp_path, monkeypatch, cl
 
 
 def test_load_strategy_config_builtin_default_when_no_files(tmp_path, monkeypatch, clean_strategy_env):
-    """With no env override and no config files, the built-in default is returned."""
-    empty_cfg = tmp_path / "config"
-    empty_cfg.mkdir()  # exists but contains no yaml files
-    monkeypatch.setattr(main, "_REPO_ROOT", tmp_path)
+    """With no env override and no config file at the canonical path, the built-in default is returned."""
+    from coastline.sdk.io import run_config
 
+    monkeypatch.setattr(run_config, "_CANONICAL_CONFIG", tmp_path / "nonexistent.yaml")
     config = _load_strategy_config()
     assert config == _DEFAULT_STRATEGY_CONFIG
     assert config["strategy"]["name"] == "multi_objective"

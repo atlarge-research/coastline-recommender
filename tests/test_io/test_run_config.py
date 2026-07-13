@@ -123,7 +123,7 @@ class TestValidNewStyleConfig:
     def test_strategy_partial_merge_keeps_default_preset_keys(self, tmp_path):
         """A strategy section with only ``name`` shallow-merges over the default.
 
-        The default strategy is ``{name: min_gpu, preset: balanced}``; supplying
+        The default strategy is ``{name: multi_objective, preset: balanced}``; supplying
         only ``name`` must retain ``preset: balanced`` from the default.
         """
         payload = {"strategy": {"name": "multi_objective"}}
@@ -268,9 +268,9 @@ class TestLegacyOrchestratorMapping:
 # ===========================================================================
 class TestDefaults:
     def test_missing_file_returns_full_defaults(self, tmp_path):
-        """A non-existent path returns the default strategy config (no crash)."""
+        """A non-existent path returns the one default strategy config (no crash)."""
         cfg = load_strategy_config(tmp_path / "does_not_exist.yaml")
-        assert cfg["strategy"]["name"] == "min_gpu"
+        assert cfg["strategy"]["name"] == "multi_objective"
         assert cfg["strategy"]["preset"] == "balanced"
         assert cfg["predictors"]["performance"] == "intelligent"
         assert cfg["predictors"]["energy"] == "kavier_power"
@@ -280,12 +280,12 @@ class TestDefaults:
     def test_directory_path_treated_as_missing(self, tmp_path):
         """A path that is a directory (``is_file()`` False) yields defaults, not an error."""
         cfg = load_strategy_config(tmp_path)
-        assert cfg["strategy"]["name"] == "min_gpu"
+        assert cfg["strategy"]["name"] == "multi_objective"
 
     def test_empty_file_returns_defaults(self, tmp_path):
         """An empty YAML file (``safe_load`` -> None) falls back to all defaults."""
         cfg = load_strategy_config(_write_text(tmp_path, ""))
-        assert cfg["strategy"]["name"] == "min_gpu"
+        assert cfg["strategy"]["name"] == "multi_objective"
         assert cfg["predictors"]["performance"] == "intelligent"
         assert cfg["grid"]["batch_sizes"] == [4, 8, 16, 32, 64]
 
@@ -293,7 +293,7 @@ class TestDefaults:
         """Unknown top-level keys are ignored; recognised defaults remain intact."""
         payload = {"totally_unknown": {"x": 1}, "another": 2}
         cfg = load_strategy_config(_write_yaml(tmp_path, payload))
-        assert cfg["strategy"] == {"name": "min_gpu", "preset": "balanced"}
+        assert cfg["strategy"] == {"name": "multi_objective", "preset": "balanced"}
         assert "totally_unknown" not in cfg
 
 

@@ -1,6 +1,6 @@
 # Tunable — changes recommendations, won't break the API.
 # Exhaustive reference config documenting all CLI/API keys and allowed values.
-# See config/coastline_functionality/config.yaml for a clean everyday config. Many keys here are
+# See config/coastline_functionality/experiment.yaml for a clean everyday config. Many keys here are
 # MUTUALLY EXCLUSIVE ("pick one") or LEGACY (marked). CLI reads: workload.*,
 # system.default_gpu, grid.*, strategy.*, predictors.*, output.*
 

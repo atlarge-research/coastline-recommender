@@ -42,11 +42,11 @@ class PolicyFactory:
 
     @staticmethod
     def _default_config_candidates() -> list:
-        """Ordered config paths to try when none is supplied."""
-        return [
-            _REPO_ROOT / "config" / "coastline_functionality" / "experiment.yaml",
-            _REPO_ROOT / "config" / "coastline_functionality" / "default.yaml",
-        ]
+        """The one canonical config to try when none is supplied (env-overridable). Shared with
+        the CLI and UI so every door resolves to the same experiment.yaml."""
+        from coastline.sdk.io.run_config import default_experiment_path
+
+        return [default_experiment_path()]
 
     @staticmethod
     def load_config(config_path: Optional[str] = None) -> dict:
@@ -68,8 +68,7 @@ class PolicyFactory:
 
         logger.warning(
             "No strategy config file found (looked for "
-            "config/coastline_functionality/experiment.yaml and "
-            "config/coastline_functionality/default.yaml); using built-in default config"
+            "config/coastline_functionality/experiment.yaml); using built-in default config"
         )
         return copy.deepcopy(_BUILTIN_DEFAULT_CONFIG)  # deep copy: callers may mutate nested dicts
 

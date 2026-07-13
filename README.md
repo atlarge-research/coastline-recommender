@@ -40,7 +40,7 @@ One `coastline` command (three subcommands) plus the dashboard:
 
 ```bash
 coastline recommend-job --interactive                                               # guided REPL
-coastline recommend-job --config config/coastline_functionality/default.yaml        # one job → recommendation.json
+coastline recommend-job --config config/coastline_functionality/experiment.yaml        # one job → recommendation.json
 coastline recommend-job --config config.yaml --input workloads.csv --output recs.csv # batch CSV → CSV
 coastline recommend-trace --input trace.csv --output enriched.csv --visual           # annotate + plot a trace
 coastline utils tune --data runs.csv --model tabpfn                                  # tune | trace-to-runs | plot-trace

@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import copy
+import os
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+# The one default recommendation policy — multi_objective/balanced — shared by every surface
+# (CLI, facade/API, UI). Used only when no config file is found.
 _DEFAULT_STRATEGY_CONFIG: dict[str, Any] = {
-    "strategy": {"name": "min_gpu", "preset": "balanced"},
+    "strategy": {"name": "multi_objective", "preset": "balanced"},
     "predictors": {
         "performance": "intelligent",
         "energy": "kavier_power",
@@ -21,6 +24,26 @@ _DEFAULT_STRATEGY_CONFIG: dict[str, Any] = {
         "top_k": 5,
     },
 }
+
+# The single canonical recommendation-policy config file. Every door falls back to this one
+# ``experiment.yaml`` (there is no separate ``default.yaml``/``config.yaml`` any more); an env
+# override lets a deployment point elsewhere. Repo root: io/ -> sdk/ -> coastline/ -> src/ -> repo.
+_CONFIG_ENV_KEYS = ("EXPERIMENT_CONFIG", "STRATEGY_CONFIG", "CONFIG_FILE")
+_CANONICAL_CONFIG = (
+    Path(__file__).resolve().parents[4] / "config" / "coastline_functionality" / "experiment.yaml"
+)
+
+
+def default_experiment_path() -> Path:
+    """The one recommendation-policy config every surface resolves to when none is given.
+    An env override (``EXPERIMENT_CONFIG`` / ``STRATEGY_CONFIG`` / ``CONFIG_FILE``) wins; else the
+    repo's ``experiment.yaml``. The path may not exist (stripped wheel) — callers then fall back to
+    the built-in :data:`_DEFAULT_STRATEGY_CONFIG`."""
+    for key in _CONFIG_ENV_KEYS:
+        value = os.environ.get(key)
+        if value:
+            return Path(value)
+    return _CANONICAL_CONFIG
 
 
 def _merge_dict(base: dict, override: dict) -> dict:
