@@ -3,18 +3,23 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Any, Optional
 
 from pydantic import ValidationError
 
+from coastline.sdk.constants import DEFAULT_AUTOCONF_MODEL_VERSION
 from coastline.sdk.models.workload import WorkloadSpec
 
 logger = logging.getLogger(__name__)
 
-_WORKSPACE_ROOT = Path(__file__).resolve().parents[6]  # superproject root (sibling ado/)
-_ADO_ROOT = _WORKSPACE_ROOT / "ado"
+# The installed ``ado-autoconf`` package is the normal import path; these paths only help a
+# source checkout of ADO. ``ADO_ROOT`` overrides; else guess the sibling ``../ado`` of the
+# coastline repo in the dev superproject (feasibility/ -> predictors -> sdk -> coastline -> src
+# -> repo -> superproject == parents[6]).
+_ADO_ROOT = Path(os.environ.get("ADO_ROOT") or Path(__file__).resolve().parents[6] / "ado")
 _ADO_AUTOCONF_PARENT = _ADO_ROOT / "plugins" / "custom_experiments" / "autoconf"
 
 _AUTOCONF_AVAILABLE: Optional[bool] = None
@@ -44,7 +49,7 @@ def _autoconf_modules():
 class AutoconfFeasibilityChecker:
     """Rule + AutoGluon validity check for a single candidate layout."""
 
-    def __init__(self, model_version: str = "3.1.0"):
+    def __init__(self, model_version: str = DEFAULT_AUTOCONF_MODEL_VERSION):
         self.model_version = model_version
         self._predictor: Any = None
 
