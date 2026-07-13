@@ -28,6 +28,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, field_validator
 
+from coastline.sdk.constants import Strategy
 from coastline.sdk.exceptions import UnsupportedGPUError
 from coastline.sdk.io.infrastructure import Infrastructure, load_infrastructure
 from coastline.sdk.io.options_loader import load_available_options
@@ -582,7 +583,7 @@ def recommend(body: RecommendRequest):
             **req_config.get("predictors", {}),
             "performance": body.prediction_model,
         }
-        preset = body.preset if body.strategy == "multi_objective" else None
+        preset = body.preset if body.strategy == Strategy.MULTI_OBJECTIVE else None
         total_tokens = body.dataset_size * body.training_epochs * body.tokens_per_sample
         # Route through the single engine seam; INFRA caps + hardware-mode resolution
         # (above) and serialization (below) stay UI-specific.
@@ -611,7 +612,7 @@ def recommend(body: RecommendRequest):
             "candidates": candidates,
             "rationale": engine.recommendation_rationale(recs, meta),
             "strategy": body.strategy,
-            "preset": body.preset if body.strategy == "multi_objective" else None,
+            "preset": body.preset if body.strategy == Strategy.MULTI_OBJECTIVE else None,
             "workload_summary": {
                 "llm_model": body.llm_model,
                 "fine_tuning_method": body.fine_tuning_method,

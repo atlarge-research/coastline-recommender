@@ -14,6 +14,7 @@ from typing import Any, Optional
 import pandas as pd
 
 import coastline
+from coastline.sdk.constants import FeasibilityMode
 from coastline.sdk.io.infrastructure import resolve_cluster_caps
 
 logger = logging.getLogger(__name__)
@@ -88,7 +89,7 @@ def _kavier_can_predict(wl: dict[str, Any], goal: str, feasibility: str, max_gpu
 def _infeasible_note(max_gpus: int, feasibility: str) -> str:
     cause = (
         "every config would run out of GPU memory (autoconf OOM check)"
-        if feasibility == "autoconf"
+        if feasibility == FeasibilityMode.AUTOCONF
         else "no config passes the divisibility rules"
     )
     return f"infeasible within {max_gpus} GPUs: {cause}"
