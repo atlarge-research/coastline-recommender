@@ -19,7 +19,7 @@ from coastline.sdk.io.run_config import load_strategy_config
 from coastline.sdk.logging import setup_logging
 from coastline.sdk.models.context import SystemContext
 from coastline.sdk.models.workload import WorkloadSpec
-from coastline.sdk.policies import PolicyFactory
+from coastline.sdk.recommend import engine
 
 # 3.8+ timezone alias
 UTC = timezone.utc
@@ -126,12 +126,15 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     strategy_name = strategy_config.get("strategy", {}).get("name", "min_gpu")
     preset = strategy_config.get("strategy", {}).get("preset")
-    strategy = PolicyFactory.create_strategy(
-        strategy_name=strategy_name,
-        preset=preset,
-        config=strategy_config,
+    recs, _ = engine.run_request(
+        engine.RecommendRequest(
+            workload=workload,
+            context=context,
+            config=strategy_config,
+            strategy_name=strategy_name,
+            preset=preset,
+        )
     )
-    recs = strategy.recommend(workload, context)
     if not recs:
         logger.error("No recommendation generated")
         sys.exit(1)
