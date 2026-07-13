@@ -149,31 +149,14 @@ class GridWorkflowPipeline:
         for variant in candidates:
             feasible, feas_meta = self.feasibility_checker.is_feasible(variant)
             if not feasible:
-                logger.debug(
-                    "Skip %d×%d (total %d GPUs): not feasible",
-                    variant.gpus_per_node,
-                    variant.number_of_nodes,
-                    variant.total_gpus,
-                )
                 continue
 
             throughput_pred = self.throughput_predictor.predict(variant, context)
             if throughput_pred is None:
-                logger.debug(
-                    "Skip %d×%d: throughput predictor returned None",
-                    variant.gpus_per_node,
-                    variant.number_of_nodes,
-                )
                 continue
             throughput = throughput_pred.predicted_throughput or 0.0
             # Reject NaN, +inf, -inf, and <=0; a bare x>0 admits +inf which then poisons min-max normalization.
             if not math.isfinite(throughput) or throughput <= 0:
-                logger.debug(
-                    "Skip %d×%d: non-finite or non-positive throughput (%.2f)",
-                    variant.gpus_per_node,
-                    variant.number_of_nodes,
-                    throughput,
-                )
                 continue
 
             # Reuse the power Kavier already returned with throughput (one engine call, not
@@ -183,21 +166,10 @@ class GridWorkflowPipeline:
             else:
                 power_pred = self.power_predictor.predict(variant, context)
                 if power_pred is None:
-                    logger.debug(
-                        "Skip %d×%d: power predictor returned None",
-                        variant.gpus_per_node,
-                        variant.number_of_nodes,
-                    )
                     continue
                 power = power_pred.predicted_power or 0.0
             # Same NaN/+inf/-inf/<=0 guard as throughput.
             if not math.isfinite(power) or power <= 0:
-                logger.debug(
-                    "Skip %d×%d: non-finite or non-positive power (%.2f)",
-                    variant.gpus_per_node,
-                    variant.number_of_nodes,
-                    power,
-                )
                 continue
 
             evaluated.append(
