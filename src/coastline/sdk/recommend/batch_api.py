@@ -10,20 +10,23 @@ from typing import Any, Optional, Union
 
 import pandas as pd
 
+from coastline.sdk.models.aliases import WORKLOAD_FIELD_ALIASES
 from coastline.sdk.policies import normalize_predictor
 from coastline.sdk.recommend import engine
 from coastline.sdk.recommend._goals import goal_to_label
 
 Batch = Union[pd.DataFrame, list, dict]
 
-# Public column -> the accepted aliases (first spelling is canonical). A row may use
-# any alias; the engine ``answers`` key each maps to is in ``_COLUMN_TO_ANSWER``.
+# Public batch column -> the accepted spellings (a row may use any). The workload columns
+# source their spellings from the ONE shared vocabulary (models/aliases); the engine-knob
+# columns are batch-API-specific (they configure the search, not the job). The ``answers``
+# key each column fills is in ``_COLUMN_TO_ANSWER``.
 _ALIASES: dict[str, tuple[str, ...]] = {
-    "model": ("model", "llm_model", "model_name"),
-    "method": ("method", "fine_tuning_method", "peft"),
-    "gpu_model": ("gpu_model", "gpu"),
-    "tokens_per_sample": ("tokens_per_sample", "seq_len", "tokens", "max_tokens"),
-    "batch_size": ("batch_size", "batch"),
+    "model": WORKLOAD_FIELD_ALIASES["llm_model"],
+    "method": WORKLOAD_FIELD_ALIASES["fine_tuning_method"],
+    "gpu_model": WORKLOAD_FIELD_ALIASES["gpu_model"],
+    "tokens_per_sample": WORKLOAD_FIELD_ALIASES["tokens_per_sample"],
+    "batch_size": WORKLOAD_FIELD_ALIASES["batch_size"],
     "dataset_size": ("dataset_size", "num_samples"),
     "epochs": ("epochs",),
     "max_gpus": ("max_gpus", "gpu_budget"),
