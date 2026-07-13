@@ -1,4 +1,4 @@
-"""`coastline trace-to-runs` — convert a fine-tuning trace CSV to the flat measured-runs schema."""
+"""`coastline utils trace-to-runs` — convert a fine-tuning trace CSV to the flat measured-runs schema."""
 
 from __future__ import annotations
 
@@ -9,11 +9,11 @@ from coastline.cli._shared import FriendlyParser
 
 def _build_parser() -> FriendlyParser:
     p = FriendlyParser(
-        prog="coastline trace-to-runs",
+        prog="coastline utils trace-to-runs",
         description="Convert a fine-tuning trace CSV (metadata.*/resources.* columns) into the flat "
-        "measured-runs CSV consumed by `coastline tune`, the cache/intelligent lookup, and "
+        "measured-runs CSV consumed by `coastline utils tune`, the cache/intelligent lookup, and "
         "`kavier calibrate`. An already-flat CSV is passed through unchanged.",
-        example="coastline trace-to-runs --input trace.csv --output run_database.csv",
+        example="coastline utils trace-to-runs --input trace.csv --output run_database.csv",
     )
     p.add_argument("--input", required=True, help="Input trace CSV (or an already-flat measured-runs CSV).")
     p.add_argument("--output", required=True, help="Output flat measured-runs CSV.")

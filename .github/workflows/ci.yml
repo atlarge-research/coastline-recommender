@@ -38,10 +38,10 @@ jobs:
       - name: CLI smoke (entry points resolve)
         run: |
           uv run --no-sync coastline --help
-          uv run --no-sync coastline recommend --help
-          uv run --no-sync coastline run --help
-          uv run --no-sync coastline enrich-trace --help
-          uv run --no-sync coastline plot-trace --help
+          uv run --no-sync coastline recommend-job --help
+          uv run --no-sync coastline recommend-trace --help
+          uv run --no-sync coastline utils --help
+          uv run --no-sync coastline utils plot-trace --help
           uv run --no-sync python -m coastline.cli --help
           uv run --no-sync python -c "from coastline.ui import main; assert callable(main)"
           uv run --no-sync python -c "from coastline.ui.app import app"

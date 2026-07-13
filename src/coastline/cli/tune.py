@@ -1,4 +1,4 @@
-"""`coastline tune` — tune a data-driven predictor on a measured-runs CSV."""
+"""`coastline utils tune` — tune a data-driven predictor on a measured-runs CSV."""
 
 from __future__ import annotations
 
@@ -10,10 +10,10 @@ from coastline.cli._shared import FriendlyParser
 
 def _build_parser() -> FriendlyParser:
     p = FriendlyParser(
-        prog="coastline tune",
+        prog="coastline utils tune",
         description="Tune a data-driven throughput/runtime predictor on your own measured-runs CSV. "
-        "Run `coastline tune --format` to see what a valid dataset looks like.",
-        example="coastline tune --data runs.csv --model tabpfn --train-percentage 1.0",
+        "Run `coastline utils tune --format` to see what a valid dataset looks like.",
+        example="coastline utils tune --data runs.csv --model tabpfn --train-percentage 1.0",
     )
     p.add_argument("--data", help="Measured-runs CSV (one fine-tuning run per row; see --format).")
     p.add_argument(
@@ -61,7 +61,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             on_step=lambda msg: print(msg, flush=True),
         )
     except (DatasetFormatError, RuntimeError, ValueError) as exc:
-        print(f"coastline tune: {exc}", file=sys.stderr)
+        print(f"coastline utils tune: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
     print(

@@ -1,95 +1,54 @@
 # Command-line interface for Coastline
 
-The `coastline` binary provides several sub-commands you can use in your recommendation pipeline.
+The `coastline` binary has three sub-commands you use in your recommendation pipeline.
 See the help page below for an overview:
 
 ```
 usage: coastline <command> [options]
 
 commands:
-  recommend        Batch-recommend GPU/node configs for a CSV of workloads (CSV in -> CSV out).
-  run              Run one config-file experiment; write a recommendation.json run artifact.
-  recommend-trace  Recommend a config for every job in a fine-tuning trace CSV.
-  plot-trace       Plot a recommended trace: cluster timeline, GPUs in use + jobs queued ([plot] extra).
-  interactive      Guided keyboard-driven REPL over the recommender.
-  tune             Tune a data-driven predictor (tabpfn) on your own measured-runs CSV ([ml] extra).
+  recommend-job    Recommend GPU/node configs for ONE job: --interactive | --config | --input/--output CSV.
+  recommend-trace  Recommend a config for every job in a fine-tuning trace CSV (--visual for the timeline).
+  utils            Auxiliary tooling: tune | trace-to-runs | plot-trace.
 
 Run `coastline <command> --help` for command-specific options.
 ```
 
 !!! note
-    Note that the `coastline plot-trace` requires the additional `coastline-recommender[plot]` module and `coastline tune` requires `coastline-recommender[ml]`.
+    `coastline utils plot-trace` (and `recommend-trace --visual`) require the additional `coastline-recommender[plot]` module, and `coastline utils tune` requires `coastline-recommender[ml]`.
     Refer to the [installation](installation.md) guide for further details on the extra modules.
 
-## Recommend
+## Recommend a job
 
-The `coastline recommend` command reads a CSV of workloads and, for every row, sweeps the configuration grid, filters infeasible configurations, predicts throughput and power, and writes the best-ranked configuration to an output CSV. 
-The recommendation policy, simulation models, grid, and safeguards are all declared in the config file.
+The `coastline recommend-job` command recommends GPU/node configurations for **one job**. It has three input modes, all routing into the same engine:
 
-Use it when you have many workloads to recommend at once: 
-[`coastline run`](#run) handles a single workload, and 
-[`coastline recommend-trace`](#recommend-trace) expects the fine-tuning trace format.
+- `--interactive` — a guided keyboard session, no file to write.
+- `--config config.yaml` — one declared, reproducible experiment.
+- `--config config.yaml --input workloads.csv --output recs.csv` — a batch of jobs, CSV in → CSV out.
 
+Use [`coastline recommend-trace`](#recommend-a-trace) instead when you have a recorded fine-tuning trace (the dotted `metadata.*`/`resources.*` format) rather than plain workloads.
+
+### Guided (interactive)
+
+The `--interactive` mode starts a guided, keyboard-driven session in the terminal.
+The session walks you through the workload — model, GPU, fine-tuning method, tokens per sample, batch size, dataset size, epochs, maximum GPUs, objective, and performance predictor — and prints the ranked configurations and the recommendation.
+Follow-up menus re-rank the same workload under another objective, tweak the workload, or save the recommendation as a JSON file.
+
+The `--top-k` flag sets how many configurations get ranked (default: 5); in a shell without a terminal attached (a pipe or a CI job), the command falls back to a one-shot run with default values.
 
 ```bash
-coastline recommend \
-      --config batch_config.yaml \
-      --input sample_workloads.csv \
-      --output recommendations.csv
+coastline recommend-job --interactive
 ```
 
-=== "batch_config.yaml"
+![The Coastline interactive session](../media/terminal_interface.png)
 
-    ```yaml
-    strategy:
-      name: multi_objective    # how candidates are ranked; alt: min_gpu (fewest feasible GPUs)
-      preset: balanced         # throughput-vs-energy weighting; alt: performance, energy
-      max_slowdown: 2.0        # SAFEGUARD: never recommend a config slower than 2x the
-                               # fastest feasible one. Omit for no slowdown cap.
-    
-    predictors:
-      performance: kavier      # analytical engine; alt: tabpfn/catboost/... (needs the [ml] extra)
-      energy: kavier_power
-      feasibility: rules       # divisibility-only; keeps this example cheap.
-                               # Production default is `autoconf` (OOM-aware; ships in the core install).
-    
-    grid:                      # search space swept per workload row
-      gpu_models: ["NVIDIA-A100-SXM4-80GB"]
-      batch_sizes: [4, 8, 16, 32]
-      total_gpus: [1, 2, 4, 8, 16]
-    ```
+### From a config file
 
-=== "sample_workloads.csv"
-    ```csv
-    model_name,method,gpu_model,tokens_per_sample,batch_size
-    mistral-7b-v0.1,lora,NVIDIA-A100-SXM4-80GB,1024,16
-    granite-3.3-8b,full,NVIDIA-A100-SXM4-80GB,4096,4
-    granite-3.1-2b,lora,NVIDIA-A100-SXM4-80GB,1024,16
-    ```
-
-=== "recommendations.csv"
-    Note that when setting up your experiment, you do not need to copy over this file.
-    Below is an example output (the `--output` flag produces this file).
-
-    ```csv
-    model_name,method,gpu_model,tokens_per_sample,batch_size,recommended_total_gpus,recommended_gpus_per_node,recommended_number_of_nodes,recommended_batch_size,predicted_throughput,predicted_runtime_seconds,predicted_power_watts,tokens_per_watt,feasible,rationale
-    mistral-7b-v0.1,lora,NVIDIA-A100-SXM4-80GB,1024,16,8,8,1,32,37577.52855076191,,220.84667948500874,170.15211022592126,True,"8 GPUs (8×1, batch 32) picked for the best throughput-vs-energy balance, 4% faster than the runner-up (8 GPUs, batch 16)."
-    granite-3.3-8b,full,NVIDIA-A100-SXM4-80GB,4096,4,8,8,1,32,20890.745742833682,,220.84667948500874,94.59388654404361,True,"8 GPUs (8×1, batch 32) picked for the best throughput-vs-energy balance, 4% faster than the runner-up (8 GPUs, batch 16)."
-    granite-3.1-2b,lora,NVIDIA-A100-SXM4-80GB,1024,16,8,8,1,32,50610.71190113843,,220.84667948500874,229.16673240982067,True,"8 GPUs (8×1, batch 32) picked for the best throughput-vs-energy balance, 4% faster than the runner-up (8 GPUs, batch 16)."
-    ```
-
-## Run
-
-The `coastline run` command runs one declared experiment: unlike in `coastline recommend`, here the config file carries the workload itself, next to the recommendation policy, simulation models, and grid, so a single file fully specifies the run. 
+With `--config`, the config file carries the workload itself, next to the recommendation policy, simulation models, and grid, so a single file fully specifies the run.
 The command prints the recommendation as JSON; with `--output-dir` it also writes it as a `recommendation.json` run artifact.
 
-Use it when you want a single, reproducible, declared experiment: 
-[`coastline recommend`](#recommend) takes a CSV with many workloads, and 
-[`coastline interactive`](#interactive) explores single workloads without writing a config file.
-
-
 ```bash
-coastline run --config config.yaml
+coastline recommend-job --config config.yaml
 ```
 
 === "config.yaml"
@@ -166,18 +125,67 @@ coastline run --config config.yaml
     }
     ```
 
-## Recommend-trace
+### Batch CSV
 
-The `coastline recommend-trace` command recommends a configuration for every job in a fine-tuning trace — a CSV with one recorded training job per row — staying within each job's own GPU allocation. 
-The command rewrites the GPU layout and batch size to the recommended ones and appends the predicted duration (`metadata.estimated_duration_kavier`). 
+With `--input` and `--output`, the command reads a CSV of workloads and, for every row, sweeps the configuration grid, filters infeasible configurations, predicts throughput and power, and writes the best-ranked configuration to the output CSV.
+The recommendation policy, simulation models, grid, and safeguards are all declared in the `--config` file.
+
+```bash
+coastline recommend-job \
+      --config batch_config.yaml \
+      --input sample_workloads.csv \
+      --output recommendations.csv
+```
+
+=== "batch_config.yaml"
+
+    ```yaml
+    strategy:
+      name: multi_objective    # how candidates are ranked; alt: min_gpu (fewest feasible GPUs)
+      preset: balanced         # throughput-vs-energy weighting; alt: performance, energy
+      max_slowdown: 2.0        # SAFEGUARD: never recommend a config slower than 2x the
+                               # fastest feasible one. Omit for no slowdown cap.
+
+    predictors:
+      performance: kavier      # analytical engine; alt: tabpfn/catboost/... (needs the [ml] extra)
+      energy: kavier_power
+      feasibility: rules       # divisibility-only; keeps this example cheap.
+                               # Production default is `autoconf` (OOM-aware; ships in the core install).
+
+    grid:                      # search space swept per workload row
+      gpu_models: ["NVIDIA-A100-SXM4-80GB"]
+      batch_sizes: [4, 8, 16, 32]
+      total_gpus: [1, 2, 4, 8, 16]
+    ```
+
+=== "sample_workloads.csv"
+    ```csv
+    model_name,method,gpu_model,tokens_per_sample,batch_size
+    mistral-7b-v0.1,lora,NVIDIA-A100-SXM4-80GB,1024,16
+    granite-3.3-8b,full,NVIDIA-A100-SXM4-80GB,4096,4
+    granite-3.1-2b,lora,NVIDIA-A100-SXM4-80GB,1024,16
+    ```
+
+=== "recommendations.csv"
+    Note that when setting up your experiment, you do not need to copy over this file.
+    Below is an example output (the `--output` flag produces this file).
+
+    ```csv
+    model_name,method,gpu_model,tokens_per_sample,batch_size,recommended_total_gpus,recommended_gpus_per_node,recommended_number_of_nodes,recommended_batch_size,predicted_throughput,predicted_runtime_seconds,predicted_power_watts,tokens_per_watt,feasible,rationale
+    mistral-7b-v0.1,lora,NVIDIA-A100-SXM4-80GB,1024,16,8,8,1,32,37577.52855076191,,220.84667948500874,170.15211022592126,True,"8 GPUs (8×1, batch 32) picked for the best throughput-vs-energy balance, 4% faster than the runner-up (8 GPUs, batch 16)."
+    granite-3.3-8b,full,NVIDIA-A100-SXM4-80GB,4096,4,8,8,1,32,20890.745742833682,,220.84667948500874,94.59388654404361,True,"8 GPUs (8×1, batch 32) picked for the best throughput-vs-energy balance, 4% faster than the runner-up (8 GPUs, batch 16)."
+    granite-3.1-2b,lora,NVIDIA-A100-SXM4-80GB,1024,16,8,8,1,32,50610.71190113843,,220.84667948500874,229.16673240982067,True,"8 GPUs (8×1, batch 32) picked for the best throughput-vs-energy balance, 4% faster than the runner-up (8 GPUs, batch 16)."
+    ```
+
+## Recommend a trace
+
+The `coastline recommend-trace` command recommends a configuration for every job in a fine-tuning trace — a CSV with one recorded training job per row — staying within the cluster's GPU budget.
+The command rewrites the GPU layout and batch size to the recommended ones and appends the predicted duration (`metadata.estimated_duration_kavier`).
 Jobs Coastline cannot recommend keep the original configuration and the observed duration, and the `metadata.recommendation_note` column states the reason.
 
-Use it when you have a recorded trace of fine-tuning jobs and want to replay the trace with recommended configurations: 
-[`coastline recommend`](#recommend) takes a plain workload CSV instead, and 
-[`coastline plot-trace`](#plot-trace) draws the cluster timeline of the result.
+Use it when you have a recorded trace of fine-tuning jobs and want to replay the trace with recommended configurations: [`coastline recommend-job`](#recommend-a-job) takes plain workloads instead.
 
-The command needs no config file: the `--method` flag selects the performance predictor (default: `kavier`), and the `--goal` flag selects the recommendation policy — `min_gpu` (default) recommends the fewest GPUs that fit, and `performance` favours throughput.
-
+The command needs no config file: the `--method` flag selects the performance predictor (default: `kavier`), and the `--goal` flag selects the recommendation policy — `min_gpu` (default) recommends the fewest GPUs that fit, and `performance` favours throughput. Pass `--visual` to also render the cluster timeline of the result in one step.
 
 ```bash
 coastline recommend-trace \
@@ -208,54 +216,22 @@ coastline recommend-trace \
     mistral-7b-v0.1,NVIDIA-A100-SXM4-80GB,1,1,16,1854.982308630846,,lora,2048,2600,2770,2026-03-02T10:00:00Z
     ```
 
-## Plot-trace
+## Utilities
 
-The `coastline plot-trace` command replays a recommended trace on a fixed cluster and draws the cluster timeline: GPUs in use and jobs queued over time. 
-A first-in-first-out scheduler places the jobs on 16 GPUs in nodes of 8 by default (`--cluster-gpus`, `--node-gpus`). 
-Pass a `.pdf` output path for a vector figure.
+The `coastline utils` command groups the auxiliary tooling that supports — but is not — the recommender: `tune`, `trace-to-runs`, and `plot-trace`.
 
-Use it when you want to see what running the recommendations looks like on a cluster: 
-[`coastline recommend-trace`](#recommend-trace) produces the input file — the `recommended_trace.csv` shown above — and 
-the `--visual` flag of `coastline recommend-trace` renders the same figure in one step.
+### Tune
 
+The `coastline utils tune` command tunes a data-driven performance predictor — currently TabPFN — on a CSV of your own measured fine-tuning runs.
+The tuned artifact lands in `models/custom/tabpfn.pkl` (also the default `--output`).
+Run `coastline utils tune --format` to print the columns the dataset must contain.
 
-```bash
-coastline plot-trace \
-      --input recommended_trace.csv \
-      --output timeline.png
-```
-
-=== "timeline.png"
-    Note that when setting up your experiment, you do not need to copy over this file.
-    Below is an example output (the `--output` flag produces this figure, and the command prints the summary shown underneath).
-
-    ![Cluster timeline of the recommended trace: GPUs in use and jobs queued over time](../media/trace_timeline.png)
-
-    ```python
-    {
-        'jobs': 5, 
-        'skipped': 0, 
-        'cluster_gpus': 16, 
-        'makespan_h': 3.0, 
-        'peak_gpus': 16, 
-        'peak_queue': 4
-    }
-    ```
-
-## Tune
-
-The `coastline tune` command tunes a data-driven performance predictor — currently TabPFN — on a CSV of your own measured fine-tuning runs. 
-The tuned artifact lands in `models/custom/tabpfn.pkl` (also the default `--output`). 
-Run `coastline tune --format` to print the columns the dataset must contain.
-
-Use it when you have measured runs of your own and want predictions tuned to your cluster and workloads: 
-[`coastline recommend-trace`](#recommend-trace) picks the tuned predictor up through `--method tabpfn`, and 
-[`coastline recommend`](#recommend) through `predictors.performance: tabpfn` in the config file.
+Use it when you have measured runs of your own and want predictions tuned to your cluster and workloads: [`coastline recommend-trace`](#recommend-a-trace) picks the tuned predictor up through `--method tabpfn`, and [`coastline recommend-job`](#recommend-a-job) through `predictors.performance: tabpfn` in the config file.
 
 The `--train-percentage` flag keeps a share of the rows out of tuning as a quality check: the command reports the median prediction error (`MdAPE`) for throughput and runtime on the held-out rows.
 
 ```bash
-coastline tune \
+coastline utils tune \
       --data run_database.csv \
       --train-percentage 0.8 \
       --output models/custom/tabpfn.pkl
@@ -292,21 +268,61 @@ coastline tune \
     serve it with: coastline recommend-trace ... --method tabpfn
     ```
 
-## Interactive
+### Trace-to-runs
 
-The `coastline interactive` command starts a guided, keyboard-driven session in the terminal. 
-The session walks you through the workload — model, GPU, fine-tuning method, tokens per sample, batch size, dataset size, epochs, maximum GPUs, objective, and performance predictor — and prints the ranked configurations and the recommendation. 
-Follow-up menus re-rank the same workload under another objective, tweak the workload, or save the recommendation as a JSON file.
-
-Use it when you want to explore one workload without writing any file: 
-[`coastline run`](#run) declares the same single-workload experiment reproducibly in a config file, and 
-[`coastline recommend`](#recommend) handles a batch of workloads.
-
-The `--top-k` flag sets how many configurations get ranked (default: 5); in a shell without a terminal attached (a pipe or a CI job), the command falls back to a one-shot run with default values.
-
+The `coastline utils trace-to-runs` command converts a fine-tuning trace CSV (the dotted `metadata.*`/`resources.*` columns) into the flat measured-runs schema that `utils tune`, the cache/intelligent lookup, and `kavier calibrate` consume.
+An already-flat CSV is passed through unchanged, so you can feed either shape.
 
 ```bash
-coastline interactive
+coastline utils trace-to-runs \
+      --input sample_trace.csv \
+      --output run_database.csv
 ```
 
-![The Coastline interactive session](../media/terminal_interface.png)
+=== "run_database.csv"
+    Note that when setting up your experiment, you do not need to copy over this file.
+    Below is an example output (the `--output` flag produces this file; the command prints the summary shown underneath).
+
+    ```csv
+    model_name,method,gpu_model,number_nodes,number_gpus,tokens_per_sample,batch_size,dataset_tokens_per_second,train_runtime,is_valid
+    llama3.1-70b,full,NVIDIA-A100-SXM4-80GB,2,8,2048,8,1150,5400,1.0
+    mistral-7b-v0.1,lora,NVIDIA-A100-SXM4-80GB,1,8,1024,16,3900,3600,1.0
+    granite-3.3-8b,full,NVIDIA-A100-SXM4-80GB,2,8,4096,4,8800,1800,1.0
+    granite-3.1-2b,lora,NVIDIA-A100-SXM4-80GB,1,4,1024,16,15000,1000,1.0
+    mistral-7b-v0.1,lora,NVIDIA-A100-SXM4-80GB,1,8,2048,8,2600,2770,1.0
+    ```
+
+    ```
+    wrote run_database.csv: 5 rows (5 valid) in the flat measured-runs schema
+    ```
+
+### Plot-trace
+
+The `coastline utils plot-trace` command replays a recommended trace on a fixed cluster and draws the cluster timeline: GPUs in use and jobs queued over time.
+A first-in-first-out scheduler places the jobs on 16 GPUs in nodes of 8 by default (`--cluster-gpus`, `--node-gpus`).
+Pass a `.pdf` output path for a vector figure.
+
+Use it to re-plot an existing recommended trace — the `recommended_trace.csv` produced by [`coastline recommend-trace`](#recommend-a-trace); the `--visual` flag of `recommend-trace` renders the same figure in one step.
+
+```bash
+coastline utils plot-trace \
+      --input recommended_trace.csv \
+      --output timeline.png
+```
+
+=== "timeline.png"
+    Note that when setting up your experiment, you do not need to copy over this file.
+    Below is an example output (the `--output` flag produces this figure, and the command prints the summary shown underneath).
+
+    ![Cluster timeline of the recommended trace: GPUs in use and jobs queued over time](../media/trace_timeline.png)
+
+    ```python
+    {
+        'jobs': 5, 
+        'skipped': 0, 
+        'cluster_gpus': 16, 
+        'makespan_h': 3.0, 
+        'peak_gpus': 16, 
+        'peak_queue': 4
+    }
+    ```

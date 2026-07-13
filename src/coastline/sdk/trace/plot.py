@@ -1,4 +1,4 @@
-"""Plot a coastline-enriched trace (``coastline plot-trace``): the operational
+"""Plot a coastline-enriched trace (``coastline utils plot-trace``): the operational
 cluster timeline — schedule the recommended configs onto a fixed cluster and
 draw GPUs-in-use (filled area) + jobs-queued (line) over time, the exp2/exp4
 "what does running these recommendations look like" view.

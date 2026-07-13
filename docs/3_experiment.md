@@ -16,7 +16,7 @@ Coastline is shipped with a `config` folder, which contains two subfolders, one 
 
 ```text
 config/
-├── batch_config.yaml            # batch CSV experiments (coastline recommend)
+├── batch_config.yaml            # batch CSV experiments (coastline recommend-job)
 ├── coastline_functionality/     # configs the code loads — edit with care
 │   ├── config.yaml              # everyday config the CLI and API load
 │   ├── default.yaml             # fallback when no config is given
@@ -27,10 +27,10 @@ config/
     └── demo.yaml                # annotated reference: every option + allowed values
 ```
 
-Run an experiment by pointing `coastline run` at a config:
+Run an experiment by pointing `coastline recommend-job --config` at a config:
 
 ```console
-coastline run --config config/coastline_functionality/config.yaml
+coastline recommend-job --config config/coastline_functionality/config.yaml
 ```
 
 The recommendation prints as JSON:
@@ -179,7 +179,7 @@ granite-3.3-8b,full,NVIDIA-A100-SXM4-80GB,4096,4
 ```
 
 ```console
-coastline recommend --config config/batch_config.yaml --input workloads.csv --output recommendations.csv
+coastline recommend-job --config config/batch_config.yaml --input workloads.csv --output recommendations.csv
 ```
 
 Each row gains the recommended configuration, the predictions, and a rationale:
@@ -214,7 +214,7 @@ granite-3.1-2b,lora,NVIDIA-A100-SXM4-80GB,1024,16
 ```
 
 ```console
-coastline recommend --config config/batch_config.yaml --input config/coastline_functionality/sample_workloads.csv --output recommendations.csv
+coastline recommend-job --config config/batch_config.yaml --input config/coastline_functionality/sample_workloads.csv --output recommendations.csv
 ```
 
 ## 7. demo.yaml { #demo-yaml }

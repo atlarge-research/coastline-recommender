@@ -277,8 +277,8 @@ def main(
 
 
 def run(argv: Optional[Sequence[str]] = None) -> None:
-    """Entry point for ``coastline interactive`` (dispatched from the unified CLI)."""
-    app(args=list(argv) if argv is not None else [], prog_name="coastline interactive")
+    """Entry point for ``coastline recommend-job --interactive`` (dispatched from the unified CLI)."""
+    app(args=list(argv) if argv is not None else [], prog_name="coastline recommend-job --interactive")
 
 
 if __name__ == "__main__":

@@ -69,7 +69,7 @@ granite-3.3-8b,full,NVIDIA-A100-SXM4-80GB,4096,4
 ```
 
 ```console
-coastline recommend --config config/batch_config.yaml --input workloads.csv --output recommendations.csv
+coastline recommend-job --config config/batch_config.yaml --input workloads.csv --output recommendations.csv
 ```
 
 Each row gains the recommended configuration, its predictions, and a rationale:
@@ -88,7 +88,7 @@ Annotate a fine-tuning trace with a recommendation per job, then plot the cluste
 
 ```console
 coastline recommend-trace --input trace.csv --output recommended.csv
-coastline plot-trace --input recommended.csv --output timeline.pdf
+coastline utils plot-trace --input recommended.csv --output timeline.pdf
 ```
 
 See the [traces guide](...).
@@ -98,7 +98,7 @@ See the [traces guide](...).
 Fit a predictor to your own measured runs; a model tuned on your hardware beats the bundled ones:
 
 ```console
-coastline tune --data runs.csv --model tabpfn
+coastline utils tune --data runs.csv --model tabpfn
 ```
 
 See the [tuning guide](...).

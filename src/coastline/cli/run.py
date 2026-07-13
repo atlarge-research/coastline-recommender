@@ -74,7 +74,7 @@ def _workload_and_context(
 
 def main(argv: Sequence[str] | None = None) -> None:
     setup_logging()
-    parser = argparse.ArgumentParser(prog="coastline run", description="GPU Recommendation Engine")
+    parser = argparse.ArgumentParser(prog="coastline recommend-job", description="GPU Recommendation Engine")
     parser.add_argument(
         "--config", default=os.environ.get("CONFIG_FILE", "./config/coastline_functionality/default.yaml")
     )

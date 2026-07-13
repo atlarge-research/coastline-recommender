@@ -92,7 +92,7 @@ Learn the batch workflow in [setting up an experiment](3_experiment.md).
 The simplest command runs the bundled fallback config and prints the recommendation as JSON:
 
 ```console
-coastline run
+coastline recommend-job --config config/coastline_functionality/default.yaml
 ```
 
 The tool will output, for the default configuration:
@@ -134,7 +134,7 @@ The tool will output, for the default configuration:
 Or, Coastline can run a declared experiment (see [setting up an experiment](3_experiment.md)):
 
 ```console
-coastline run --config config/coastline_functionality/config.yaml
+coastline recommend-job --config config/coastline_functionality/config.yaml
 ```
 ```json
 {
@@ -183,7 +183,7 @@ granite-3.3-8b,full,NVIDIA-A100-SXM4-80GB,4096,4
 ```
 
 ```console
-coastline recommend --config config/batch_config.yaml --input workloads.csv --output recommendations.csv
+coastline recommend-job --config config/batch_config.yaml --input workloads.csv --output recommendations.csv
 ```
 
 ```text
@@ -214,7 +214,7 @@ If the setup went correctly, you should be able to see the following interface:
 The guided REPL asks for the workload interactively:
 
 ```console
-coastline interactive
+coastline recommend-job --interactive
 ```
 
 If the setup went correctly, you should be able to see the following interface:
