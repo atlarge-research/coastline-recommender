@@ -35,8 +35,7 @@ from coastline.sdk.io.run_config import load_strategy_config
 from coastline.sdk.logging import setup_logging
 from coastline.sdk.models.context import SystemContext
 from coastline.sdk.models.workload import WorkloadSpec
-from coastline.sdk.policies import PolicyFactory
-from coastline.sdk.recommend.engine import recommendation_rationale
+from coastline.sdk.recommend import engine
 
 from . import workload_queue
 
@@ -631,12 +630,20 @@ def recommend(body: RecommendRequest):
             **req_config.get("predictors", {}),
             "performance": body.prediction_model,
         }
-        strategy = PolicyFactory.create_strategy(
-            strategy_name=body.strategy,
-            preset=body.preset if body.strategy == "multi_objective" else None,
-            config=req_config,
+        preset = body.preset if body.strategy == "multi_objective" else None
+        total_tokens = body.dataset_size * body.training_epochs * body.tokens_per_sample
+        # Route through the single engine seam; INFRA caps + hardware-mode resolution
+        # (above) and serialization (below) stay UI-specific.
+        recs, meta = engine.run_request(
+            engine.RecommendRequest(
+                workload=workload,
+                context=context,
+                config=req_config,
+                strategy_name=body.strategy,
+                preset=preset,
+                total_tokens=total_tokens,
+            )
         )
-        recs = strategy.recommend(workload, context)
 
         if not recs:
             raise HTTPException(
@@ -644,15 +651,13 @@ def recommend(body: RecommendRequest):
                 detail="No recommendation could be generated for this configuration.",
             )
 
-        total_tokens = body.dataset_size * body.training_epochs * body.tokens_per_sample
         candidates = [_serialize_candidate(i + 1, rec, total_tokens) for i, rec in enumerate(recs)]
-        meta = {"preset": body.preset if body.strategy == "multi_objective" else None, "strategy_name": body.strategy}
 
         return {
             "success": True,
             "recommendation": candidates[0],
             "candidates": candidates,
-            "rationale": recommendation_rationale(recs, meta),
+            "rationale": engine.recommendation_rationale(recs, meta),
             "strategy": body.strategy,
             "preset": body.preset if body.strategy == "multi_objective" else None,
             "workload_summary": {
