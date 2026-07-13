@@ -6,6 +6,7 @@ import logging
 import math
 from typing import List, Optional
 
+from coastline.sdk.constants import Preset
 from coastline.sdk.models.context import SystemContext
 from coastline.sdk.models.recommendation import Recommendation
 from coastline.sdk.models.workload import WorkloadSpec
@@ -69,7 +70,7 @@ class GridWorkflowPipeline:
                 if a is not None and b is not None:
                     a, b = float(a), float(b)
                 else:
-                    a, b = PRESET_WEIGHTS.get("balanced", (0.5, 0.5))
+                    a, b = PRESET_WEIGHTS.get(Preset.BALANCED.value, (0.5, 0.5))
             alpha = a if alpha is None else alpha
             beta = b if beta is None else beta
         total = alpha + beta
