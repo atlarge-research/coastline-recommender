@@ -12,12 +12,7 @@ so there is one definition and no drift.
 # on macOS. Each predictor module is imported only when its name is first accessed,
 # so e.g. the playground subprocess for "xgboost" loads xgboost alone.
 _PREDICTOR_MODULES = {
-    "RandomForestPredictor": "random_forest_predictor",
-    "SVRPredictor": "svr_predictor",
-    "KNNPredictor": "knn_predictor",
-    "CatBoostPredictor": "catboost_predictor",
-    "XGBoostPredictor": "xgboost_predictor",
-    "LightGBMPredictor": "lightgbm_predictor",
+    "SklearnPortfolioPredictor": "sklearn_portfolio",
     "GaussianProcessPredictor": "gaussian_process_predictor",
     "BayesianRidgePredictor": "bayesian_ridge_predictor",
     "TabPFNPredictor": "tabpfn_predictor",

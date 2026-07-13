@@ -133,16 +133,17 @@ def test_random_forest_self_locates_trainer_and_scales_sublinearly_with_minimal_
 
 
 def test_importing_one_predictor_does_not_load_torch():
-    """Lazy package init: importing a non-torch predictor must not import torch,
-    so the playground subprocess for e.g. xgboost loads xgboost alone (no segfault).
-    Falsification: an eager `__init__` that imports torch turns the invariant red."""
+    """Lazy package init: importing a non-torch predictor must not import torch, so the
+    playground subprocess for e.g. xgboost (a sklearn-portfolio model) loads its backend
+    alone (no segfault). Falsification: an eager `__init__` that imports torch turns the
+    invariant red."""
     code = (
         "import sys\n"
         "import importlib\n"
-        "mod=importlib.import_module('coastline.sdk.predictors.performance.data_driven.xgboost_predictor')\n"
+        "mod=importlib.import_module('coastline.sdk.predictors.performance.data_driven.sklearn_portfolio')\n"
         # Positive control: prove we imported the real module (not a silent no-op that
         # would make the torch check trivially pass) — it must expose its predictor.
-        "assert hasattr(mod, 'XGBoostPredictor'), 'xgboost_predictor did not define XGBoostPredictor'\n"
+        "assert hasattr(mod, 'SklearnPortfolioPredictor'), 'sklearn_portfolio missing its predictor'\n"
         # The property under test: the non-torch predictor pulled in zero torch runtime.
         "assert 'torch' not in sys.modules, 'torch was imported transitively (eager __init__ regression)'\n"
         "print('OK')\n"

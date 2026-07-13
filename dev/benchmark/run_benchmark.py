@@ -351,30 +351,19 @@ def print_results(results: dict):
     print()
 
 
-# Display name -> (module, predictor class). Loaded lazily per subprocess; TabPFN uses batch prediction.
+# Display name -> canonical predictor name (resolved via PolicyFactory, which lazily imports
+# the right module per subprocess). TabPFN uses batch prediction and is handled separately.
 _ML_MODELS = {
-    "RandomForest": (
-        "coastline.sdk.predictors.performance.data_driven.random_forest_predictor",
-        "RandomForestPredictor",
-    ),
-    "SVR": ("coastline.sdk.predictors.performance.data_driven.svr_predictor", "SVRPredictor"),
-    "KNN": ("coastline.sdk.predictors.performance.data_driven.knn_predictor", "KNNPredictor"),
-    "CatBoost": ("coastline.sdk.predictors.performance.data_driven.catboost_predictor", "CatBoostPredictor"),
-    "XGBoost": ("coastline.sdk.predictors.performance.data_driven.xgboost_predictor", "XGBoostPredictor"),
-    "LightGBM": ("coastline.sdk.predictors.performance.data_driven.lightgbm_predictor", "LightGBMPredictor"),
-    "GaussianProcess": (
-        "coastline.sdk.predictors.performance.data_driven.gaussian_process_predictor",
-        "GaussianProcessPredictor",
-    ),
-    "BayesianRidge": (
-        "coastline.sdk.predictors.performance.data_driven.bayesian_ridge_predictor",
-        "BayesianRidgePredictor",
-    ),
-    "DeepLearning": (
-        "coastline.sdk.predictors.performance.data_driven.deep_learning_predictor",
-        "DeepLearningPredictor",
-    ),
-    "CacheLookup": ("coastline.sdk.predictors.performance.retrieval.cache_predictor", "RetrievalPredictor"),
+    "RandomForest": "random_forest",
+    "SVR": "svr",
+    "KNN": "knn",
+    "CatBoost": "catboost",
+    "XGBoost": "xgboost",
+    "LightGBM": "lightgbm",
+    "GaussianProcess": "gaussian_process",
+    "BayesianRidge": "bayesian_ridge",
+    "DeepLearning": "deep_learning",
+    "CacheLookup": "cache",
 }
 
 _RESULT_MARKER = "__BENCH_RESULT__"
@@ -397,10 +386,9 @@ def _evaluate_one_entry(name: str, max_gpus: Optional[int]) -> dict:
         if name == "TabPFN":
             raw = evaluate_tabpfn_batch(ml_data)
         else:
-            import importlib
+            from coastline.sdk.policies import PolicyFactory
 
-            module, cls = _ML_MODELS[name]
-            predictor = getattr(importlib.import_module(module), cls)()
+            predictor = PolicyFactory.throughput_predictor({"performance": _ML_MODELS[name]})
             raw = evaluate_ml_predictor(predictor, ml_data)
         thr_m, lat_m = _throughput_and_latency_metrics(raw)
         return _result_entry(mtype, raw, thr_m, lat_m)

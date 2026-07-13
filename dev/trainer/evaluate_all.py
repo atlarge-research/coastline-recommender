@@ -23,18 +23,18 @@ from .common import (
     split_data,
 )
 
-# Display name -> (module basename, predictor class); imported lazily per subprocess.
-_MODELS: dict[str, tuple[str, str]] = {
-    "RandomForest": ("random_forest_predictor", "RandomForestPredictor"),
-    "SVR": ("svr_predictor", "SVRPredictor"),
-    "KNN": ("knn_predictor", "KNNPredictor"),
-    "CatBoost": ("catboost_predictor", "CatBoostPredictor"),
-    "XGBoost": ("xgboost_predictor", "XGBoostPredictor"),
-    "LightGBM": ("lightgbm_predictor", "LightGBMPredictor"),
-    "GaussianProcess": ("gaussian_process_predictor", "GaussianProcessPredictor"),
-    "BayesianRidge": ("bayesian_ridge_predictor", "BayesianRidgePredictor"),
-    "TabPFN": ("tabpfn_predictor", "TabPFNPredictor"),
-    "DeepLearning": ("deep_learning_predictor", "DeepLearningPredictor"),
+# Display name -> canonical predictor name; resolved lazily per subprocess.
+_MODELS: dict[str, str] = {
+    "RandomForest": "random_forest",
+    "SVR": "svr",
+    "KNN": "knn",
+    "CatBoost": "catboost",
+    "XGBoost": "xgboost",
+    "LightGBM": "lightgbm",
+    "GaussianProcess": "gaussian_process",
+    "BayesianRidge": "bayesian_ridge",
+    "TabPFN": "tabpfn",
+    "DeepLearning": "deep_learning",
 }
 
 _RESULT_MARKER = "__EVAL_RESULT__"
@@ -104,7 +104,7 @@ def _row_to_workload(row: pd.Series) -> WorkloadSpec:
 
 def _evaluate_one_model(name: str) -> dict:
     """Evaluate ONE model over the test split. Runs in its own process."""
-    import importlib
+    from coastline.sdk.policies import _build_named_ml_predictor
 
     X_cat, X_num, y, _cat, _num = load_and_preprocess_data()
     y_log = np.log1p(y)
@@ -114,10 +114,8 @@ def _evaluate_one_model(name: str) -> dict:
     y_true = y_test[throughput_col].to_numpy(dtype=float)
     context = SystemContext.for_gpus(["NVIDIA-A100-SXM4-80GB"], max_gpus=128, max_nodes=16)
 
-    module, cls = _MODELS[name]
     try:
-        Predictor = getattr(importlib.import_module(f"coastline.sdk.predictors.performance.data_driven.{module}"), cls)
-        predictor = Predictor()
+        predictor = _build_named_ml_predictor(_MODELS[name])
         preds = []
         for _, row in df_test.iterrows():
             p = predictor.predict(_row_to_workload(row), context)

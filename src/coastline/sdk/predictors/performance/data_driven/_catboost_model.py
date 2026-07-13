@@ -1,8 +1,8 @@
 """The picklable CatBoost wrapper the trained artifact resolves to.
 
 Lives in the shipped package (not the dev trainer) so the committed pickle unpickles without
-the training code on the path. ``catboost_predictor`` aliases the artifact's legacy module path
-(``trainer.train_performance_catboost``) to this class.
+the training code on the path. ``sklearn_portfolio`` aliases the artifact's legacy module path
+(``trainer.train_performance_catboost``) to this class when loading the catboost model.
 """
 
 from __future__ import annotations

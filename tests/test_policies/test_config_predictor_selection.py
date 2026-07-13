@@ -90,28 +90,29 @@ def _make_strategy(predictors: dict | None, strategy_name: str = "multi_objectiv
 
 
 class TestNamedMLModelSelection:
-    # The documented name->class map. Independent oracle: these are the class
-    # names the config contract promises, one distinct class per model. A
-    # resolver that collapsed every name to a single class (the CLAUDE.md bug)
-    # fails every row except its own.
+    # The documented name->identity map. Independent oracle: get_name() is the identity
+    # the config contract promises for each model — one distinct identity per model. A
+    # resolver that collapsed every name to a single predictor (the CLAUDE.md bug) fails
+    # every row except its own. The six portfolio models share one class after the
+    # collapse but stay distinguishable by name; tabpfn keeps its own get_name.
     _CATALOG = [
-        ("catboost", "CatBoostPredictor"),
-        ("xgboost", "XGBoostPredictor"),
-        ("lightgbm", "LightGBMPredictor"),
-        ("random_forest", "RandomForestPredictor"),
-        ("svr", "SVRPredictor"),
-        ("knn", "KNNPredictor"),
-        ("gaussian_process", "GaussianProcessPredictor"),
-        ("bayesian_ridge", "BayesianRidgePredictor"),
+        ("catboost", "catboost"),
+        ("xgboost", "xgboost"),
+        ("lightgbm", "lightgbm"),
+        ("random_forest", "random_forest"),
+        ("svr", "svr"),
+        ("knn", "knn"),
+        ("gaussian_process", "gaussian_process"),
+        ("bayesian_ridge", "bayesian_ridge"),
         ("tabpfn", "TabPFNPredictor"),
     ]
 
-    @pytest.mark.parametrize(("name", "expected_class"), _CATALOG)
-    def test_each_named_model_selects_its_own_predictor_class(self, name, expected_class):
-        # Config performance=<name> must instantiate <name>'s own predictor class,
-        # NOT collapse to CatBoost (regression guard, CLAUDE.md).
+    @pytest.mark.parametrize(("name", "expected_identity"), _CATALOG)
+    def test_each_named_model_selects_its_own_predictor_class(self, name, expected_identity):
+        # Config performance=<name> must resolve to <name>'s own predictor, NOT collapse
+        # to CatBoost (regression guard, CLAUDE.md).
         strategy = _make_strategy({"performance": name, "energy": "kavier_power"})
-        assert type(strategy.throughput_predictor).__name__ == expected_class
+        assert strategy.throughput_predictor.get_name() == expected_identity
 
     def test_unknown_performance_name_falls_back_to_intelligent(self):
         # Contract: an unrecognised performance name logs a warning and falls back
@@ -132,7 +133,7 @@ class TestPerformanceAndEnergyAreIndependent:
         # predictor is the throughput-engine-wrapping variant (WRAPS_THROUGHPUT_ENGINE),
         # which is what lets recommend() reuse one Kavier call for both metrics.
         strategy = _make_strategy({"performance": "tabpfn", "energy": "kavier_power"})
-        assert type(strategy.throughput_predictor).__name__ == "TabPFNPredictor"
+        assert strategy.throughput_predictor.get_name() == "TabPFNPredictor"
         assert isinstance(strategy.power_predictor, KavierPowerPredictor)
         assert strategy.power_predictor.WRAPS_THROUGHPUT_ENGINE is True
 

@@ -112,9 +112,11 @@ def test_intelligent_falls_through_to_physics_on_a_cache_miss(tmp_path):
         ("cache", "RetrievalPredictor"),
         # "intelligent" is the cache->physics cascade
         ("intelligent", "CacheThenPhysicsPredictor"),
-        # named ML models must each resolve to their OWN class -- a regression
-        # guard against the old bug where every name collapsed to CatBoost.
-        ("xgboost", "XGBoostPredictor"),
+        # named ML models must reach the ML branch, not collapse to the composite or
+        # to CatBoost. The six portfolio models share SklearnPortfolioPredictor (they
+        # stay distinguishable by get_name; see test_config_predictor_selection); the
+        # distinct-runtime models keep their own class.
+        ("xgboost", "SklearnPortfolioPredictor"),
         ("tabpfn", "TabPFNPredictor"),
         ("deep_learning", "DeepLearningPredictor"),
         # an unknown name falls back to the intelligent default (policies L117-118)

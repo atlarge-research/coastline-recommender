@@ -2,8 +2,9 @@
 
 import copy
 import logging
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 import yaml
 
@@ -12,8 +13,15 @@ from coastline.sdk.pipeline.workflow import GridWorkflowPipeline
 from coastline.sdk.policies.base import BaseStrategy
 from coastline.sdk.policies.min_gpu import MinGPUStrategy
 from coastline.sdk.policies.multi_objective import MultiObjectiveStrategy, PolicyPreset
+from coastline.sdk.predictors.base import BasePredictor
 from coastline.sdk.predictors.energy import KavierPowerPredictor
 from coastline.sdk.predictors.factory import create_physics_driven
+from coastline.sdk.predictors.performance.data_driven.sklearn_portfolio import (
+    Artifact,
+    Const,
+    Param,
+    PortfolioModel,
+)
 from coastline.sdk.predictors.performance.retrieval.cache_predictor import RetrievalPredictor
 
 logger = logging.getLogger(__name__)
@@ -239,19 +247,71 @@ class PolicyFactory:
         )
 
 
-# Data-driven predictors, keyed by public name → (module, class). Module-level so
-# list_predictor_names() can advertise them without importing any ML runtime.
-_NAMED_ML_PREDICTORS: dict[str, tuple[str, str]] = {
-    "catboost": ("catboost_predictor", "CatBoostPredictor"),
-    "xgboost": ("xgboost_predictor", "XGBoostPredictor"),
-    "lightgbm": ("lightgbm_predictor", "LightGBMPredictor"),
-    "random_forest": ("random_forest_predictor", "RandomForestPredictor"),
-    "svr": ("svr_predictor", "SVRPredictor"),
-    "knn": ("knn_predictor", "KNNPredictor"),
-    "gaussian_process": ("gaussian_process_predictor", "GaussianProcessPredictor"),
-    "bayesian_ridge": ("bayesian_ridge_predictor", "BayesianRidgePredictor"),
-    "tabpfn": ("tabpfn_predictor", "TabPFNPredictor"),
-    "deep_learning": ("deep_learning_predictor", "DeepLearningPredictor"),
+@dataclass(frozen=True)
+class _DedicatedModel:
+    """A named model with its own predictor class — a distinct runtime (tabpfn,
+    deep_learning) or a return_std path (gaussian_process, bayesian_ridge). Imported
+    lazily so an unused ML runtime is never pulled in."""
+
+    module: str
+    cls: str
+
+    def build(self, name: str) -> BasePredictor:
+        import importlib
+
+        module = importlib.import_module(f"coastline.sdk.predictors.performance.data_driven.{self.module}")
+        return getattr(module, self.cls)()
+
+
+# Every data-driven predictor, keyed by public name. The six portfolio models share
+# SklearnPortfolioPredictor and differ ONLY in this table (the metadata hyperparameters
+# they surface + whether categoricals are native); the rest keep their own class.
+# Module-level so list_predictor_names() can advertise them without importing any ML runtime.
+_GRADIENT_BOOSTING = Const("algorithm", "gradient_boosting")
+_NAMED_ML_PREDICTORS: dict[str, Union[PortfolioModel, _DedicatedModel]] = {
+    "catboost": PortfolioModel(
+        native_categorical=True,
+        metadata=(
+            Param("iterations"),
+            Param("depth"),
+            Param("learning_rate"),
+            Param("l2_leaf_reg"),
+            _GRADIENT_BOOSTING,
+        ),
+    ),
+    "xgboost": PortfolioModel(
+        metadata=(Param("n_estimators"), Param("max_depth"), Param("learning_rate"), _GRADIENT_BOOSTING),
+    ),
+    "lightgbm": PortfolioModel(
+        metadata=(
+            Param("n_estimators"),
+            Param("max_depth"),
+            Param("num_leaves"),
+            Param("learning_rate"),
+            _GRADIENT_BOOSTING,
+        ),
+    ),
+    "random_forest": PortfolioModel(metadata=(Artifact("oob_score"),)),
+    "svr": PortfolioModel(
+        metadata=(
+            Const("kernel", "rbf"),
+            Param("C", "svr__C"),
+            Param("epsilon", "svr__epsilon"),
+            Param("gamma", "svr__gamma"),
+        ),
+    ),
+    "knn": PortfolioModel(
+        metadata=(
+            Param("n_neighbors", "knn__n_neighbors"),
+            Param("weights", "knn__weights"),
+            Param("p", "knn__p"),
+            Const("metric", "minkowski"),
+        ),
+    ),
+    "gaussian_process": _DedicatedModel("gaussian_process_predictor", "GaussianProcessPredictor"),
+    "bayesian_ridge": _DedicatedModel("bayesian_ridge_predictor", "BayesianRidgePredictor"),
+    "tabpfn": _DedicatedModel("tabpfn_predictor", "TabPFNPredictor"),
+    "deep_learning": _DedicatedModel("deep_learning_predictor", "DeepLearningPredictor"),
 }
 
 # Physics/retrieval/composite performance predictors (not trained-model names).
@@ -279,11 +339,7 @@ def normalize_predictor(name: str) -> str:
 
 def _build_named_ml_predictor(name: str):
     """Construct a data-driven predictor by name, or None if unknown. Lazy import avoids pulling all ML runtimes."""
-    import importlib
-
-    module_class = _NAMED_ML_PREDICTORS.get(name)
-    if module_class is None:
+    spec = _NAMED_ML_PREDICTORS.get(name)
+    if spec is None:
         return None
-    module_name, class_name = module_class
-    module = importlib.import_module(f"coastline.sdk.predictors.performance.data_driven.{module_name}")
-    return getattr(module, class_name)()
+    return spec.build(name)

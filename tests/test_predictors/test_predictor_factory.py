@@ -70,20 +70,16 @@ class TestThroughputPredictorFactory:
         assert isinstance(predictor._cache, RetrievalPredictor)  # tried first
         assert isinstance(predictor._physics, KavierPredictor)  # fallback
 
-    @pytest.mark.parametrize(
-        "name, expected_cls",
-        [
-            ("xgboost", "XGBoostPredictor"),
-            ("catboost", "CatBoostPredictor"),
-        ],
-    )
-    def test_named_ml_model_routes_to_its_own_predictor(self, name, expected_cls):
+    @pytest.mark.parametrize("name", ["xgboost", "catboost"])
+    def test_named_ml_model_routes_to_its_own_predictor(self, name):
         # Oracle = the documented model catalog (CLAUDE.md lists catboost/xgboost/…).
-        # Two DISTINCT names => two DISTINCT classes: this varies behavior and would
-        # catch the regression noted in workflow.py where every named model silently
-        # collapsed to CatBoost. Constructing is safe; we never call .predict.
+        # Two DISTINCT names must resolve to predictors that self-report their OWN name
+        # (get_name), catching the regression noted in workflow.py where every named
+        # model silently collapsed to CatBoost. xgboost/catboost now share one class
+        # (SklearnPortfolioPredictor) but stay distinguishable by name. Constructing is
+        # safe; we never call .predict.
         predictor = PolicyFactory.throughput_predictor({"performance": name})
-        assert type(predictor).__name__ == expected_cls
+        assert predictor.get_name() == name
         # Named models must reach the ML branch, NOT fall through to the intelligent
         # default composite (that fallback is reserved for UNKNOWN names).
         assert not isinstance(predictor, CacheThenPhysicsPredictor)
@@ -105,26 +101,29 @@ class TestBuildNamedMlPredictor:
     # map). Parametrized over the whole catalog so behavior varies name-by-name, not just a
     # number. Constructing is safe (models unpickle lazily on first .predict, which we never call).
     @pytest.mark.parametrize(
-        "name, expected_cls",
+        "name, expected_identity",
         [
-            ("catboost", "CatBoostPredictor"),
-            ("xgboost", "XGBoostPredictor"),
-            ("lightgbm", "LightGBMPredictor"),
-            ("random_forest", "RandomForestPredictor"),
+            # portfolio models report their canonical name; tabpfn keeps its own get_name.
+            ("catboost", "catboost"),
+            ("xgboost", "xgboost"),
+            ("lightgbm", "lightgbm"),
+            ("random_forest", "random_forest"),
             ("tabpfn", "TabPFNPredictor"),
         ],
     )
-    def test_known_name_builds_its_own_predictor(self, name, expected_cls):
+    def test_known_name_builds_its_own_predictor(self, name, expected_identity):
         predictor = _build_named_ml_predictor(name)
-        assert type(predictor).__name__ == expected_cls
+        assert predictor.get_name() == expected_identity
 
-    def test_distinct_names_build_distinct_classes(self):
+    def test_distinct_names_build_distinct_predictors(self):
         # Regression guard for the bug called out in workflow.py: an earlier duplicate
         # resolver "silently collapsed every named model — e.g. tabpfn — to CatBoost".
-        # Independent oracle: N distinct catalog names must yield N distinct classes.
+        # Independent oracle: N distinct catalog names must yield N distinguishable
+        # predictors. get_name() is the identity that survives the portfolio collapse
+        # (six models share one class but keep distinct names).
         names = ["catboost", "xgboost", "lightgbm", "random_forest", "tabpfn"]
-        classes = {type(_build_named_ml_predictor(n)).__name__ for n in names}
-        assert len(classes) == len(names)  # 5 names -> 5 different predictor classes
+        identities = {_build_named_ml_predictor(n).get_name() for n in names}
+        assert len(identities) == len(names)  # 5 names -> 5 distinguishable predictors
 
     def test_unknown_name_returns_none(self):
         assert _build_named_ml_predictor("not-a-real-model") is None
