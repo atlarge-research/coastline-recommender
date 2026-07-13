@@ -20,9 +20,9 @@ BASE_DIR = Path(__file__).parent
 DATA_DIR = Path(os.environ.get("DATA_DIR", str(Path(__file__).resolve().parents[3] / "trace-archive")))
 DATA_PATH = DATA_DIR / "profiling-dataset" / "curated_trace.csv"
 # Official (re)trained artifacts live in the packaged portfolio (the one home for bundled
-# models), tracked in git and independent of DATA_DIR. User-tuned models go to models/custom/
-# via `coastline utils tune`. Honour PORTFOLIO_DIR (Docker/CI/pip-install): a pip-installed
-# deployment points this env var at its own models dir.
+# models, inside the SDK), tracked in git and independent of DATA_DIR. User-tuned models go to
+# portfolio/custom/ via `coastline utils tune`. Honour PORTFOLIO_DIR (Docker/CI/pip-install):
+# a pip-installed deployment points this env var at its own models dir.
 _PACKAGED_PORTFOLIO = (
     Path(__file__).resolve().parents[2]
     / "src"

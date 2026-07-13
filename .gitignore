@@ -32,9 +32,10 @@ dev/benchmark/results/*.csv
 # local-only trace data
 daniele_data/
 
-# Trained ML model artifacts are TRACKED here (NOTE: this repo is PUBLIC — these artifacts are world-readable; the 3 largest ride via Git
-# LFS — see .gitattributes). They are NOT bundled into the uv_build wheel (models/ lives at the
-# repo root, outside src/coastline), and the default Kavier physics path needs none.
+# Trained ML model artifacts are TRACKED under src/coastline/.../data_driven/portfolio/ (NOTE:
+# this repo is PUBLIC — world-readable; the largest ride via Git LFS — see .gitattributes). The
+# wheel ships only the 5 parametric ones (the 5 heavy + custom/ are wheel-excluded); the default
+# Kavier physics path needs none.
 
 # Stray generated doc artifacts (the docs live under docs/ as MkDocs Markdown).
 /USAGE.html

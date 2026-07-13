@@ -223,7 +223,7 @@ The `coastline utils` command groups the auxiliary tooling that supports — but
 ### Tune
 
 The `coastline utils tune` command tunes a data-driven performance predictor — currently TabPFN — on a CSV of your own measured fine-tuning runs.
-The tuned artifact lands in `models/custom/tabpfn.pkl` (also the default `--output`).
+By default the tuned artifact lands in the SDK's bundled models dir under `custom/<model>.pkl` (where the recommender auto-discovers it); pass `--output` to write elsewhere, or set `PORTFOLIO_DIR` to redirect the whole models dir.
 Run `coastline utils tune --format` to print the columns the dataset must contain.
 
 Use it when you have measured runs of your own and want predictions tuned to your cluster and workloads: [`coastline recommend-trace`](#recommend-a-trace) picks the tuned predictor up through `--method tabpfn`, and [`coastline recommend-job`](#recommend-a-job) through `predictors.performance: tabpfn` in the config file.

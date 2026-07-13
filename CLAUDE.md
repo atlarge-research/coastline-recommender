@@ -38,7 +38,7 @@ COASTLINE_ALLOW_RULES_FALLBACK=1 uv run --all-extras pytest tests/test_pipeline/
 
 ## Architecture
 
-One installable package, `src/coastline` (uv-native, `build-backend = "uv_build"`); `dev/` (benchmark, trainer, ado_plugin) and `models/` are dev/research tooling excluded from the wheel (see `[tool.uv.build-backend]` wheel-exclude in `pyproject.toml`).
+One installable package, `src/coastline` (uv-native, `build-backend = "uv_build"`); `dev/` (benchmark, trainer, ado_plugin) is dev/research tooling excluded from the wheel (see `[tool.uv.build-backend]` wheel-exclude in `pyproject.toml`). Bundled ML models live in `src/coastline/sdk/predictors/performance/data_driven/portfolio/`; the wheel selectively excludes the 5 heavy ones + `custom/`.
 
 | Layer | Role |
 |---|---|

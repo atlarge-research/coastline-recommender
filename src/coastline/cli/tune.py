@@ -29,8 +29,8 @@ def _build_parser() -> FriendlyParser:
     p.add_argument(
         "--output",
         default=None,
-        help="Artifact path (default: models/custom/<model>.pkl, auto-discovered "
-        "by --method/<predictors.performance> = tabpfn).",
+        help="Artifact path (default: the SDK's bundled models dir, custom/<model>.pkl — where "
+        "--method/predictors.performance auto-discovers it). Set PORTFOLIO_DIR to redirect.",
     )
     p.add_argument("--seed", type=int, default=42, help="Split seed (default 42).")
     p.add_argument("--format", action="store_true", help="Print the dataset format contract and exit.")

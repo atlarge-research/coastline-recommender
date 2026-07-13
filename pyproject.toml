@@ -147,6 +147,7 @@ wheel-exclude = [
     "**/portfolio/gaussian_process.pkl",
     "**/portfolio/svr.pkl",
     "**/portfolio/knn.pkl",
+    "**/portfolio/custom/**",
 ]
 source-exclude = ["**/__pycache__/**", "**/*.pyc"]
 
