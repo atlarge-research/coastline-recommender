@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Optional
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Optional
 
 from coastline.sdk.models.context import SystemContext
 from coastline.sdk.models.recommendation import Recommendation
 from coastline.sdk.models.workload import WorkloadSpec
+
+if TYPE_CHECKING:  # avoid importing the heavy policies package at module load
+    from coastline.sdk.policies.base import BaseStrategy
 
 try:
     from coastline.sdk.io.options_loader import load_available_options
@@ -161,39 +165,119 @@ def build_context(answers: dict[str, Any]) -> SystemContext:
     return SystemContext.for_gpus([answers["gpu_model"]], max_gpus=max_gpus, gpus_per_node=min(8, max_gpus))
 
 
+@dataclass
+class RecommendRequest:
+    """The one shape the engine consumes. Every door (facade, batch CSV, config-driven
+    ``run``, UI, and the answers-driven ``run_pipeline``) builds one of these its own way,
+    then hands it to :func:`run_request`. Input-building and output-serialization stay in
+    the caller; only the strategy-create → recommend core lives here."""
+
+    workload: WorkloadSpec
+    context: SystemContext
+    config: dict[str, Any]  # fully-formed PolicyFactory config: strategy / predictors / grid
+    strategy_name: str
+    preset: Optional[str] = None
+    alpha: Optional[float] = None
+    beta: Optional[float] = None
+    total_tokens: int = 0  # for runtime/energy meta; 0 == "not applicable" (facade, run.py)
+
+
+def build_strategy(
+    config: dict[str, Any],
+    strategy_name: str,
+    preset: Optional[str] = None,
+    alpha: Optional[float] = None,
+    beta: Optional[float] = None,
+) -> "BaseStrategy":
+    """The ONE place ``PolicyFactory.create_strategy`` is called. Split out from
+    :func:`execute_strategy` so a caller (``batch_csv``) can build the strategy once and
+    reuse it across many rows — predictors + the AutoConf feasibility model load a single
+    time instead of per row."""
+    from coastline.sdk.policies import PolicyFactory
+
+    return PolicyFactory.create_strategy(
+        strategy_name=strategy_name, preset=preset, alpha=alpha, beta=beta, config=config
+    )
+
+
+def execute_strategy(
+    strategy: "BaseStrategy",
+    workload: WorkloadSpec,
+    context: SystemContext,
+    *,
+    strategy_name: str,
+    preset: Optional[str],
+    grid: dict[str, Any],
+    predictor: Optional[str],
+    total_tokens: int = 0,
+) -> tuple[list[Recommendation], dict[str, Any]]:
+    """Run ``strategy.recommend``, time it, normalize ``None``/single/list → list, build meta.
+    Accepts a pre-built strategy so it can be called repeatedly with the same one."""
+    t0 = time.perf_counter()
+    recs = strategy.recommend(workload, context)
+    elapsed = time.perf_counter() - t0
+
+    if recs is None:
+        recs = []
+    elif isinstance(recs, Recommendation):
+        recs = [recs]
+    else:
+        recs = list(recs)
+
+    meta = {
+        "strategy_name": strategy_name,
+        "preset": preset,
+        "predictor": predictor,
+        "elapsed_s": elapsed,
+        "grid": grid,
+        "workload": workload,
+        "total_tokens": total_tokens,
+    }
+    return recs, meta
+
+
+def run_request(request: RecommendRequest) -> tuple[list[Recommendation], dict[str, Any]]:
+    """The single workflow: build the strategy, run it, return (recs, meta)."""
+    strategy = build_strategy(
+        request.config, request.strategy_name, request.preset, request.alpha, request.beta
+    )
+    return execute_strategy(
+        strategy,
+        request.workload,
+        request.context,
+        strategy_name=request.strategy_name,
+        preset=request.preset,
+        grid=request.config.get("grid", {}),
+        predictor=(request.config.get("predictors") or {}).get("performance"),
+        total_tokens=request.total_tokens,
+    )
+
+
 def run_pipeline(
     answers: dict[str, Any],
     top_k: int,
     max_slowdown: Optional[float] = None,
     feasibility: str = "autoconf",
 ) -> tuple[list[Recommendation], dict[str, Any]]:
-    """Run PolicyFactory + strategy.recommend; return (recs, meta).
+    """Answers-driven entry (interactive REPL, no-TTY path, and ``batch_api``): derive a
+    ``RecommendRequest`` from an ``answers`` dict and run it. Signature and return are
+    unchanged — this is a thin wrapper over the shared :func:`run_request` seam.
 
     ``feasibility`` (``autoconf`` | ``rules`` | ``none``) picks the feasibility
     checker; an answers ``feasibility`` key takes precedence (see ``build_config``).
     """
-    from coastline.sdk.policies import PolicyFactory
-
     config, strategy_name, preset = build_config(answers, top_k, max_slowdown, feasibility)
-    workload = build_workload(answers)
-    context = build_context(answers)
-
-    t0 = time.perf_counter()
-    strategy = PolicyFactory.create_strategy(strategy_name=strategy_name, preset=preset, config=config)
-    recs = strategy.recommend(workload, context)
-    elapsed = time.perf_counter() - t0
-
     total_tokens = int(answers["dataset_size"] * answers["epochs"] * answers["tokens_per_sample"])
-    meta = {
-        "strategy_name": strategy_name,
-        "preset": preset,
-        "predictor": config["predictors"]["performance"],
-        "elapsed_s": elapsed,
-        "grid": config["grid"],
-        "workload": workload,
-        "total_tokens": total_tokens,
-    }
-    return recs, meta
+    return run_request(
+        RecommendRequest(
+            workload=build_workload(answers),
+            context=build_context(answers),
+            config=config,
+            strategy_name=strategy_name,
+            preset=preset,
+            total_tokens=total_tokens,
+        )
+    )
 
 
 def runtime_energy(rec: Recommendation, total_tokens: int) -> tuple[Optional[float], Optional[float]]:
