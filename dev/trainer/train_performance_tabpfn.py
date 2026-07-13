@@ -4,6 +4,7 @@
 import logging
 import time
 import warnings
+from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
@@ -69,15 +70,27 @@ def train_tabpfn():
         device = "cpu"
 
     # One model per target — TabPFN does not support multi-output.
-    # Pinned to TabPFN v2 weights (Prior Labs License = Apache 2.0 + attribution):
-    # v2.5/v2.6/v3 weights are research-only and cannot be redistributed, so the
-    # saved pickle (which embeds the weights) must be built on v2.
+    # Prefer a local checkpoint under ~/.data/tabpfn/ (no download needed).
+    # Fall back to downloading v2 weights (the only redistributable version — v2.5/v2.6/v3
+    # weights are research-only and cannot be shipped inside the saved pickle).
     model_cls = cast(Any, TabPFNRegressor)
 
-    def make_regressor():
-        return model_cls.create_default_for_version(ModelVersion.V2, device=device, ignore_pretraining_limits=True)
+    _local_ckpt_dir = Path.home() / ".data" / "tabpfn"
+    _local_ckpt = next(_local_ckpt_dir.glob("tabpfn-*-regressor-*.ckpt"), None) if _local_ckpt_dir.exists() else None
 
-    print(f"Training TabPFN (v2 weights) on {len(X_train)} samples...")
+    if _local_ckpt is not None:
+        print(f"  using local TabPFN checkpoint: {_local_ckpt}")
+
+        def make_regressor():
+            return model_cls(model_path=str(_local_ckpt), device=device, ignore_pretraining_limits=True)
+    else:
+        print("  no local checkpoint found under ~/.data/tabpfn — downloading v2 weights")
+
+        def make_regressor():
+            return model_cls.create_default_for_version(ModelVersion.V2, device=device, ignore_pretraining_limits=True)
+
+    ckpt_desc = f"local {_local_ckpt.name}" if _local_ckpt is not None else "v2 weights (download)"
+    print(f"Training TabPFN ({ckpt_desc}) on {len(X_train)} samples...")
     start_time = time.time()
 
     model_throughput = make_regressor()
