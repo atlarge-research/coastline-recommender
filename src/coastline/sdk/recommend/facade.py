@@ -10,7 +10,8 @@ from coastline.sdk.models.aliases import col_to_field_map
 from coastline.sdk.models.context import SystemContext
 from coastline.sdk.models.recommendation import Recommendation
 from coastline.sdk.models.workload import WorkloadSpec
-from coastline.sdk.policies import PolicyFactory, list_predictor_names
+from coastline.sdk.policies import list_predictor_names
+from coastline.sdk.recommend import engine
 from coastline.sdk.recommend._goals import goal_to_strategy_preset
 
 WorkloadInput = Union[WorkloadSpec, dict, str, Path]
@@ -145,18 +146,19 @@ class Coastline:
                 "top_k": top_k,
             },
         }
-        strategy_obj = PolicyFactory.create_strategy(
-            strategy_name=strategy,
-            preset=preset,
-            alpha=alpha,
-            beta=beta,
-            config=config,
+        # Route through the single engine seam (build strategy -> recommend -> normalize).
+        # total_tokens=0: the facade returns raw recs and never derives runtime/energy.
+        recs, _ = engine.run_request(
+            engine.RecommendRequest(
+                workload=wl,
+                context=ctx,
+                config=config,
+                strategy_name=strategy,
+                preset=preset,
+                alpha=alpha,
+                beta=beta,
+            )
         )
-        recs = strategy_obj.recommend(wl, ctx)
-        if recs is None:
-            return []
-        if isinstance(recs, Recommendation):
-            return [recs]
-        return list(recs)
+        return recs
 
     __call__ = recommend
