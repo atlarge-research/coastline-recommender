@@ -95,7 +95,7 @@ FastAPI app (`ui/app.py`) serving the wizard UI + REST. Long predictions run thr
 - `coastline utils` — `tune` (train a predictor, [ml]) / `trace-to-runs` (trace → flat measured-runs) / `plot-trace` (visualise a recommended trace, [plot]).
 - `coastline-ui` — the FastAPI dashboard.
 
-Every door (facade / CLI / UI) routes through the single `sdk/recommend/engine.py` seam (`RecommendRequest` → `run_request`); every CSV shape resolves through the one canonical schema (`sdk/io/schema.py`) + format adapters (`sdk/io/adapters/`: `coastline` identity, `ibm_trace`).
+Every door (facade / CLI / UI) routes through the single `sdk/recommend/engine.py` seam (`RecommendRequest` → `run_request`). CSV column spellings resolve through the one alias vocabulary in `sdk/models/aliases.py`; the IBM fine-tuning-trace column names live in `sdk/trace/recommend.py` (shared with `sdk/trace/to_runs.py`).
 
 ## Documentation (`docs/`)
 
