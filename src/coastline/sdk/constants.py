@@ -98,3 +98,6 @@ PRESET_TO_POLICY: dict[str, "SelectionPolicy"] = {
 GPU_BUDGETS: tuple[int, ...] = (1, 2, 4, 8, 16, 32, 64, 128, 256)
 DEFAULT_BATCH_SIZES: list[int] = [1, 2, 4, 8, 16, 32, 64, 128, 256]
 DEFAULT_TOKENS_PER_SAMPLE: list[int] = [512, 1024, 2048, 4096, 8192]
+
+# The AutoConf OOM model version used when a config doesn't pin one.
+DEFAULT_AUTOCONF_MODEL_VERSION = "3.1.0"
