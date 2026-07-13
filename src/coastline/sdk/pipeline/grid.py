@@ -7,12 +7,12 @@ import math
 from dataclasses import dataclass
 from typing import List, Optional
 
+from coastline.sdk.constants import DEFAULT_BATCH_SIZES
 from coastline.sdk.models.context import SystemContext
 from coastline.sdk.models.workload import WorkloadSpec
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_BATCH_SIZES = [1, 2, 4, 8, 16, 32, 64, 128, 256]
 
 
 def _powers_of_two(limit: int) -> List[int]:

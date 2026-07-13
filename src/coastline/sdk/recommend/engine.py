@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
 
+from coastline.sdk.constants import DEFAULT_BATCH_SIZES, DEFAULT_TOKENS_PER_SAMPLE, GPU_BUDGETS, Method
 from coastline.sdk.models.context import SystemContext
 from coastline.sdk.models.recommendation import Recommendation
 from coastline.sdk.models.workload import WorkloadSpec
@@ -28,11 +29,10 @@ FALLBACK_MODELS = [
     "mistral-7b-v0.1",
     "mixtral-8x7b-instruct-v0.1",
 ]
-FALLBACK_METHODS = ["full", "lora", "gptq-lora", "qlora"]
+FALLBACK_METHODS = [m.value for m in Method]
 FALLBACK_GPUS = ["NVIDIA-A100-SXM4-80GB", "NVIDIA-A100-80GB-PCIe", "L40S"]
-FALLBACK_TOKENS = [512, 1024, 2048, 4096, 8192]
-FALLBACK_BATCH_SIZES = [1, 2, 4, 8, 16, 32, 64, 128]
-GPU_BUDGETS = (1, 2, 4, 8, 16, 32, 64, 128, 256)
+FALLBACK_TOKENS = DEFAULT_TOKENS_PER_SAMPLE
+FALLBACK_BATCH_SIZES = DEFAULT_BATCH_SIZES
 
 # Optimisation goal (display label) -> (strategy_name, preset). Derived from the single
 # objective vocabulary in `_goals`; the REPL enumerates these keys as menu choices.
