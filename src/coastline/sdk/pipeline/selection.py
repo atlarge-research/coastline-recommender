@@ -45,7 +45,7 @@ def rank_candidates(
 
     pool = [c for c in candidates if not c.dominated] or candidates  # drop dominated candidates before ranking
 
-    if policy == "min_gpu":
+    if policy == SelectionPolicy.MIN_GPU:
         ranked = sorted(pool, key=lambda c: (c.total_gpus, -c.throughput))
         return ranked[: max(1, min(top_k, len(ranked)))]
 
@@ -74,7 +74,7 @@ def _time_cost(c: "EvaluatedCandidate") -> float:
 
 def normalize_candidates(
     candidates: List["EvaluatedCandidate"],
-    mode: NormalizationMode = "grid",
+    mode: NormalizationMode = NormalizationMode.GRID,
 ) -> None:
     """Populate throughput_score and power_score in [0,1] (higher=better).
 
@@ -86,7 +86,7 @@ def normalize_candidates(
     for c in candidates:
         c.dominated = False
 
-    if mode == "frontier":
+    if mode == NormalizationMode.FRONTIER:
         for c in candidates:
             cp, ct = _power_cost(c), _time_cost(c)
             c.dominated = any(

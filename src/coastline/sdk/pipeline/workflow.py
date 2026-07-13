@@ -14,6 +14,7 @@ from coastline.sdk.pipeline.grid import GridConfig, generate_candidates, grid_co
 from coastline.sdk.pipeline.selection import (
     PRESET_WEIGHTS,
     EvaluatedCandidate,
+    NormalizationMode,
     SelectionPolicy,
     normalize_candidates,
     rank_candidates,
@@ -38,7 +39,7 @@ class GridWorkflowPipeline:
         alpha: float = 0.5,
         beta: float = 0.5,
         preset: Optional[str] = None,
-        normalization: str = "grid",
+        normalization: str = NormalizationMode.GRID.value,
         runtime_guard_k: Optional[float] = None,
     ):
         self.throughput_predictor = throughput_predictor
@@ -121,7 +122,11 @@ class GridWorkflowPipeline:
             alpha=alpha,
             beta=beta,
             preset=preset,
-            normalization=normalization if normalization is not None else strategy_cfg.get("normalization", "grid"),
+            normalization=(
+                normalization
+                if normalization is not None
+                else strategy_cfg.get("normalization", NormalizationMode.GRID.value)
+            ),
             runtime_guard_k=runtime_guard_k if runtime_guard_k is not None else strategy_cfg.get("runtime_guard_k"),
         )
 
@@ -215,7 +220,7 @@ class GridWorkflowPipeline:
 
     def _to_recommendation(self, row: EvaluatedCandidate, rank: int) -> Recommendation:
         # min_gpu has no score -> inverse-GPU proxy for ordering; other policies use combined_score.
-        score = 1.0 / max(row.total_gpus, 1) if self.selection_policy == "min_gpu" else row.combined_score
+        score = 1.0 / max(row.total_gpus, 1) if self.selection_policy == SelectionPolicy.MIN_GPU else row.combined_score
         metadata = {
             "predicted_power_watts": row.power,
             "combined_score": score,
