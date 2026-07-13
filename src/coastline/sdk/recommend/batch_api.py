@@ -10,6 +10,7 @@ from typing import Any, Optional, Union
 
 import pandas as pd
 
+from coastline.sdk.io import schema
 from coastline.sdk.policies import normalize_predictor
 from coastline.sdk.recommend import engine
 from coastline.sdk.recommend._goals import goal_to_label
@@ -55,24 +56,9 @@ _INT_COLUMNS = ("tokens_per_sample", "batch_size", "dataset_size", "epochs", "ma
 # present (in the row or as a batch kwarg) and emit a failed row otherwise.
 _REQUIRED_COLUMNS = ("model", "gpu_model", "tokens_per_sample", "batch_size")
 
-# Recommendation fields/metadata -> output column. Predictions mirror kavier's naming
-# spirit (``throughput_tok_s`` / ``runtime_s`` / ``energy_wh``).
-_OUTPUT_COLUMNS = (
-    "rank",
-    "total_gpus",
-    "gpus_per_node",
-    "number_of_nodes",
-    "batch_size",
-    "throughput_tok_s",
-    "runtime_s",
-    "energy_wh",
-    "energy_kwh",
-    "tokens_per_watt",
-    "power_w",
-    "feasible",
-    "error",
-    "rationale",
-)
+# The batch output columns are the canonical recommendation schema (kavier-style names:
+# throughput_tok_s / runtime_s / energy_wh). One home: sdk/io/schema.OUTPUT_COLUMNS.
+_OUTPUT_COLUMNS = schema.OUTPUT_COLUMNS
 
 def _drop_missing(row: dict[str, Any]) -> dict[str, Any]:
     """Drop NaN/None/blank cells so ``.get(key)`` means 'absent'."""
