@@ -6,8 +6,7 @@ must reproduce them byte-for-byte (behavior-preserving).
 
 from __future__ import annotations
 
-from coastline.sdk.recommend import engine
-from coastline.sdk.recommend import _goals
+from coastline.sdk.recommend import _goals, engine
 
 # The literal tables as they stood before consolidation (independent oracle).
 _EXPECTED_ENGINE_GOALS = {

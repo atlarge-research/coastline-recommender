@@ -40,10 +40,11 @@ _ROWS = [
 
 
 def test_tuned_xgboost_is_served_by_the_xgboost_predictor(tmp_path):
+    from coastline.sdk.predictors.performance.data_driven.xgboost_predictor import XGBoostPredictor
+
     from coastline.sdk.models.context import SystemContext
     from coastline.sdk.models.workload import WorkloadSpec
     from coastline.sdk.predictors.performance.data_driven.tune import tune
-    from coastline.sdk.predictors.performance.data_driven.xgboost_predictor import XGBoostPredictor
 
     data_csv = tmp_path / "runs.csv"
     pd.DataFrame(_ROWS).to_csv(data_csv, index=False)
