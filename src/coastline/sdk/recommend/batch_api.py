@@ -12,7 +12,7 @@ import pandas as pd
 
 from coastline.sdk.policies import list_predictor_names
 from coastline.sdk.recommend import engine
-from coastline.sdk.recommend._goals import normalize_goal
+from coastline.sdk.recommend._goals import goal_to_label
 
 Batch = Union[pd.DataFrame, list, dict]
 
@@ -74,15 +74,6 @@ _OUTPUT_COLUMNS = (
     "rationale",
 )
 
-# Canonical goal (from the shared vocabulary) → the engine's GOALS label.
-_GOAL_TO_ENGINE_LABEL = {
-    "balanced": "Multi-objective balanced",
-    "performance": "Multi-objective lowest runtime",
-    "energy": "Multi-objective energy-saver",
-    "min_gpu": "Fewest GPUs that fit",
-}
-
-
 def _drop_missing(row: dict[str, Any]) -> dict[str, Any]:
     """Drop NaN/None/blank cells so ``.get(key)`` means 'absent'."""
     out: dict[str, Any] = {}
@@ -126,7 +117,7 @@ def _resolve_goal(value: Any) -> str:
     """Map a goal column/kwarg to an engine GOALS label, via the shared goal vocabulary."""
     if value in engine.GOALS:  # already a full engine label
         return value
-    return _GOAL_TO_ENGINE_LABEL[normalize_goal(value)]
+    return goal_to_label(value)
 
 
 # Accepted throughput-predictor spellings (specials + trained models + the physics aliases).

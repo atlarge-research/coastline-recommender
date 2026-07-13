@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Optional
 from coastline.sdk.models.context import SystemContext
 from coastline.sdk.models.recommendation import Recommendation
 from coastline.sdk.models.workload import WorkloadSpec
+from coastline.sdk.recommend import _goals
 
 if TYPE_CHECKING:  # avoid importing the heavy policies package at module load
     from coastline.sdk.policies.base import BaseStrategy
@@ -33,13 +34,9 @@ FALLBACK_TOKENS = [512, 1024, 2048, 4096, 8192]
 FALLBACK_BATCH_SIZES = [1, 2, 4, 8, 16, 32, 64, 128]
 GPU_BUDGETS = (1, 2, 4, 8, 16, 32, 64, 128, 256)
 
-# Optimisation goal -> (strategy_name, preset).
-GOALS: dict[str, tuple[str, Optional[str]]] = {
-    "Multi-objective balanced": ("multi_objective", "balanced"),
-    "Multi-objective lowest runtime": ("multi_objective", "performance"),
-    "Multi-objective energy-saver": ("multi_objective", "energy"),
-    "Fewest GPUs that fit": ("min_gpu", None),
-}
+# Optimisation goal (display label) -> (strategy_name, preset). Derived from the single
+# objective vocabulary in `_goals`; the REPL enumerates these keys as menu choices.
+GOALS: dict[str, tuple[str, Optional[str]]] = _goals.engine_goals()
 
 # Top-level performance-predictor choices for the UI. "ml" is a sentinel that
 # opens the trained-ML submenu (ML_MODELS); the rest are engine predictor keys.
@@ -289,23 +286,16 @@ def runtime_energy(rec: Recommendation, total_tokens: int) -> tuple[Optional[flo
     return runtime, energy
 
 
-# Goal -> a short phrase for the recommendation rationale.
-_GOAL_RATIONALE = {
-    "balanced": "the best throughput-vs-energy balance",
-    "performance": "the highest throughput",
-    "energy": "the lowest energy",
-    "min_gpu": "the fewest GPUs that fit",
-}
-
-
 def recommendation_rationale(recs: list[Recommendation], meta: dict[str, Any]) -> str:
     """One-line rationale for the top recommendation vs runner-up."""
     if not recs:
         return "No feasible configuration in the search space."
     top = recs[0]
+    # The phrase keys off the preset (balanced/performance/energy) or, for min_gpu, the
+    # strategy name — both are canonical goals in the single `_goals` vocabulary.
     goal = (
-        _GOAL_RATIONALE.get(meta.get("preset"))
-        or _GOAL_RATIONALE.get(meta.get("strategy_name"))
+        _goals.rationale_phrase(meta.get("preset"))
+        or _goals.rationale_phrase(meta.get("strategy_name"))
         or "the best throughput/energy trade-off"
     )
     plural = "s" if top.total_gpus != 1 else ""
