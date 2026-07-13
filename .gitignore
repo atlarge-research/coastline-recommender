@@ -50,3 +50,6 @@ demo/
 
 # stray copies of the private measured-runs dataset — the canonical copy lives in the gitignored demo/ above
 /baseline_*.csv
+
+# Agent/workflow worktrees + local Claude state
+.claude/

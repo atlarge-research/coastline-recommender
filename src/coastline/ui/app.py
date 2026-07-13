@@ -189,12 +189,6 @@ class ImportCSVRequest(BaseModel):
     )
 
 
-def _estimate_energy_kwh(power_watts: Optional[float], runtime_seconds: Optional[float]) -> Optional[float]:
-    if power_watts is None or runtime_seconds is None or power_watts <= 0 or runtime_seconds <= 0:
-        return None
-    return (power_watts * runtime_seconds) / 3_600_000.0
-
-
 _kavier_predictor: Any = None
 # Guards the lazy init of _kavier_predictor. The queue/import endpoints run in
 # FastAPI's threadpool, so concurrent first calls could otherwise each construct a
@@ -296,38 +290,22 @@ def _kavier_predict(
 
 
 def _serialize_candidate(rank: int, rec: Any, total_tokens: int = 0) -> dict[str, Any]:
-    power_watts = rec.metadata.get("predicted_power_watts")  # per-GPU
-    throughput = float(rec.predicted_throughput) if rec.predicted_throughput else None
-    total_gpus = rec.total_gpus or 1
-
-    # Total training time: derive from throughput over the job's total tokens (the
-    # facade/engine convention, so the web /api/recommend and `coastline.recommend`
-    # report the SAME runtime), falling back to a predictor-provided runtime. (Kavier
-    # reports per-step time only, so without this the time/energy/cost columns blank.)
-    if throughput and throughput > 0 and total_tokens > 0:
-        runtime_seconds = total_tokens / throughput
-    elif rec.predicted_runtime_seconds:
-        runtime_seconds = float(rec.predicted_runtime_seconds)
-    else:
-        runtime_seconds = None
-
-    # Energy over the whole cluster: per-GPU power across all GPUs for the full run.
-    cluster_power = float(power_watts) * total_gpus if power_watts is not None else None
-    energy_kwh = _estimate_energy_kwh(cluster_power, runtime_seconds)
-
+    """The web-response shape over the shared flattener (runtime/energy via the same
+    engine.runtime_energy the facade/CLI use, so every door reports identical numbers)."""
+    f = engine.flatten_recommendation(rec, total_tokens)
     return {
         "rank": rank,
-        "gpus_per_node": rec.gpus_per_node,
-        "workers": rec.number_of_nodes,
-        "number_of_nodes": rec.number_of_nodes,
-        "total_gpus": rec.total_gpus,
-        "batch_size": rec.metadata.get("batch_size"),
-        "predicted_throughput": throughput,
-        "predicted_runtime_seconds": runtime_seconds,
-        "power_watts": float(power_watts) if power_watts is not None else None,
-        "energy_kwh": energy_kwh,
-        "tokens_per_watt": rec.metadata.get("tokens_per_watt"),
-        "score": rec.metadata.get("combined_score"),
+        "gpus_per_node": f["gpus_per_node"],
+        "workers": f["number_of_nodes"],
+        "number_of_nodes": f["number_of_nodes"],
+        "total_gpus": f["total_gpus"],
+        "batch_size": f["batch_size"],
+        "predicted_throughput": f["throughput"],
+        "predicted_runtime_seconds": f["runtime_s"],
+        "power_watts": f["power_w"],
+        "energy_kwh": f["energy_kwh"],
+        "tokens_per_watt": f["tokens_per_watt"],
+        "score": f["combined_score"],
     }
 
 
