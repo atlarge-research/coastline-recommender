@@ -36,15 +36,15 @@ print(results[0])                                      # best-ranked Recommendat
 df = coastline.recommend(batch_df, predictor="kavier", goal="balanced", max_gpus=8)  # batch → DataFrame
 ```
 
-One `coastline` command (six subcommands) plus the dashboard:
+One `coastline` command (three subcommands) plus the dashboard:
 
 ```bash
-coastline recommend --config config.yaml --input workloads.csv --output recs.csv  # batch CSV → CSV
-coastline run --config config/coastline_functionality/config.yaml                 # → recommendation.json
-coastline recommend-trace --input trace.csv --output enriched.csv                    # annotate a trace
-coastline plot-trace --input enriched.csv --output timeline.pdf                   # visualise ([plot] extra)
-coastline interactive                                                            # guided REPL
-coastline-ui                                                                     # FastAPI dashboard :8000
+coastline recommend-job --interactive                                               # guided REPL
+coastline recommend-job --config config/coastline_functionality/default.yaml        # one job → recommendation.json
+coastline recommend-job --config config.yaml --input workloads.csv --output recs.csv # batch CSV → CSV
+coastline recommend-trace --input trace.csv --output enriched.csv --visual           # annotate + plot a trace
+coastline utils tune --data runs.csv --model tabpfn                                  # tune | trace-to-runs | plot-trace
+coastline-ui                                                                        # FastAPI dashboard :8000
 ```
 
 Run the full API tour with `uv run python docs/usage.py` (reproduced in the

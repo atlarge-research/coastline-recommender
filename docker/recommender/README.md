@@ -5,7 +5,7 @@ recommendations for any experiment at run time. Separate from the top-level `../
 (which is a lean, general recommender with no baked data).
 
 - **Build step** — on the dataset you pass in:
-  1. trains Coastline's ML models — `coastline tune` → `tabpfn.pkl` (in-context) **and** `xgboost.pkl`
+  1. trains Coastline's ML models — `coastline utils tune` → `tabpfn.pkl` (in-context) **and** `xgboost.pkl`
      (the best non-ICL model),
   2. calibrates Kavier, Coastline's physics dependency (`kavier calibrate` → `calibration.json`),
   3. wires the same dataset as Coastline's recommendation lookup/source.
@@ -100,9 +100,9 @@ docker run --rm -v "$PWD/out:/out" coastline-trained \
 
 | Path (in image) | Produced by | Used for |
 |---|---|---|
-| `/data/profiling-dataset/raw_trace.csv` | `coastline trace-to-runs` | recommendation lookup source (`DATA_DIR`) |
-| `/data/profiling-dataset/curated_trace.csv` | `coastline trace-to-runs` | selectable options |
+| `/data/profiling-dataset/raw_trace.csv` | `coastline utils trace-to-runs` | recommendation lookup source (`DATA_DIR`) |
+| `/data/profiling-dataset/curated_trace.csv` | `coastline utils trace-to-runs` | selectable options |
 | `/data/calibration.json` | `kavier calibrate` | Kavier calibration (`KAVIER_CALIBRATION`) |
-| `/models/custom/tabpfn.pkl` | `coastline tune --model tabpfn` | in-context ML predictor (`--method tabpfn`) |
-| `/models/custom/xgboost.pkl` | `coastline tune --model xgboost` | best non-ICL ML predictor (`--method xgboost`) |
+| `/models/custom/tabpfn.pkl` | `coastline utils tune --model tabpfn` | in-context ML predictor (`--method tabpfn`) |
+| `/models/custom/xgboost.pkl` | `coastline utils tune --model xgboost` | best non-ICL ML predictor (`--method xgboost`) |
 | `/data/dataset.csv` | the build parameter | default experiment (original trace schema) |

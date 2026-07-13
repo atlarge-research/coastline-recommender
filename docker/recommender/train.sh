@@ -4,8 +4,8 @@
 #   Usage: train.sh <dataset_csv> <workdir>
 #
 # Runs the three BUILD-step operations on the embedded dataset:
-#   1. trace -> flat measured-runs CSV      (coastline trace-to-runs -> run_database.csv)
-#   2. train Coastline's ML model            (coastline tune --model tabpfn -> tabpfn.pkl)
+#   1. trace -> flat measured-runs CSV      (coastline utils trace-to-runs -> run_database.csv)
+#   2. train Coastline's ML model            (coastline utils tune --model tabpfn -> tabpfn.pkl)
 #   3. calibrate Kavier on the same dataset  (kavier calibrate -> calibration.json)
 #
 # Steps 2 and 3 are best-effort on a thin dataset: `tune` warns (<20 rows) but still writes an
@@ -39,13 +39,13 @@ PY
 }
 
 echo "==> [1/4] trace -> flat measured-runs schema"
-coastline trace-to-runs --input "$DATASET" --output "$RUNS"
+coastline utils trace-to-runs --input "$DATASET" --output "$RUNS"
 
 echo "==> [2/4] train the in-context ML model (tabpfn) on the dataset"
-coastline tune --data "$RUNS" --model tabpfn --train-percentage 1.0 --output "$TABPFN"
+coastline utils tune --data "$RUNS" --model tabpfn --train-percentage 1.0 --output "$TABPFN"
 
 echo "==> [3/4] train the best non-ICL ML model (xgboost) on the dataset"
-coastline tune --data "$RUNS" --model xgboost --train-percentage 1.0 --output "$XGBOOST"
+coastline utils tune --data "$RUNS" --model xgboost --train-percentage 1.0 --output "$XGBOOST"
 
 echo "==> [4/4] calibrate Kavier on the dataset (best-effort)"
 MODELS="$(python -c "import pandas as pd; print(','.join(pd.read_csv('$RUNS')['model_name'].dropna().astype(str).unique()))")"

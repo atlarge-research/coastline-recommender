@@ -28,7 +28,7 @@ keywords = [
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
-    # The interactive `coastline interactive` REPL drives the terminal via termios/tty,
+    # The interactive `coastline recommend-job --interactive` REPL drives the terminal via termios/tty,
     # so the distribution is POSIX-first; the one-shot subcommands run anywhere.
     "Operating System :: POSIX",
     "Programming Language :: Python :: 3.13",
@@ -75,7 +75,7 @@ ml = [
 # DEPRECATED no-op: ado-autoconf moved into the core dependencies (ships by default).
 # Kept so `pip install "coastline-recommender[autoconf]"` keeps working.
 autoconf = []
-# Plotting: needed by `coastline plot-trace`. matplotlib is imported lazily inside
+# Plotting: needed by `coastline utils plot-trace`. matplotlib is imported lazily inside
 # the plot functions so the core stays importable without it.
 plot = ["matplotlib>=3.5"]
 

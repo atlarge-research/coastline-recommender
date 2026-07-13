@@ -1,7 +1,7 @@
 # Coastline batch recommender — config for: config + input CSV -> output CSV.
 #
-#   coastline recommend --config config/batch_config.yaml \
-#                       --input docs/workloads.csv --output recommendations.csv
+#   coastline recommend-job --config config/batch_config.yaml \
+#                           --input docs/workloads.csv --output recommendations.csv
 #
 # or from Python:  coastline.recommend_csv(config, input_csv, output_csv)
 

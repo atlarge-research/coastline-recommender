@@ -68,7 +68,7 @@ mkdir -p "$OUTDIR"
 # baked into the image at build time.
 if [[ -n "$DATASET" ]]; then
     LOOKUP="$OUTDIR/lookup.csv"
-    coastline trace-to-runs --input "$DATASET" --output "$LOOKUP"
+    coastline utils trace-to-runs --input "$DATASET" --output "$LOOKUP"
 else
     LOOKUP="$DEFAULT_LOOKUP"
 fi

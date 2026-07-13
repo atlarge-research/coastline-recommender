@@ -19,8 +19,8 @@ uv run --all-extras pytest dev/benchmark/tests   # dev benchmark tests (own invo
 uv run --all-extras pytest -m ml_isolated -p no:cacheprovider   # native-ML predictor tests (own process)
 uv run --project dev/ado_plugin pytest dev/ado_plugin           # ado experiment-plugin tests (needs IBM's ado core)
 uv run ruff check . / uv run ruff format . / uv run mypy        # lint / format / typecheck
-uv run coastline run --config config/coastline_functionality/config.yaml   # config-driven engine run
-uv run coastline interactive                     # interactive guided recommender (terminal REPL)
+uv run coastline recommend-job --config config/coastline_functionality/default.yaml   # config-driven engine run
+uv run coastline recommend-job --interactive     # interactive guided recommender (terminal REPL)
 uv run coastline-ui                              # FastAPI dashboard on http://127.0.0.1:8000
 uv run python docs/usage.py                      # runnable API tour
 PYTHONPATH=dev uv run python -m benchmark.recommendation_quality   # recommendation quality vs the ground-truth trace
@@ -42,7 +42,7 @@ One installable package, `src/coastline` (uv-native, `build-backend = "uv_build"
 
 | Layer | Role |
 |---|---|
-| `coastline.cli` | The single `coastline` dispatcher: `recommend` / `run` / `recommend-trace` / `plot-trace` / `tune` / `interactive` |
+| `coastline.cli` | The single `coastline` dispatcher, three verbs: `recommend-job` (`--interactive` \| `--config` \| `--input/--output` CSV) / `recommend-trace` / `utils` (`tune` \| `trace-to-runs` \| `plot-trace`). Each verb is a thin adapter over the SDK. |
 | `coastline.ui` | FastAPI dashboard + REST (`coastline-ui`) — wizard UI, background prediction worker + queue |
 | `coastline.sdk` | The engine, import-light: `recommend` (facade + batch) · `pipeline` · `predictors` · `policies` · `models` · `library` · `trace` · `io` |
 
@@ -82,7 +82,7 @@ FastAPI app (`ui/app.py`) serving the wizard UI + REST. Long predictions run thr
 
 - **AutoConf (`ado-autoconf`) is a core dependency — it ships by default.** The bare PyPI name `autoconf` is an UNRELATED package. The `[autoconf]` extra still exists as a deprecated empty no-op for backward compat. In stripped environments without it the recommender **refuses by default**; `COASTLINE_ALLOW_RULES_FALLBACK=1` degrades to divisibility-only feasibility (no OOM check). Use `feasibility: rules` if you genuinely don't want the OOM check.
 - **`scikit-learn` is pinned to exactly `1.7.2`** to match the serialized model pickles (no version skew). **`pandas` is pinned `<3`** (pandas 3 breaks xgboost 3.1.3 feature-name checks; ado-autoconf also pins `<3`). Do not loosen these casually.
-- **The parametric ML models ship in the wheel; the large ones do not.** Artifacts are named plainly (`tabpfn.pkl`, `catboost.pkl`, …; the legacy `performance_<stem>_featv3.pkl` spelling still resolves). `models/coastline-bundled/` holds all 10 shipped models as real files (tabpfn + random_forest via Git LFS); the five parametric ones (catboost, xgboost, lightgbm, bayesian_ridge, deep_learning) are additionally bundled under `src/coastline/sdk/predictors/performance/data_driven/portfolio/` so they ship in the wheel + Docker. `models/custom/` holds user-tuned artifacts (`coastline tune` writes there). Resolution precedence: `custom/` > `coastline-bundled/` > flat `PORTFOLIO_DIR` > packaged portfolio. The default Kavier physics path needs no pickles.
+- **The parametric ML models ship in the wheel; the large ones do not.** Artifacts are named plainly (`tabpfn.pkl`, `catboost.pkl`, …; the legacy `performance_<stem>_featv3.pkl` spelling still resolves). `models/coastline-bundled/` holds all 10 shipped models as real files (tabpfn + random_forest via Git LFS); the five parametric ones (catboost, xgboost, lightgbm, bayesian_ridge, deep_learning) are additionally bundled under `src/coastline/sdk/predictors/performance/data_driven/portfolio/` so they ship in the wheel + Docker. `models/custom/` holds user-tuned artifacts (`coastline utils tune` writes there). Resolution precedence: `custom/` > `coastline-bundled/` > flat `PORTFOLIO_DIR` > packaged portfolio. The default Kavier physics path needs no pickles.
 - **Kavier is a real PyPI dependency** (`kavier>=0.5,<0.6`), not vendored. Coastline imports its public API — the top-level `kavier.training` verb plus `kavier.sdk.{library,io,training}` engines. For Kavier development use an editable sibling checkout: `uv pip install -e ../kavier`. The benchmark calibration tooling reads `../kavier/src/...` directly.
 - **Dev superproject layout.** Some tooling assumes coastline sits beside optional siblings: `../kavier` (source), `../ado` (ADO autoconf source for `dev/ado_plugin/`). None of this applies to wheel installs.
 - The `coastline` package's `__init__.py` reassigns its module class so `coastline(throughput_estim=...)` is callable and returns a configured `Coastline` — that's why `import coastline; coastline(...)` works.
@@ -90,10 +90,12 @@ FastAPI app (`ui/app.py`) serving the wizard UI + REST. Long predictions run thr
 ## Entry points at a glance
 
 - `import coastline` — Python facade (`sdk/recommend/facade.py`): single workloads or batch DataFrames, in-process. `coastline.recommend(batch)` → DataFrame; `coastline(...).recommend(workload)` → `list[Recommendation]`.
-- `coastline recommend` / `coastline.recommend_csv()` — production batch CSV→CSV with config-declared safeguards.
-- `coastline run --config …` — config-driven engine run → JSON to stdout (write an artifact via `--output-dir` or `OUTPUT_DIR`).
-- `coastline recommend-trace` / `coastline plot-trace` — add Coastline predictions to a fine-tuning trace CSV, then visualise ([plot] extra).
+- `coastline recommend-job` — the one job verb, three modes: `--interactive` (guided REPL), `--config …` (one declared job → `recommendation.json`/stdout; artifact via `--output-dir`/`OUTPUT_DIR`), and `--config … --input workloads.csv --output recs.csv` (batch CSV→CSV, = `coastline.recommend_csv()`, config-declared safeguards).
+- `coastline recommend-trace` — add Coastline predictions to a fine-tuning trace CSV (`--visual` also renders the cluster timeline; [plot] extra).
+- `coastline utils` — `tune` (train a predictor, [ml]) / `trace-to-runs` (trace → flat measured-runs) / `plot-trace` (visualise a recommended trace, [plot]).
 - `coastline-ui` — the FastAPI dashboard.
+
+Every door (facade / CLI / UI) routes through the single `sdk/recommend/engine.py` seam (`RecommendRequest` → `run_request`); every CSV shape resolves through the one canonical schema (`sdk/io/schema.py`) + format adapters (`sdk/io/adapters/`: `coastline` identity, `ibm_trace`).
 
 ## Documentation (`docs/`)
 

@@ -15,7 +15,7 @@
 #         --build-context kavier=../kavier \
 #         --build-arg DATASET_CSV=demo/baseline_15_baseline_shrink12_0805_0806.csv \
 #         -t coastline-trained .
-#   1. trains Coastline's ML model on the dataset          (coastline tune -> tabpfn.pkl)
+#   1. trains Coastline's ML model on the dataset          (coastline utils tune -> tabpfn.pkl)
 #   2. calibrates Kavier (the physics dependency)          (kavier calibrate -> calibration.json)
 #   3. wires the dataset as the recommendation lookup      ($DATA_DIR/profiling-dataset/raw_trace.csv)
 #
