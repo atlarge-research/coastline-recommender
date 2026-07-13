@@ -53,6 +53,23 @@ class Preset(str, Enum):
     PERFORMANCE_FRONTIER = "performance-frontier"
 
 
+class SelectionPolicy(str, Enum):
+    """How the winning candidate is chosen: ``min_gpu`` = fewest feasible GPUs; the rest rank on
+    the weighted throughput↔energy score."""
+
+    MIN_GPU = "min_gpu"
+    PERFORMANCE = "performance"
+    ENERGY = "energy"
+    BALANCED = "balanced"
+
+
+class NormalizationMode(str, Enum):
+    """Score-normalization set: over all feasible candidates (``grid``) or the non-dominated frontier."""
+
+    GRID = "grid"
+    FRONTIER = "frontier"
+
+
 # α (power weight), β (throughput weight) per base preset. The -frontier variants are derived
 # (same weights, different normalization) rather than re-listed.
 _BASE_PRESET_WEIGHTS: dict[str, tuple[float, float]] = {
@@ -63,6 +80,17 @@ _BASE_PRESET_WEIGHTS: dict[str, tuple[float, float]] = {
 PRESET_WEIGHTS: dict[str, tuple[float, float]] = {
     **{p.value: w for p, w in _BASE_PRESET_WEIGHTS.items()},
     **{f"{p.value}-frontier": w for p, w in _BASE_PRESET_WEIGHTS.items()},
+}
+
+# Base preset -> ranking policy; the -frontier variants map to the same policy (derived).
+_BASE_PRESET_TO_POLICY: dict[str, "SelectionPolicy"] = {
+    Preset.ENERGY: SelectionPolicy.ENERGY,
+    Preset.BALANCED: SelectionPolicy.BALANCED,
+    Preset.PERFORMANCE: SelectionPolicy.PERFORMANCE,
+}
+PRESET_TO_POLICY: dict[str, "SelectionPolicy"] = {
+    **{p.value: pol for p, pol in _BASE_PRESET_TO_POLICY.items()},
+    **{f"{p.value}-frontier": pol for p, pol in _BASE_PRESET_TO_POLICY.items()},
 }
 
 
