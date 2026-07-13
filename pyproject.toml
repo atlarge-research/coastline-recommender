@@ -150,9 +150,6 @@ select = ["E", "F", "W", "I"]
 ignore = []
 
 [tool.ruff.lint.per-file-ignores]
-# The HTML report builder embeds template whitespace inside string literals — the
-# trailing spaces are intentional markup, not code style.
-"src/coastline/sdk/io/interface/html_visualizer.py" = ["W291", "W293"]
 # Data-driven ML predictors + trainer carry long feature/spec lines (feature lists,
 # label maps, calibration constants) where wrapping hurts readability; and dev tooling
 # is not part of the shipped surface. Line-length stays enforced everywhere else.

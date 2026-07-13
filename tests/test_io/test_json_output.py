@@ -17,7 +17,6 @@ Self-contained: synthetic Recommendations -> tmp_path, no data/model artifacts.
 import json
 
 from coastline.sdk.io.interface.json_output import (
-    save_batch_recommendations,
     save_recommendation_to_json,
 )
 from coastline.sdk.models.recommendation import Recommendation
@@ -131,50 +130,3 @@ def test_single_rationale_present_iff_truthy(tmp_path):
     out_default = tmp_path / "no_why.json"
     save_recommendation_to_json(_make_rec(), out_default)  # rationale defaults to None
     assert "rationale" not in _read(out_default)
-
-
-def test_batch_rank_is_one_indexed_in_input_order(tmp_path):
-    """Ranking invariant: N recs -> ranks exactly 1..N (one-indexed, no gaps) in
-    the order given. Distinct strategies s0,s1,s2 pin that the enumerate order is
-    preserved rather than reordered, and that rank starts at 1 not 0."""
-    out = tmp_path / "batch.json"
-    save_batch_recommendations([_make_rec(strategy=f"s{i}") for i in range(3)], out)
-    data = _read(out)
-    entries = data["recommendations"]
-    assert data["count"] == 3  # count == len(input)
-    assert [e["rank"] for e in entries] == [1, 2, 3]
-    assert [e["strategy"] for e in entries] == ["s0", "s1", "s2"]
-
-
-def test_batch_entry_flattens_config_and_gates_energy_per_entry(tmp_path):
-    """Each batch entry flattens config/perf into a flat dict (workers <-
-    number_of_nodes rename again), and the energy fields are gated PER ENTRY on
-    that entry's own power. Distinct values (12,4,3,999,500,1.5) catch a swap;
-    the second entry (no power) must lack power_watts/efficiency."""
-    with_e = _make_rec(
-        gpus_per_node=4,
-        number_of_nodes=3,
-        total_gpus=12,
-        strategy="multi_objective",
-        predicted_throughput=999.0,
-        metadata={"predicted_power_watts": 500.0, "tokens_per_watt": 1.5},
-    )
-    without_e = _make_rec(strategy="no-energy", metadata={})
-    out = tmp_path / "batch.json"
-    save_batch_recommendations([with_e, without_e], out)
-    e0, e1 = _read(out)["recommendations"]
-    # workers is number_of_nodes(=3), not gpus_per_node(=4)
-    assert (e0["total_gpus"], e0["gpus_per_node"], e0["workers"]) == (12, 4, 3)
-    assert e0["throughput"] == 999.0
-    assert e0["power_watts"] == 500.0 and e0["efficiency"] == 1.5
-    assert "power_watts" not in e1 and "efficiency" not in e1
-
-
-def test_batch_empty_list_yields_zero_count_and_no_entries(tmp_path):
-    """Boundary: empty input -> count 0 and an empty (not missing) list, so the
-    count == len(recommendations) invariant holds at N=0."""
-    out = tmp_path / "batch.json"
-    save_batch_recommendations([], out)
-    data = _read(out)
-    assert data["count"] == 0
-    assert data["recommendations"] == []

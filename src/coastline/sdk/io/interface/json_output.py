@@ -3,7 +3,7 @@
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any, List, Optional, Union
+from typing import Any, Optional, Union
 
 from coastline.sdk.models.recommendation import Recommendation, round_floats_for_display
 
@@ -57,28 +57,3 @@ def save_recommendation_to_json(
     Path(filepath).parent.mkdir(parents=True, exist_ok=True)
     with open(filepath, "w") as f:
         json.dump(data, f, indent=2)
-
-
-def save_batch_recommendations(recommendations: List[Recommendation], filepath: Union[str, Path]) -> None:
-    """Save multiple ranked recommendations to a JSON file."""
-    data = {"timestamp": datetime.now().isoformat(), "count": len(recommendations), "recommendations": []}
-
-    for i, rec in enumerate(recommendations, 1):
-        rec_data = {
-            "rank": i,
-            "total_gpus": rec.total_gpus,
-            "gpus_per_node": rec.gpus_per_node,
-            "workers": rec.number_of_nodes,
-            "strategy": rec.strategy,
-            "throughput": rec.predicted_throughput,
-        }
-
-        if rec.metadata.get("predicted_power_watts") is not None:  # presence, not truthiness (0.0 W is valid)
-            rec_data["power_watts"] = rec.metadata["predicted_power_watts"]
-            rec_data["efficiency"] = rec.metadata.get("tokens_per_watt", 0)
-
-        data["recommendations"].append(rec_data)
-
-    Path(filepath).parent.mkdir(parents=True, exist_ok=True)
-    with open(filepath, "w") as f:
-        json.dump(round_floats_for_display(data), f, indent=2)  # presentation-only float rounding
