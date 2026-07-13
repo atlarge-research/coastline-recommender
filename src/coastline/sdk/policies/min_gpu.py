@@ -3,6 +3,7 @@
 import logging
 from typing import Optional
 
+from coastline.sdk.constants import SelectionPolicy, Strategy
 from coastline.sdk.models.context import SystemContext
 from coastline.sdk.models.recommendation import Recommendation
 from coastline.sdk.models.workload import WorkloadSpec
@@ -30,8 +31,8 @@ class MinGPUStrategy(BaseStrategy):
         else:
             self._pipeline = GridWorkflowPipeline.from_config(
                 config=config or {},
-                selection_policy="min_gpu",
-                strategy_name="min_gpu",
+                selection_policy=SelectionPolicy.MIN_GPU.value,
+                strategy_name=Strategy.MIN_GPU.value,
                 throughput_predictor=throughput_predictor,
                 power_predictor=power_predictor,
             )
@@ -45,4 +46,4 @@ class MinGPUStrategy(BaseStrategy):
         return self._pipeline.recommend(workload, context)
 
     def get_name(self) -> str:
-        return "min_gpu"
+        return Strategy.MIN_GPU.value

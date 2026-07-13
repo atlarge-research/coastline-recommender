@@ -3,7 +3,7 @@
 import logging
 from typing import List, Optional
 
-from coastline.sdk.constants import PRESET_TO_POLICY, PRESET_WEIGHTS, Preset
+from coastline.sdk.constants import PRESET_TO_POLICY, PRESET_WEIGHTS, Preset, Strategy
 from coastline.sdk.models.context import SystemContext
 from coastline.sdk.models.recommendation import Recommendation
 from coastline.sdk.models.workload import WorkloadSpec
@@ -90,7 +90,7 @@ class MultiObjectiveStrategy(BaseStrategy):
         )
 
     def get_name(self) -> str:
-        return f"multi_objective_{self.preset}"
+        return f"{Strategy.MULTI_OBJECTIVE.value}_{self.preset}"
 
     def recommend(
         self,
