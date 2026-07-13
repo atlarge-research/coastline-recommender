@@ -1,0 +1,18 @@
+# The built-in recommendation-policy default — the ONE source every surface (CLI, facade/API,
+# UI) falls back to when no config file is found. Ships inside the wheel. The user-facing,
+# editable copy is config/coastline_functionality/experiment.yaml (which may also declare a
+# `workload:` block for `recommend-job --config` single-job mode); this bundled fallback is
+# policy-only. Keep the two in sync.
+strategy:
+  name: "multi_objective"
+  preset: "balanced"
+
+predictors:
+  performance: "intelligent"
+  energy: "kavier_power"
+  feasibility: "autoconf"
+
+grid:
+  batch_sizes: [4, 8, 16, 32, 64]
+  total_gpus: [1, 2, 4, 8, 16, 32]
+  top_k: 5

@@ -127,7 +127,7 @@ class TestValidNewStyleConfig:
         # grid (spec literals), NOT a read-back of _DEFAULT_STRATEGY_CONFIG — pinning
         # the literals keeps this independent of the very constant the loader copies.
         assert cfg["grid"]["batch_sizes"] == [4, 8, 16, 32, 64]
-        assert cfg["grid"]["total_gpus"] == [1, 2, 4, 8, 16]
+        assert cfg["grid"]["total_gpus"] == [1, 2, 4, 8, 16, 32]
 
     def test_non_dict_section_replaces_default_wholesale(self, tmp_path):
         """If a recognised section is not a dict, it replaces the default as-is.

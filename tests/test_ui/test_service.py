@@ -37,9 +37,9 @@ _KAVIER_BODY = {
     "total_gpus": 8,
 }
 
-# Env vars that override the strategy-config search path; cleared so tests are
+# The env var that overrides the strategy-config search path; cleared so tests are
 # deterministic regardless of the caller's shell environment.
-_STRATEGY_ENV_KEYS = ("STRATEGY_CONFIG", "EXPERIMENT_CONFIG", "CONFIG_FILE")
+_STRATEGY_ENV_KEYS = ("EXPERIMENT_CONFIG",)
 
 
 @pytest.fixture(scope="module")
@@ -453,10 +453,10 @@ def test_load_strategy_config_uses_repo_experiment_yaml(clean_strategy_env):
 
 
 def test_load_strategy_config_env_var_takes_precedence(tmp_path, monkeypatch, clean_strategy_env):
-    """An explicit STRATEGY_CONFIG path overrides the repo config files."""
+    """An explicit EXPERIMENT_CONFIG path overrides the repo config files."""
     custom = tmp_path / "custom.yaml"
     custom.write_text("strategy:\n  name: min_gpu\n  preset: energy\n", encoding="utf-8")
-    monkeypatch.setenv("STRATEGY_CONFIG", str(custom))
+    monkeypatch.setenv("EXPERIMENT_CONFIG", str(custom))
 
     config = _load_strategy_config()
     assert config["strategy"]["name"] == "min_gpu"

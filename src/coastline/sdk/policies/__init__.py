@@ -8,6 +8,7 @@ from typing import Optional, Union
 
 import yaml
 
+from coastline.sdk.io.run_config import builtin_default_config
 from coastline.sdk.pipeline.feasibility import create_feasibility_checker
 from coastline.sdk.pipeline.workflow import GridWorkflowPipeline
 from coastline.sdk.policies.base import BaseStrategy
@@ -29,20 +30,9 @@ logger = logging.getLogger(__name__)
 # The coastline repo root (src/coastline/sdk/policies/ -> parents[4]); holds config/.
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 
-# Fallback when no config path given and no YAML found on disk.
-_BUILTIN_DEFAULT_CONFIG: dict = {
-    "strategy": {"name": "multi_objective", "preset": "balanced"},
-    "predictors": {
-        "performance": "intelligent",
-        "energy": "kavier_power",
-        "feasibility": "autoconf",
-    },
-    "grid": {
-        "batch_sizes": [4, 8, 16, 32, 64],
-        "total_gpus": [1, 2, 4, 8, 16, 32],
-        "top_k": 5,
-    },
-}
+# Fallback when no config path given and no YAML found on disk — the one built-in default,
+# sourced from the bundled default_experiment.yaml (not a second hardcoded copy).
+_BUILTIN_DEFAULT_CONFIG: dict = builtin_default_config()
 
 
 class PolicyFactory:
