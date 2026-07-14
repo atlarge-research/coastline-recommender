@@ -198,7 +198,7 @@ def simulate_fifo(jobs: List[QueueJob], n_gpus_cluster: int) -> SimulationResult
     # n_gpus_cluster GPUs is one node holding them all (any job up to the total fits).
     result = cluster_schedule(
         rows,
-        policy="distributed-fcfs",
+        policy="fcfs",
         num_nodes=1,
         node_gpus=n_gpus_cluster,
         oversized="drop",
