@@ -130,9 +130,12 @@ The `predictors:` block selects one [simulation model](5_simulation_models.md) p
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `performance` | String | no | `intelligent` (default), `kavier`, `cache`, or a trained model name (`tabpfn`, `catboost`, ...). |
+| `fallback` | String | no | For `intelligent`: the model a cache miss simulates with — `kavier` (default), or any trained model name. |
 | `energy` | String | no | `kavier_power` (default). |
 | `feasibility` | String | no | `autoconf` (default, OOM-aware; see the [feasibility checker](6_feasibility_checker.md)) or `rules` (divisibility only). |
 | `lookup` | String | no | Measured-runs DB for `cache`/`intelligent`: a CSV path, or `default` for the bundled `run_database.csv`. |
+| `lookup_throughput_col` | String | no | Column a cache hit reads as throughput (default `dataset_tokens_per_second`). |
+| `lookup_runtime_col` | String | no | Column a cache hit reads as duration (default `train_runtime`). |
 
 ### 2.4 grid { #config-grid }
 

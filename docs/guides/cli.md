@@ -70,7 +70,8 @@ coastline recommend-job --config config.yaml
       preset: "balanced"        # throughput-vs-energy weighting
 
     predictors:
-      performance: "intelligent"   # ML with Kavier fallback; alt: kavier, cache, or model name
+      performance: "intelligent"   # exact cache hit else the `fallback` model; alt: kavier, cache, or model name
+      fallback: "kavier"           # model a cache miss simulates with (kavier | catboost | ...)
       energy: "kavier_power"       # analytical power model
       feasibility: "autoconf"      # OOM-aware AutoConf checker
       lookup: "default"            # measured-runs DB for cache/intelligent: a CSV path, or

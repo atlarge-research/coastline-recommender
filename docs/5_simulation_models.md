@@ -48,7 +48,7 @@ To predict performance and ensure compatibility with the modular software archit
 
 *Symbols (Kavier, ID=2): $t_s$ = step time; $P_a$, $P_t$ = active, trainable parameters; $B$ = batch size; $S$ = sequence length; $G_n$ = GPUs per node; $F$ = GPU peak FLOP/s; $\eta$ = MFU; $B_m$ = memory bandwidth; $t_c$ = network overhead.*
 
-The default, `intelligent`, composes models 1 and 2: [cache](#cache-lookup), then [Kavier](#kavier).
+The default, `intelligent`, composes models 1 and 2: [cache](#cache-lookup), then a fallback simulation model — [Kavier](#kavier) by default, or any trained model set with `predictors.fallback`.
 
 ### 1.1 The intelligent mode of operation { #the-intelligent-mode-of-operation }
 
@@ -57,7 +57,7 @@ We identify, propose, and implement an *"intelligent mode of operation"* for Coa
 The intelligent mode of operation follows a strategy whereby the system first queries the database for previous measurements:
 
 - *if entry available in the database:* retrieve, in O(1) time complexity, the present entry (or an aggregated function of multiple entries, if more are present) to the user. Each entry is a previously monitored scenario in which a user of the system deployed a workload on the infrastructure, and the system automatically monitored metrics such as throughput, per-step runtime, and energy consumption. The cycle of (1) deploy, (2) monitor, (3) store metadata creates a snowball effect where the database grows with the usage of the tool.
-- *else (if entry not available in the database):* the [Kavier](#kavier) analytical model makes the prediction.
+- *else (if entry not available in the database):* the fallback simulation model makes the prediction — the [Kavier](#kavier) analytical model by default, or any trained model chosen with `predictors.fallback`.
 
 ### 1.2 Cache lookup { #cache-lookup }
 
