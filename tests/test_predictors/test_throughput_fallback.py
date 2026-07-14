@@ -152,6 +152,16 @@ def test_lookup_column_keys_thread_through_the_policy_factory(tmp_path):
     assert out is not None and out.predicted_throughput == pytest.approx(3131.0)
 
 
+def test_lookup_missing_named_column_raises_clear_error(tmp_path):
+    # A typo'd lookup_throughput_col / lookup_runtime_col (the named column is absent from the
+    # CSV) must fail loudly, naming the missing column — not surface as an opaque KeyError deeper
+    # in indexing. The CSV here has the DEFAULT columns but not "tps"/"dur".
+    csv = tmp_path / "wrong_cols.csv"
+    pd.DataFrame([_cache_row(batch_size=8, throughput=100.0, runtime=60.0)]).to_csv(csv, index=False)
+    with pytest.raises(ValueError, match="tps"):
+        RetrievalPredictor(dataset_path=csv, throughput_col="tps", runtime_col="dur")
+
+
 @pytest.mark.parametrize(
     "name, expected_cls",
     [

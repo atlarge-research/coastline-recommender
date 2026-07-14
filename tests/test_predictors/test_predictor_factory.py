@@ -84,6 +84,19 @@ class TestThroughputPredictorFactory:
         assert type(custom._fallback).__name__ == "SklearnPortfolioPredictor"  # miss -> the ML model
         assert custom._fallback.get_name() == "xgboost"
 
+    @pytest.mark.parametrize("bad_fallback", ["intelligent", "cache", "totally-bogus"])
+    def test_intelligent_fallback_guard_degrades_to_kavier(self, bad_fallback):
+        # A `fallback` that names a caching predictor ("intelligent"/"cache") or an unknown model
+        # must NOT nest another cache or recurse — it degrades to Kavier. Pins the
+        # _resolve_simulation_predictor guard so a future refactor that re-routes unknown names
+        # (e.g. back through throughput_predictor) can't reintroduce infinite recursion.
+        predictor = PolicyFactory.throughput_predictor(
+            {"performance": "intelligent", "fallback": bad_fallback}
+        )
+        assert isinstance(predictor, CacheThenSimulatePredictor)
+        assert isinstance(predictor._fallback, KavierPredictor)
+        assert not isinstance(predictor._fallback, CacheThenSimulatePredictor)
+
     @pytest.mark.parametrize("name", ["xgboost", "catboost"])
     def test_named_ml_model_routes_to_its_own_predictor(self, name):
         # Oracle = the documented model catalog (CLAUDE.md lists catboost/xgboost/…).
