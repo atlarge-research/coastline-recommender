@@ -1,8 +1,8 @@
 """Phase-5 unification: both recommend surfaces share one goal/predictor vocabulary.
 
 ``coastline.recommend(batch, ...) -> DataFrame`` and ``Coastline(...).recommend(wl, ...) -> objects``
-now take the same ``goal`` and ``predictor`` words, accept the same workload-alias keys, and reject
-the same typos.
+now take the same ``goal`` and ``predictor`` words, accept the same WorkloadSpec field-name keys,
+and reject the same typos.
 """
 
 from __future__ import annotations
@@ -13,10 +13,10 @@ import pytest
 import coastline
 from coastline.sdk.recommend.facade import Coastline
 
-# A minimal in-library workload in the shared alias spelling that BOTH surfaces now accept.
+# A minimal in-library workload in the WorkloadSpec field-name spelling that BOTH surfaces accept.
 _WL = {
-    "model": "mistral-7b-v0.1",
-    "method": "lora",
+    "llm_model": "mistral-7b-v0.1",
+    "fine_tuning_method": "lora",
     "gpu_model": "NVIDIA-A100-SXM4-80GB",
     "tokens_per_sample": 1024,
     "batch_size": 32,
@@ -61,10 +61,10 @@ def test_goal_is_pure_sugar_for_explicit_strategy_preset(goal, strategy, preset)
     assert by_goal and by_goal == by_explicit
 
 
-def test_both_surfaces_accept_the_same_workload_alias_keys():
-    # The friendly spelling {model, method, gpu_model, ...} must work on BOTH surfaces (the facade
-    # dict path used to reject it, requiring llm_model/fine_tuning_method). Oracle: a feasible pick
-    # comes back from alias-keyed input on each surface.
+def test_both_surfaces_accept_the_workloadspec_field_names():
+    # The one field-name vocabulary {llm_model, fine_tuning_method, gpu_model, ...} must work on
+    # BOTH surfaces — synonyms are gone, so field names are the only accepted spelling. Oracle: a
+    # feasible pick comes back from field-name-keyed input on each surface.
     frame = coastline.recommend([dict(_WL)], goal="balanced", predictor="kavier", feasibility="rules")
     objs = _facade().recommend(dict(_WL), goal="balanced")
     assert bool(frame.iloc[0]["feasible"]) and objs

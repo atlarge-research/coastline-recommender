@@ -17,7 +17,7 @@ import yaml
 
 from coastline.sdk.recommend.batch_csv import recommend_csv
 
-CANONICAL_HEADER = ["model_name", "method", "gpu_model", "tokens_per_sample", "batch_size"]
+CANONICAL_HEADER = ["llm_model", "fine_tuning_method", "gpu_model", "tokens_per_sample", "batch_size"]
 
 
 def _write_csv(path, header, rows):
@@ -74,7 +74,7 @@ def test_one_output_row_per_input_row_with_input_echoed(tmp_path):
     # Cardinality contract: exactly one output row per input row (no drop, no fan-out).
     assert len(rows) == 2
     # Input columns are echoed back verbatim, in order, alongside the recommendation.
-    assert [r["model_name"] for r in rows] == ["mistral-7b-v0.1", "mistral-7b-v0.1"]
+    assert [r["llm_model"] for r in rows] == ["mistral-7b-v0.1", "mistral-7b-v0.1"]
     assert [r["tokens_per_sample"] for r in rows] == ["1024", "2048"]
     # Node layout is internally consistent: total = gpus_per_node * number_of_nodes.
     for r in rows:
@@ -162,36 +162,20 @@ def test_per_gpu_power_within_a100_sxm4_envelope(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# Column-aliasing contracts (a mapping bug => WorkloadSpec invalid => feasible=False).
+# Column-mapping contracts (a mapping bug => WorkloadSpec invalid => feasible=False).
 # --------------------------------------------------------------------------- #
-def test_alias_headers_map_to_workload_fields(tmp_path):
-    # llm_model/peft/gpu/seq_len/batch are canonical aliases for
-    # llm_model/fine_tuning_method/gpu_model/tokens_per_sample/batch_size. If ANY alias
-    # were unmapped the WorkloadSpec would be missing a required field -> feasible=False.
-    # With the guard off the same workload the canonical headers produce (1 GPU) must
-    # come back, proving every alias resolved.
-    _, rows = _run_batch(
-        tmp_path,
-        _guardless_config(),
-        ["llm_model", "peft", "gpu", "seq_len", "batch"],
-        [["mistral-7b-v0.1", "lora", "NVIDIA-A100-SXM4-80GB", 1024, 16]],
-    )
-    assert len(rows) == 1
-    assert rows[0]["feasible"] == "True"
-    assert int(rows[0]["recommended_total_gpus"]) == 1  # matches canonical-header run
-
-
 def test_custom_column_override_maps_headers(tmp_path):
-    # input.columns overlays extra spellings onto the default alias map; here
-    # the_model->llm_model and the_gpu->gpu_model, while method/tokens_per_sample/
-    # batch_size keep their canonical spellings. If the override were ignored, the_model/
-    # the_gpu would not resolve and the row would be feasible=False.
+    # The default column map is the ONE field-name vocabulary (column == WorkloadSpec
+    # field). input.columns overlays extra spellings onto that map; here
+    # the_model->llm_model and the_gpu->gpu_model, while fine_tuning_method/
+    # tokens_per_sample/batch_size keep their field-name spellings. If the override were
+    # ignored, the_model/the_gpu would not resolve and the row would be feasible=False.
     cfg = _guardless_config()
     cfg["input"] = {"columns": {"the_model": "llm_model", "the_gpu": "gpu_model"}}
     _, rows = _run_batch(
         tmp_path,
         cfg,
-        ["the_model", "method", "the_gpu", "tokens_per_sample", "batch_size"],
+        ["the_model", "fine_tuning_method", "the_gpu", "tokens_per_sample", "batch_size"],
         [["mistral-7b-v0.1", "lora", "NVIDIA-A100-SXM4-80GB", 1024, 16]],
     )
     assert len(rows) == 1
@@ -218,7 +202,7 @@ def test_infeasible_row_marked_false_and_retained_with_blanks(tmp_path):
     )
     assert len(rows) == 1  # retained, not dropped
     r = rows[0]
-    assert r["model_name"] == "mistral-7b-v0.1"  # input still echoed
+    assert r["llm_model"] == "mistral-7b-v0.1"  # input still echoed
     assert r["feasible"] == "False"
     assert r["recommended_total_gpus"] == ""
     assert r["predicted_throughput"] == ""

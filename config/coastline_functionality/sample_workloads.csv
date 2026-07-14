@@ -1,4 +1,4 @@
-model_name,method,gpu_model,tokens_per_sample,batch_size
+llm_model,fine_tuning_method,gpu_model,tokens_per_sample,batch_size
 mistral-7b-v0.1,lora,NVIDIA-A100-SXM4-80GB,1024,16
 granite-3.3-8b,full,NVIDIA-A100-SXM4-80GB,4096,4
 granite-3.1-2b,lora,NVIDIA-A100-SXM4-80GB,1024,16

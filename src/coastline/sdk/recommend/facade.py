@@ -13,7 +13,6 @@ from coastline.sdk.constants import (
     EnergyBackend,
     FeasibilityMode,
 )
-from coastline.sdk.models.aliases import col_to_field_map
 from coastline.sdk.models.context import SystemContext
 from coastline.sdk.models.recommendation import Recommendation
 from coastline.sdk.models.workload import WorkloadSpec
@@ -23,23 +22,17 @@ from coastline.sdk.recommend._goals import goal_to_strategy_preset
 
 WorkloadInput = Union[WorkloadSpec, dict, str, Path]
 
-# CSV column -> WorkloadSpec field. The canonical alias map (shared with the batch CSV
-# recommender) covers the trace convention (model_name / number_gpus / ...) plus the
-# flexible spellings (model / llm_model / gpu / ...).
-_CSV_COLUMNS = col_to_field_map()
+# The one input vocabulary: WorkloadSpec field names. A dict or CSV supplies columns by
+# field name (llm_model / fine_tuning_method / gpu_model / ...); no synonyms.
+_WORKLOAD_FIELDS = set(WorkloadSpec.model_fields)
 
 
 def _coerce_workload(workload: WorkloadInput) -> WorkloadSpec:
     if isinstance(workload, WorkloadSpec):
         return workload
     if isinstance(workload, dict):
-        # Accept both WorkloadSpec field names and the shared column aliases (model/gpu/…), so a
-        # dict works the same here as in coastline.recommend(batch).
-        fields = {}
-        for key, value in workload.items():
-            field = key if key in WorkloadSpec.model_fields else _CSV_COLUMNS.get(key)
-            if field is not None:
-                fields[field] = value
+        # Keys are WorkloadSpec field names (the one vocabulary), same as coastline.recommend(batch).
+        fields = {key: value for key, value in workload.items() if key in _WORKLOAD_FIELDS}
         return WorkloadSpec(**fields)
     if isinstance(workload, (str, Path)):
         return _workload_from_csv(workload)
@@ -47,17 +40,16 @@ def _coerce_workload(workload: WorkloadInput) -> WorkloadSpec:
 
 
 def _workload_from_csv(path: WorkloadInput) -> WorkloadSpec:
-    """Build a WorkloadSpec from the first row of a trace CSV."""
+    """Build a WorkloadSpec from the first row of a CSV (columns are WorkloadSpec field names)."""
     import pandas as pd
 
     df = pd.read_csv(path)
     if df.empty:
-        raise ValueError(f"trace CSV is empty: {path}")
+        raise ValueError(f"CSV is empty: {path}")
     row = df.iloc[0]
-    fields: dict[str, Any] = {}
-    for col, field in _CSV_COLUMNS.items():
-        if col in df.columns and pd.notna(row[col]):
-            fields[field] = row[col]
+    fields: dict[str, Any] = {
+        field: row[field] for field in _WORKLOAD_FIELDS if field in df.columns and pd.notna(row[field])
+    }
     for f in ("tokens_per_sample", "batch_size", "gpus_per_node", "number_of_nodes"):
         if f in fields:
             fields[f] = int(fields[f])

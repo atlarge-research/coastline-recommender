@@ -13,7 +13,6 @@ import yaml
 
 from coastline.sdk.exceptions import RecommenderSystemError
 from coastline.sdk.io.infrastructure import resolve_cluster_caps
-from coastline.sdk.models.aliases import col_to_field_map
 from coastline.sdk.models.context import SystemContext
 from coastline.sdk.models.workload import WorkloadSpec
 from coastline.sdk.recommend import engine
@@ -93,9 +92,9 @@ def _load_config(path) -> dict[str, Any]:
 
 
 def _column_map(config: dict[str, Any]) -> dict[str, str]:
-    """CSV-column -> WorkloadSpec-field, from the canonical aliases plus any
-    ``input.columns`` override in the config."""
-    mapping = col_to_field_map()
+    """CSV-column -> WorkloadSpec-field. Columns ARE the field names (the one vocabulary);
+    an ``input.columns`` override in the config remaps a non-standard CSV explicitly."""
+    mapping = {field: field for field in WorkloadSpec.model_fields}
     mapping.update((config.get("input") or {}).get("columns", {}))
     return mapping
 
