@@ -117,12 +117,6 @@ Issues = "https://github.com/atlarge-research/coastline-recommender/issues"
 # for kavier, so override autogluon's stale cap to let the lock resolve.
 override-dependencies = ["pyarrow>=23.0.1"]
 
-# Dev: source Kavier from the editable sibling checkout so Coastline consumes the local
-# cluster simulator (kavier.sdk.cluster, added in kavier 0.5.1) before it is published to
-# PyPI. The published pin above (kavier>=0.5,<0.6) stays the wheel's real constraint.
-[tool.uv.sources]
-kavier = { path = "../kavier", editable = true }
-
 # ------------------------------------------------------------------
 #  Build backend
 # ------------------------------------------------------------------

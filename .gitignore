@@ -53,3 +53,6 @@ demo/
 
 # Agent/workflow worktrees + local Claude state
 .claude/
+
+# Local-only pre-trained recommender image bundle (kept off the public repo)
+docker/recommender/

@@ -10,6 +10,12 @@ from pathlib import Path
 
 import pandas as pd
 
+from coastline.sdk.constants import (
+    DEFAULT_BATCH_SIZES,
+    DEFAULT_TOKENS_PER_SAMPLE,
+    Method,
+)
+
 
 def _default_options_path() -> Path:
     """Curated options CSV under the repo's trace-archive, overridable via DATA_DIR."""
@@ -57,10 +63,10 @@ def get_fallback_options() -> dict[str, list]:
             "mistral-7b-v0.1",
             "mixtral-8x7b-instruct-v0.1",
         ],
-        "methods": ["full", "gptq-lora", "lora"],
+        "methods": sorted(m.value for m in Method),
         "gpus": ["L40S", "NVIDIA-A100-80GB-PCIe", "NVIDIA-A100-SXM4-80GB"],
-        "tokens_per_sample": [512, 1024, 2048, 4096, 8192],
-        "batch_sizes": [1, 2, 4, 8, 16, 32, 64, 128],
+        "tokens_per_sample": list(DEFAULT_TOKENS_PER_SAMPLE),
+        "batch_sizes": list(DEFAULT_BATCH_SIZES),
     }
 
 

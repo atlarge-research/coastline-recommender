@@ -31,9 +31,7 @@ from .generic_trainer import (
 )
 
 # Artifact key sets shared by several models (the four metric keys every model stores).
-_METRIC_KEYS = frozenset(
-    {"test_metrics", "val_metrics", "test_metrics_by_target", "val_metrics_by_target"}
-)
+_METRIC_KEYS = frozenset({"test_metrics", "val_metrics", "test_metrics_by_target", "val_metrics_by_target"})
 _BASE_LABEL = _METRIC_KEYS | {"model", "encoders", "cat_features", "num_features"}
 _BASE_RAW = _METRIC_KEYS | {"model", "cat_features", "num_features"}
 
@@ -208,7 +206,9 @@ def _fit_knn(d: TrainData) -> Fitted:
     )
 
 
-def _tune_catboost_head(target_idx, target_name, param_combinations, cat_feature_indices, X_train, X_val, yl_train, yl_val):
+def _tune_catboost_head(
+    target_idx, target_name, param_combinations, cat_feature_indices, X_train, X_val, yl_train, yl_val
+):
     """Grid-search a single-target CatBoost head; select by validation MAE (log space)."""
     from catboost import CatBoostRegressor
 

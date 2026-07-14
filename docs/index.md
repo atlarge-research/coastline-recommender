@@ -3,6 +3,9 @@
 Coastline is the first scientific instrument for context-, policy-, and objective-aware recommendations of LLM
 fine-tuning workloads.
 
+!!! note
+    The documentation is currently under construction. 
+
 ## Features
 
 [//]: # (TODO: Update links)
@@ -37,7 +40,7 @@ pip install coastline-recommender
 In this documentation, you will learn how to install, configure, and use Coastline.
 In this documentation you will find:
 
-1. [Getting started](2_getting-started.md) — install Coastline and make your first recommendation.
+1. Getting started — install Coastline and make your first recommendation.
 2. [Setting up an experiment](3_experiment.md) — the config folder, file by file.
 3. [Recommendation policies](4_recommendation_policies.md) — min-GPU and multi-objective.
 4. [Simulation models](5_simulation_models.md) — the performance, energy, and feasibility predictors.

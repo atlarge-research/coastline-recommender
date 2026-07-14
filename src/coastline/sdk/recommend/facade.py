@@ -6,7 +6,13 @@ import math
 from pathlib import Path
 from typing import Any, List, Optional, Union
 
-from coastline.sdk.models.aliases import col_to_field_map
+from coastline.sdk.constants import (
+    DEFAULT_BATCH_SIZES,
+    DEFAULT_GPUS_PER_NODE,
+    GPU_BUDGETS,
+    EnergyBackend,
+    FeasibilityMode,
+)
 from coastline.sdk.models.context import SystemContext
 from coastline.sdk.models.recommendation import Recommendation
 from coastline.sdk.models.workload import WorkloadSpec
@@ -16,26 +22,17 @@ from coastline.sdk.recommend._goals import goal_to_strategy_preset
 
 WorkloadInput = Union[WorkloadSpec, dict, str, Path]
 
-_DEFAULT_TOTAL_GPUS = [1, 2, 4, 8, 16]
-_DEFAULT_BATCH_SIZES = [4, 8, 16, 32, 64]
-
-# CSV column -> WorkloadSpec field. The canonical alias map (shared with the batch CSV
-# recommender) covers the trace convention (model_name / number_gpus / ...) plus the
-# flexible spellings (model / llm_model / gpu / ...).
-_CSV_COLUMNS = col_to_field_map()
+# The one input vocabulary: WorkloadSpec field names. A dict or CSV supplies columns by
+# field name (llm_model / fine_tuning_method / gpu_model / ...); no synonyms.
+_WORKLOAD_FIELDS = set(WorkloadSpec.model_fields)
 
 
 def _coerce_workload(workload: WorkloadInput) -> WorkloadSpec:
     if isinstance(workload, WorkloadSpec):
         return workload
     if isinstance(workload, dict):
-        # Accept both WorkloadSpec field names and the shared column aliases (model/gpu/…), so a
-        # dict works the same here as in coastline.recommend(batch).
-        fields = {}
-        for key, value in workload.items():
-            field = key if key in WorkloadSpec.model_fields else _CSV_COLUMNS.get(key)
-            if field is not None:
-                fields[field] = value
+        # Keys are WorkloadSpec field names (the one vocabulary), same as coastline.recommend(batch).
+        fields = {key: value for key, value in workload.items() if key in _WORKLOAD_FIELDS}
         return WorkloadSpec(**fields)
     if isinstance(workload, (str, Path)):
         return _workload_from_csv(workload)
@@ -43,17 +40,16 @@ def _coerce_workload(workload: WorkloadInput) -> WorkloadSpec:
 
 
 def _workload_from_csv(path: WorkloadInput) -> WorkloadSpec:
-    """Build a WorkloadSpec from the first row of a trace CSV."""
+    """Build a WorkloadSpec from the first row of a CSV (columns are WorkloadSpec field names)."""
     import pandas as pd
 
     df = pd.read_csv(path)
     if df.empty:
-        raise ValueError(f"trace CSV is empty: {path}")
+        raise ValueError(f"CSV is empty: {path}")
     row = df.iloc[0]
-    fields: dict[str, Any] = {}
-    for col, field in _CSV_COLUMNS.items():
-        if col in df.columns and pd.notna(row[col]):
-            fields[field] = row[col]
+    fields: dict[str, Any] = {
+        field: row[field] for field in _WORKLOAD_FIELDS if field in df.columns and pd.notna(row[field])
+    }
     for f in ("tokens_per_sample", "batch_size", "gpus_per_node", "number_of_nodes"):
         if f in fields:
             fields[f] = int(fields[f])
@@ -65,8 +61,8 @@ def _default_context(workload: WorkloadSpec, max_gpus: int) -> SystemContext:
     return SystemContext.for_gpus(
         [workload.gpu_model],
         max_gpus=max_gpus,
-        gpus_per_node=8,
-        max_nodes=max(1, math.ceil(max_gpus / 8)),
+        gpus_per_node=DEFAULT_GPUS_PER_NODE,
+        max_nodes=max(1, math.ceil(max_gpus / DEFAULT_GPUS_PER_NODE)),
     )
 
 
@@ -79,13 +75,10 @@ class Coastline:
         self,
         predictor: str = "kavier",
         *,
-        throughput_estim: Optional[str] = None,
-        energy: str = "kavier_power",
-        feasibility: str = "autoconf",
+        energy: str = EnergyBackend.KAVIER_POWER.value,
+        feasibility: str = FeasibilityMode.AUTOCONF.value,
     ) -> None:
-        # `predictor` is the primary spelling; `throughput_estim` is the back-compat alias.
-        chosen = throughput_estim if throughput_estim is not None else predictor
-        self.throughput_estim = normalize_predictor(chosen)
+        self.predictor = normalize_predictor(predictor)
         self.energy = energy
         self.feasibility = feasibility
 
@@ -123,13 +116,14 @@ class Coastline:
         config = {
             "strategy": {"name": strategy, "preset": preset},
             "predictors": {
-                "performance": self.throughput_estim,
+                "performance": self.predictor,
                 "energy": self.energy,
                 "feasibility": self.feasibility,
             },
             "grid": {
-                "batch_sizes": batch_sizes or _DEFAULT_BATCH_SIZES,
-                "total_gpus": total_gpus or _DEFAULT_TOTAL_GPUS,
+                # No explicit grid -> search the full menu; generate_candidates clips it to max_gpus.
+                "batch_sizes": batch_sizes or list(DEFAULT_BATCH_SIZES),
+                "total_gpus": total_gpus or list(GPU_BUDGETS),
                 "top_k": top_k,
             },
         }

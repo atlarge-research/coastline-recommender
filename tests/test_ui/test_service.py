@@ -37,9 +37,9 @@ _KAVIER_BODY = {
     "total_gpus": 8,
 }
 
-# Env vars that override the strategy-config search path; cleared so tests are
+# The env var that overrides the strategy-config search path; cleared so tests are
 # deterministic regardless of the caller's shell environment.
-_STRATEGY_ENV_KEYS = ("STRATEGY_CONFIG", "EXPERIMENT_CONFIG", "CONFIG_FILE")
+_STRATEGY_ENV_KEYS = ("EXPERIMENT_CONFIG",)
 
 
 @pytest.fixture(scope="module")
@@ -112,15 +112,15 @@ def test_batch_recommend_returns_records_with_rationale(client):
     body = {
         "workloads": [
             {
-                "model": "mistral-7b-v0.1",
-                "method": "full",
+                "llm_model": "mistral-7b-v0.1",
+                "fine_tuning_method": "full",
                 "gpu_model": "NVIDIA-A100-SXM4-80GB",
                 "tokens_per_sample": 1024,
                 "batch_size": 8,
             },
             {
-                "model": "mistral-7b-v0.1",
-                "method": "full",
+                "llm_model": "mistral-7b-v0.1",
+                "fine_tuning_method": "full",
                 "gpu_model": "NVIDIA-A100-SXM4-80GB",
                 "tokens_per_sample": 2048,
                 "batch_size": 8,
@@ -152,8 +152,8 @@ def test_batch_recommend_default_predictor_is_kavier(client):
     body_no_predictor = {
         "workloads": [
             {
-                "model": "mistral-7b-v0.1",
-                "method": "full",
+                "llm_model": "mistral-7b-v0.1",
+                "fine_tuning_method": "full",
                 "gpu_model": "NVIDIA-A100-SXM4-80GB",
                 "tokens_per_sample": 1024,
                 "batch_size": 8,
@@ -178,7 +178,10 @@ def test_batch_recommend_default_predictor_is_kavier(client):
 
 def test_csv_endpoint_default_predictor_is_kavier(client):
     """Omitting ``predictor`` from a CSV request must default to 'kavier'."""
-    csv_in = "model,method,gpu_model,tokens_per_sample,batch_size\nmistral-7b-v0.1,full,NVIDIA-A100-SXM4-80GB,1024,8\n"
+    csv_in = (
+        "llm_model,fine_tuning_method,gpu_model,tokens_per_sample,batch_size\n"
+        "mistral-7b-v0.1,full,NVIDIA-A100-SXM4-80GB,1024,8\n"
+    )
     resp_default = client.post("/api/recommend/csv", json={"csv": csv_in, "max_gpus": 8})
     resp_kavier = client.post("/api/recommend/csv", json={"csv": csv_in, "predictor": "kavier", "max_gpus": 8})
     assert resp_default.status_code == 200, resp_default.text
@@ -196,7 +199,10 @@ def test_csv_endpoint_default_predictor_is_kavier(client):
 
 
 def test_recommend_csv_endpoint_returns_csv(client):
-    csv_in = "model,method,gpu_model,tokens_per_sample,batch_size\nmistral-7b-v0.1,full,NVIDIA-A100-SXM4-80GB,1024,8\n"
+    csv_in = (
+        "llm_model,fine_tuning_method,gpu_model,tokens_per_sample,batch_size\n"
+        "mistral-7b-v0.1,full,NVIDIA-A100-SXM4-80GB,1024,8\n"
+    )
     resp = client.post("/api/recommend/csv", json={"csv": csv_in, "predictor": "kavier", "max_gpus": 8})
     assert resp.status_code == 200, resp.text
     payload = resp.json()
@@ -206,7 +212,7 @@ def test_recommend_csv_endpoint_returns_csv(client):
 
 
 def test_recommend_csv_endpoint_empty_is_400(client):
-    resp = client.post("/api/recommend/csv", json={"csv": "model,method\n"})  # header only
+    resp = client.post("/api/recommend/csv", json={"csv": "llm_model,fine_tuning_method\n"})  # header only
     assert resp.status_code == 400
 
 
@@ -229,8 +235,8 @@ def test_async_job_submit_and_poll(client):
     body = {
         "workloads": [
             {
-                "model": "mistral-7b-v0.1",
-                "method": "full",
+                "llm_model": "mistral-7b-v0.1",
+                "fine_tuning_method": "full",
                 "gpu_model": "NVIDIA-A100-SXM4-80GB",
                 "tokens_per_sample": 1024,
                 "batch_size": 8,
@@ -275,8 +281,8 @@ def test_async_job_records_error_when_workload_raises(client, monkeypatch):
     body = {
         "workloads": [
             {
-                "model": "mistral-7b-v0.1",
-                "method": "full",
+                "llm_model": "mistral-7b-v0.1",
+                "fine_tuning_method": "full",
                 "gpu_model": "NVIDIA-A100-SXM4-80GB",
                 "tokens_per_sample": 1024,
                 "batch_size": 8,
@@ -308,7 +314,7 @@ def test_recommend_csv_over_row_cap_is_413(client, monkeypatch):
     """A CSV with more data rows than COASTLINE_MAX_BATCH_WORKLOADS is rejected with
     413 before any recommendation runs."""
     monkeypatch.setattr(main, "_MAX_BATCH_WORKLOADS", 3)
-    header = "model,method,gpu_model,tokens_per_sample,batch_size\n"
+    header = "llm_model,fine_tuning_method,gpu_model,tokens_per_sample,batch_size\n"
     row = "mistral-7b-v0.1,full,NVIDIA-A100-SXM4-80GB,1024,8\n"
     csv_in = header + row * 4  # 4 data rows > cap of 3
     resp = client.post("/api/recommend/csv", json={"csv": csv_in, "predictor": "kavier"})
@@ -326,7 +332,10 @@ def test_recommend_csv_value_error_is_422(client, monkeypatch):
         raise ValueError("bad batch input")
 
     monkeypatch.setattr(coastline, "recommend", _raise)
-    csv_in = "model,method,gpu_model,tokens_per_sample,batch_size\nmistral-7b-v0.1,full,NVIDIA-A100-SXM4-80GB,1024,8\n"
+    csv_in = (
+        "llm_model,fine_tuning_method,gpu_model,tokens_per_sample,batch_size\n"
+        "mistral-7b-v0.1,full,NVIDIA-A100-SXM4-80GB,1024,8\n"
+    )
     resp = client.post("/api/recommend/csv", json={"csv": csv_in, "predictor": "kavier"})
     assert resp.status_code == 422
     assert "bad batch input" in resp.json()["detail"]
@@ -336,7 +345,10 @@ def test_recommend_csv_invalid_goal_is_isolated_not_500(client):
     """An unknown goal is isolated per-row by the facade (feasible=False + the goal
     error in the row), so the endpoint returns 200 with a failed row — it does NOT
     500 or silently drop the row. This pins the documented isolation contract."""
-    csv_in = "model,method,gpu_model,tokens_per_sample,batch_size\nmistral-7b-v0.1,full,NVIDIA-A100-SXM4-80GB,1024,8\n"
+    csv_in = (
+        "llm_model,fine_tuning_method,gpu_model,tokens_per_sample,batch_size\n"
+        "mistral-7b-v0.1,full,NVIDIA-A100-SXM4-80GB,1024,8\n"
+    )
     resp = client.post(
         "/api/recommend/csv",
         json={"csv": csv_in, "predictor": "kavier", "goal": "no-such-goal"},
@@ -358,8 +370,8 @@ def test_recommend_batch_over_workload_cap_is_422(client):
     """More than COASTLINE_MAX_BATCH_WORKLOADS (default 200) workloads trips the
     pydantic max_length on the request body -> 422 (never reaching the recommender)."""
     one = {
-        "model": "mistral-7b-v0.1",
-        "method": "full",
+        "llm_model": "mistral-7b-v0.1",
+        "fine_tuning_method": "full",
         "gpu_model": "NVIDIA-A100-SXM4-80GB",
         "tokens_per_sample": 1024,
         "batch_size": 8,
@@ -453,10 +465,10 @@ def test_load_strategy_config_uses_repo_experiment_yaml(clean_strategy_env):
 
 
 def test_load_strategy_config_env_var_takes_precedence(tmp_path, monkeypatch, clean_strategy_env):
-    """An explicit STRATEGY_CONFIG path overrides the repo config files."""
+    """An explicit EXPERIMENT_CONFIG path overrides the repo config files."""
     custom = tmp_path / "custom.yaml"
     custom.write_text("strategy:\n  name: min_gpu\n  preset: energy\n", encoding="utf-8")
-    monkeypatch.setenv("STRATEGY_CONFIG", str(custom))
+    monkeypatch.setenv("EXPERIMENT_CONFIG", str(custom))
 
     config = _load_strategy_config()
     assert config["strategy"]["name"] == "min_gpu"

@@ -199,6 +199,7 @@ def _fit_tabpfn(
     cat_features: list[str],
     num_features: list[str],
     step: Any,
+    ckpt: Optional[str] = None,
 ) -> tuple[dict[str, Any], dict[str, float], float, str]:
     """Two single-output TabPFN regressors (one per target); featv3 object-array input."""
     try:
@@ -216,11 +217,22 @@ def _fit_tabpfn(
     except ImportError:
         device = "cpu"
 
-    # v2 weights are the only redistributable ones — see dev/trainer/train_performance_tabpfn.py.
-    def make_regressor():
-        return TabPFNRegressor.create_default_for_version(
-            ModelVersion.V2, device=device, ignore_pretraining_limits=True
-        )
+    if ckpt is not None:
+        # A local checkpoint may embed non-v2 (research-only) weights into the saved pickle —
+        # fine for your own custom/ model; do NOT use it to regenerate the *bundled* tabpfn.pkl.
+        ckpt_path = Path(ckpt).expanduser()
+        if not ckpt_path.exists():
+            raise ValueError(f"--ckpt path does not exist: {ckpt_path}")
+        step(f"using local TabPFN checkpoint: {ckpt_path}")
+
+        def make_regressor():
+            return TabPFNRegressor(model_path=str(ckpt_path), device=device, ignore_pretraining_limits=True)
+    else:
+        # v2 weights are the only redistributable ones — see dev/trainer/train_performance_tabpfn.py.
+        def make_regressor():
+            return TabPFNRegressor.create_default_for_version(
+                ModelVersion.V2, device=device, ignore_pretraining_limits=True
+            )
 
     X_train_arr = _as_model_input(X_train, num_features)
     t0 = time.perf_counter()
@@ -353,6 +365,7 @@ def tune(
     *,
     model: str = "tabpfn",
     train_percentage: float = 1.0,
+    ckpt: Optional[str] = None,
     output: Optional[str] = None,
     seed: int = 42,
     on_step: Optional[Any] = None,
@@ -362,7 +375,8 @@ def tune(
     ``model`` is ``"tabpfn"`` (in-context, single-output-per-target) or ``"xgboost"`` (a multi-output
     gradient-boosted model — the best non-ICL portfolio model). ``train_percentage=1.0`` uses every
     valid row (no holdout); below 1.0 the rest becomes a test split and MdAPE for both targets is
-    reported. ``on_step`` (a ``str -> None`` callable, e.g. ``print``) receives live progress lines.
+    reported. ``ckpt`` is an optional path to a local TabPFN checkpoint (skips the network download).
+    ``on_step`` (a ``str -> None`` callable, e.g. ``print``) receives live progress lines.
     """
     step = on_step or logger.info
     if model not in TUNABLE_MODELS:
@@ -389,7 +403,7 @@ def tune(
 
     if model == "tabpfn":
         artifacts, metrics, fit_seconds, device = _fit_tabpfn(
-            X_train, X_test, ylog_train, y_test, cat_features, num_features, step
+            X_train, X_test, ylog_train, y_test, cat_features, num_features, step, ckpt=ckpt
         )
     else:  # xgboost
         artifacts, metrics, fit_seconds, device = _fit_xgboost(

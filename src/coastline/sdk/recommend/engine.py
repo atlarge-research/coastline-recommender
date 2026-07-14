@@ -6,6 +6,13 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
 
+from coastline.sdk.constants import (
+    DEFAULT_BATCH_SIZES,
+    DEFAULT_GPUS_PER_NODE,
+    DEFAULT_TOKENS_PER_SAMPLE,
+    GPU_BUDGETS,
+    Method,
+)
 from coastline.sdk.models.context import SystemContext
 from coastline.sdk.models.recommendation import Recommendation
 from coastline.sdk.models.workload import WorkloadSpec
@@ -28,11 +35,10 @@ FALLBACK_MODELS = [
     "mistral-7b-v0.1",
     "mixtral-8x7b-instruct-v0.1",
 ]
-FALLBACK_METHODS = ["full", "lora", "gptq-lora", "qlora"]
+FALLBACK_METHODS = [m.value for m in Method]
 FALLBACK_GPUS = ["NVIDIA-A100-SXM4-80GB", "NVIDIA-A100-80GB-PCIe", "L40S"]
-FALLBACK_TOKENS = [512, 1024, 2048, 4096, 8192]
-FALLBACK_BATCH_SIZES = [1, 2, 4, 8, 16, 32, 64, 128]
-GPU_BUDGETS = (1, 2, 4, 8, 16, 32, 64, 128, 256)
+FALLBACK_TOKENS = DEFAULT_TOKENS_PER_SAMPLE
+FALLBACK_BATCH_SIZES = DEFAULT_BATCH_SIZES
 
 # Optimisation goal (display label) -> (strategy_name, preset). Derived from the single
 # objective vocabulary in `_goals`; the REPL enumerates these keys as menu choices.
@@ -152,14 +158,16 @@ def build_workload(answers: dict[str, Any]) -> WorkloadSpec:
         gpu_model=answers["gpu_model"],
         tokens_per_sample=int(answers["tokens_per_sample"]),
         batch_size=int(answers["batch_size"]),
-        gpus_per_node=min(8, answers["max_gpus"]),
+        gpus_per_node=min(DEFAULT_GPUS_PER_NODE, answers["max_gpus"]),
         number_of_nodes=1,
     )
 
 
 def build_context(answers: dict[str, Any]) -> SystemContext:
     max_gpus = int(answers["max_gpus"])
-    return SystemContext.for_gpus([answers["gpu_model"]], max_gpus=max_gpus, gpus_per_node=min(8, max_gpus))
+    return SystemContext.for_gpus(
+        [answers["gpu_model"]], max_gpus=max_gpus, gpus_per_node=min(DEFAULT_GPUS_PER_NODE, max_gpus)
+    )
 
 
 @dataclass
@@ -235,9 +243,7 @@ def execute_strategy(
 
 def run_request(request: RecommendRequest) -> tuple[list[Recommendation], dict[str, Any]]:
     """The single workflow: build the strategy, run it, return (recs, meta)."""
-    strategy = build_strategy(
-        request.config, request.strategy_name, request.preset, request.alpha, request.beta
-    )
+    strategy = build_strategy(request.config, request.strategy_name, request.preset, request.alpha, request.beta)
     return execute_strategy(
         strategy,
         request.workload,

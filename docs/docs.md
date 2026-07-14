@@ -40,7 +40,7 @@ Recommend a configuration for a single workload, in Python:
 ```python
 import coastline
 
-rec = coastline(throughput_estim="kavier")
+rec = coastline(predictor="kavier")
 results = rec({"llm_model": "mistral-7b-v0.1", "fine_tuning_method": "lora",
                "gpu_model": "NVIDIA-A100-SXM4-80GB", "tokens_per_sample": 1024, "batch_size": 32},
               total_gpus=[1, 2, 4, 8], preset="balanced")
@@ -63,7 +63,7 @@ Recommend configurations for a CSV of workloads, one per row:
 
 ```text
 # workloads.csv
-model_name,method,gpu_model,tokens_per_sample,batch_size
+llm_model,fine_tuning_method,gpu_model,tokens_per_sample,batch_size
 mistral-7b-v0.1,lora,NVIDIA-A100-SXM4-80GB,1024,16
 granite-3.3-8b,full,NVIDIA-A100-SXM4-80GB,4096,4
 ```
@@ -76,7 +76,7 @@ Each row gains the recommended configuration, its predictions, and a rationale:
 
 ```text
 # recommendations.csv (excerpt)
-model_name,...,recommended_total_gpus,recommended_batch_size,predicted_throughput,predicted_power_watts,feasible,rationale
+llm_model,...,recommended_total_gpus,recommended_batch_size,predicted_throughput,predicted_power_watts,feasible,rationale
 mistral-7b-v0.1,...,8,32,37577.5,220.8,True,"8 GPUs (8×1, batch 32) picked for the best throughput-vs-energy balance, 4% faster than the runner-up (8 GPUs, batch 16)."
 ```
 

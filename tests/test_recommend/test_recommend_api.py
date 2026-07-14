@@ -23,8 +23,8 @@ from coastline.sdk.recommend import batch_api as api
 
 # A minimal workload row; the rest of the schema falls back to engine defaults.
 _ROW = {
-    "model": "mistral-7b-v0.1",
-    "method": "lora",
+    "llm_model": "mistral-7b-v0.1",
+    "fine_tuning_method": "lora",
     "gpu_model": "NVIDIA-A100-SXM4-80GB",
     "tokens_per_sample": 1024,
     "batch_size": 16,
@@ -111,19 +111,19 @@ def test_single_dict_list_and_dataframe_inputs_produce_identical_output():
 
 
 def test_omitted_optional_method_matches_explicit_default_method():
-    # Omitting an OPTIONAL knob (method) must fall back to the engine default (lora), i.e.
-    # produce the SAME recommendation as spelling that default out explicitly. This proves
-    # the default-fill is exactly the documented default, not some other value.
+    # Omitting an OPTIONAL knob (fine_tuning_method) must fall back to the engine default
+    # (lora), i.e. produce the SAME recommendation as spelling that default out explicitly.
+    # This proves the default-fill is exactly the documented default, not some other value.
     core = {
-        "model": "mistral-7b-v0.1",
+        "llm_model": "mistral-7b-v0.1",
         "gpu_model": "NVIDIA-A100-SXM4-80GB",
         "tokens_per_sample": 1024,
         "batch_size": 16,
     }
     omitted = coastline.recommend(core, predictor="kavier", max_gpus=8)
-    explicit = coastline.recommend({**core, "method": "lora"}, predictor="kavier", max_gpus=8)
+    explicit = coastline.recommend({**core, "fine_tuning_method": "lora"}, predictor="kavier", max_gpus=8)
     assert bool(omitted.iloc[0]["feasible"])
-    # Recommendation columns must match; the echoed input columns differ (one has 'method').
+    # Recommendation columns must match; the echoed input columns differ (one has the method).
     for col in ("total_gpus", "throughput_tok_s", "energy_wh", "runtime_s"):
         assert omitted.iloc[0][col] == explicit.iloc[0][col]
 
@@ -133,7 +133,7 @@ def test_missing_required_core_field_is_feasible_false_not_defaulted():
     # rest) must come back feasible=False with 'missing required field', NOT a confident
     # recommendation silently built on the engine defaults (A100 / 1024 / 32). Compare
     # against a complete row to prove the difference is the missing field, not the model.
-    only_model = coastline.recommend({"model": "mistral-7b-v0.1"}, predictor="kavier", max_gpus=8)
+    only_model = coastline.recommend({"llm_model": "mistral-7b-v0.1"}, predictor="kavier", max_gpus=8)
     assert len(only_model) == 1
     assert not bool(only_model.iloc[0]["feasible"])
     err = only_model.iloc[0]["error"]
@@ -144,7 +144,12 @@ def test_missing_required_core_field_is_feasible_false_not_defaulted():
 
     # A complete row is still feasible — the guard fires only on the ABSENT case.
     complete = coastline.recommend(
-        {"model": "mistral-7b-v0.1", "gpu_model": "NVIDIA-A100-SXM4-80GB", "tokens_per_sample": 1024, "batch_size": 16},
+        {
+            "llm_model": "mistral-7b-v0.1",
+            "gpu_model": "NVIDIA-A100-SXM4-80GB",
+            "tokens_per_sample": 1024,
+            "batch_size": 16,
+        },
         predictor="kavier",
         max_gpus=8,
     )
@@ -157,7 +162,7 @@ def test_missing_required_field_names_the_specific_absent_column(field):
     # see exactly what to supply. The expected substring is built from the field name, an
     # oracle independent of the implementation's loop order.
     full = {
-        "model": "mistral-7b-v0.1",
+        "llm_model": "mistral-7b-v0.1",
         "gpu_model": "NVIDIA-A100-SXM4-80GB",
         "tokens_per_sample": 1024,
         "batch_size": 16,
@@ -176,7 +181,7 @@ def test_blank_required_cell_counts_as_missing_not_defaulted():
     batch = pd.DataFrame(
         [
             {
-                "model": "mistral-7b-v0.1",
+                "llm_model": "mistral-7b-v0.1",
                 "gpu_model": "NVIDIA-A100-SXM4-80GB",
                 "tokens_per_sample": np.nan,
                 "batch_size": 16,
@@ -188,17 +193,26 @@ def test_blank_required_cell_counts_as_missing_not_defaulted():
     assert df.iloc[0]["error"] == "missing required field: tokens_per_sample"
 
 
-def test_alias_spellings_produce_the_same_recommendation_as_canonical():
-    # alias spellings (llm_model / peft / gpu / seq_len / batch) must resolve to the same
-    # workload as the canonical column names — identical recommendation, not merely "runs".
+def test_field_name_vocabulary_is_the_accepted_input_spelling():
+    # The ONE input vocabulary is the WorkloadSpec field names, spelled exactly. Feeding the
+    # canonical field names (llm_model / fine_tuning_method / gpu_model / tokens_per_sample /
+    # batch_size) must produce a feasible recommendation — the same one _ROW produces, since
+    # _ROW is itself expressed in that vocabulary.
     canonical = coastline.recommend(_ROW, predictor="kavier", max_gpus=8)
-    aliased = coastline.recommend(
-        {"llm_model": "mistral-7b-v0.1", "peft": "lora", "gpu": "NVIDIA-A100-SXM4-80GB", "seq_len": 1024, "batch": 16},
+    explicit = coastline.recommend(
+        {
+            "llm_model": "mistral-7b-v0.1",
+            "fine_tuning_method": "lora",
+            "gpu_model": "NVIDIA-A100-SXM4-80GB",
+            "tokens_per_sample": 1024,
+            "batch_size": 16,
+        },
         predictor="kavier",
         max_gpus=8,
     )
+    assert bool(explicit.iloc[0]["feasible"])
     for col in ("total_gpus", "throughput_tok_s", "energy_wh"):
-        assert aliased.iloc[0][col] == canonical.iloc[0][col]
+        assert explicit.iloc[0][col] == canonical.iloc[0][col]
 
 
 def test_top_k_yields_k_contiguous_ranks_over_distinct_configs():

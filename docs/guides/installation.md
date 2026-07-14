@@ -106,7 +106,7 @@ You can learn more about the Python SDK in the [reference section]().
 
 ## UI usage
 
-Once Coastline is installed, you can deploy the web interface to [localhost:8000](127.0.0.1:8000) using the command
+Once Coastline is installed, you can deploy the web interface to [localhost:8000](http://127.0.0.1:8000) using the command
 below:
 
 ```bash

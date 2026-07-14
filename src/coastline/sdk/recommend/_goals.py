@@ -26,11 +26,17 @@ class Goal:
 # The single source of truth for the objective vocabulary.
 GOAL_SPECS: tuple[Goal, ...] = (
     Goal(
-        "balanced", "Multi-objective balanced", "multi_objective", "balanced",
+        "balanced",
+        "Multi-objective balanced",
+        "multi_objective",
+        "balanced",
         "the best throughput-vs-energy balance",
     ),
     Goal(
-        "performance", "Multi-objective lowest runtime", "multi_objective", "performance",
+        "performance",
+        "Multi-objective lowest runtime",
+        "multi_objective",
+        "performance",
         "the highest throughput",
     ),
     Goal("energy", "Multi-objective energy-saver", "multi_objective", "energy", "the lowest energy"),

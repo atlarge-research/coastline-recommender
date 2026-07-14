@@ -16,26 +16,12 @@ from coastline.sdk.recommend._goals import goal_to_label
 
 Batch = Union[pd.DataFrame, list, dict]
 
-# Public column -> the accepted aliases (first spelling is canonical). A row may use
-# any alias; the engine ``answers`` key each maps to is in ``_COLUMN_TO_ANSWER``.
-_ALIASES: dict[str, tuple[str, ...]] = {
-    "model": ("model", "llm_model", "model_name"),
-    "method": ("method", "fine_tuning_method", "peft"),
-    "gpu_model": ("gpu_model", "gpu"),
-    "tokens_per_sample": ("tokens_per_sample", "seq_len", "tokens", "max_tokens"),
-    "batch_size": ("batch_size", "batch"),
-    "dataset_size": ("dataset_size", "num_samples"),
-    "epochs": ("epochs",),
-    "max_gpus": ("max_gpus", "gpu_budget"),
-    "goal": ("goal", "goal_label"),
-    "predictor": ("predictor", "throughput_estim"),
-    "lookup": ("lookup", "lookup_csv"),
-    "max_slowdown": ("max_slowdown", "runtime_guard_k"),
-}
-# Public column -> the ``engine`` answers key it fills (the engine's own schema).
+# Public batch column -> the ``engine`` answers key it fills. Workload columns ARE the
+# WorkloadSpec field names (the one vocabulary — no synonyms); the rest are batch-API-specific
+# knobs that configure the search, not the job. ``max_slowdown`` is handled separately.
 _COLUMN_TO_ANSWER = {
-    "model": "llm_model",
-    "method": "fine_tuning_method",
+    "llm_model": "llm_model",
+    "fine_tuning_method": "fine_tuning_method",
     "gpu_model": "gpu_model",
     "tokens_per_sample": "tokens_per_sample",
     "batch_size": "batch_size",
@@ -53,7 +39,7 @@ _INT_COLUMNS = ("tokens_per_sample", "batch_size", "dataset_size", "epochs", "ma
 # one must NOT silently inherit the default (mistral-7b / A100 / 1024 / 32) — that would
 # return a confident feasible=True for a workload the caller never gave. We require them
 # present (in the row or as a batch kwarg) and emit a failed row otherwise.
-_REQUIRED_COLUMNS = ("model", "gpu_model", "tokens_per_sample", "batch_size")
+_REQUIRED_COLUMNS = ("llm_model", "gpu_model", "tokens_per_sample", "batch_size")
 
 # The batch output columns (kavier-style names: throughput_tok_s / runtime_s / energy_wh).
 _OUTPUT_COLUMNS = (
@@ -72,6 +58,7 @@ _OUTPUT_COLUMNS = (
     "error",
     "rationale",
 )
+
 
 def _drop_missing(row: dict[str, Any]) -> dict[str, Any]:
     """Drop NaN/None/blank cells so ``.get(key)`` means 'absent'."""
@@ -105,11 +92,8 @@ def _normalise(batch: Batch) -> list[dict[str, Any]]:
 
 
 def _pick(row: dict[str, Any], column: str) -> Any:
-    """First present alias value for a public column, else None."""
-    for alias in _ALIASES[column]:
-        if alias in row:
-            return row[alias]
-    return None
+    """The row's value for a public column (one spelling = the column name), else None."""
+    return row.get(column)
 
 
 def _resolve_goal(value: Any) -> str:

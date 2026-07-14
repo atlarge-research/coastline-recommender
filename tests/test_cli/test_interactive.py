@@ -114,9 +114,7 @@ def test_save_writes_json_schema_mapping_the_recommendation_fields(tmp_path):
     # Efficiency is tokens/watt; derive it independently from throughput & power.
     power = rec.metadata["predicted_power_watts"]
     assert payload["energy"]["power_watts"] == round(power, 2)
-    assert payload["energy"]["efficiency_tokens_per_watt"] == pytest.approx(
-        round(rec.predicted_throughput / power, 2)
-    )
+    assert payload["energy"]["efficiency_tokens_per_watt"] == pytest.approx(round(rec.predicted_throughput / power, 2))
 
 
 def test_cli_no_interactive_with_save_writes_a_valid_config(tmp_path, monkeypatch):

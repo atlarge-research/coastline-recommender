@@ -2,17 +2,11 @@
 Unit tests for ``coastline/run_config.py``.
 
 The single public function under test is ``load_strategy_config(path)``: it loads
-an experiment YAML for the CLI and normalises it into the ``strategy`` /
-``predictors`` / ``grid`` / ``output`` shape the ``PolicyFactory`` consumes,
-including translating the *legacy* ``orchestrator:`` section into the new
-``predictors:`` section.
+an experiment YAML and normalises it into the ``strategy`` / ``predictors`` /
+``grid`` shape the ``PolicyFactory`` consumes.
 
 What is covered:
-  - loading a valid config (new-style sections pass through / shallow-merge);
-  - the legacy old -> new mapping, in particular
-    ``orchestrator.predictor: cache_first`` -> ``predictors.performance:
-    intelligent`` (plus ``physics``/``physics_driven`` -> ``kavier``,
-    ``ensemble`` -> ``intelligent``, and unknown values passed through);
+  - loading a valid config (sections pass through / shallow-merge);
   - defaults for missing/empty/non-file configs;
   - per-section shallow merge keeps untouched default keys.
 
@@ -114,12 +108,6 @@ class TestValidNewStyleConfig:
         cfg = load_strategy_config(str(path))
         assert cfg["strategy"]["name"] == "min_gpu"
 
-    def test_output_section_passes_through(self, tmp_path):
-        """The ``output`` section is one of the recognised sections and is kept."""
-        payload = {"output": {"dir": "/tmp/out", "format": "json"}}
-        cfg = load_strategy_config(_write_yaml(tmp_path, payload))
-        assert cfg["output"] == {"dir": "/tmp/out", "format": "json"}
-
     def test_strategy_partial_merge_keeps_default_preset_keys(self, tmp_path):
         """A strategy section with only ``name`` shallow-merges over the default.
 
@@ -139,7 +127,7 @@ class TestValidNewStyleConfig:
         # grid (spec literals), NOT a read-back of _DEFAULT_STRATEGY_CONFIG — pinning
         # the literals keeps this independent of the very constant the loader copies.
         assert cfg["grid"]["batch_sizes"] == [4, 8, 16, 32, 64]
-        assert cfg["grid"]["total_gpus"] == [1, 2, 4, 8, 16]
+        assert cfg["grid"]["total_gpus"] == [1, 2, 4, 8, 16, 32]
 
     def test_non_dict_section_replaces_default_wholesale(self, tmp_path):
         """If a recognised section is not a dict, it replaces the default as-is.
@@ -150,117 +138,6 @@ class TestValidNewStyleConfig:
         payload = {"grid": [1, 2, 3]}  # deliberately a list, not a dict
         cfg = load_strategy_config(_write_yaml(tmp_path, payload))
         assert cfg["grid"] == [1, 2, 3]
-
-
-# ===========================================================================
-# Legacy orchestrator: -> new predictors: translation
-# ===========================================================================
-class TestLegacyOrchestratorMapping:
-    @pytest.mark.parametrize(
-        ("predictor_value", "expected_performance"),
-        [
-            ("cache_first", "intelligent"),  # the headline mapping
-            ("physics", "kavier"),
-            ("physics_driven", "kavier"),
-            ("ensemble", "intelligent"),
-            ("intelligent", "intelligent"),  # already-new value is preserved
-        ],
-    )
-    def test_orchestrator_predictor_maps_to_performance(self, tmp_path, predictor_value, expected_performance):
-        """Legacy ``orchestrator.predictor`` is translated to ``predictors.performance``."""
-        payload = {"orchestrator": {"predictor": predictor_value}}
-        cfg = load_strategy_config(_write_yaml(tmp_path, payload))
-        assert cfg["predictors"]["performance"] == expected_performance
-
-    def test_unknown_orchestrator_predictor_passes_through(self, tmp_path):
-        """An unrecognised predictor name is passed through unchanged (no mapping)."""
-        payload = {"orchestrator": {"predictor": "some_future_model"}}
-        cfg = load_strategy_config(_write_yaml(tmp_path, payload))
-        assert cfg["predictors"]["performance"] == "some_future_model"
-
-    def test_orchestrator_without_predictor_defaults_to_intelligent(self, tmp_path):
-        """Missing ``orchestrator.predictor`` defaults performance to ``intelligent``."""
-        payload = {"orchestrator": {"energy": "kavier_power"}}
-        cfg = load_strategy_config(_write_yaml(tmp_path, payload))
-        assert cfg["predictors"]["performance"] == "intelligent"
-
-    def test_orchestrator_energy_and_feasibility_carried_over(self, tmp_path):
-        """``orchestrator.energy``/``feasibility`` populate the predictors section."""
-        payload = {
-            "orchestrator": {
-                "predictor": "cache_first",
-                "energy": "custom_energy",
-                "feasibility": "memory_aware",
-            }
-        }
-        cfg = load_strategy_config(_write_yaml(tmp_path, payload))
-        assert cfg["predictors"]["energy"] == "custom_energy"
-        assert cfg["predictors"]["feasibility"] == "memory_aware"
-
-    def test_orchestrator_missing_energy_feasibility_use_defaults(self, tmp_path):
-        """Absent orchestrator energy/feasibility fall back to documented defaults."""
-        payload = {"orchestrator": {"predictor": "physics"}}
-        cfg = load_strategy_config(_write_yaml(tmp_path, payload))
-        assert cfg["predictors"]["energy"] == "kavier_power"
-        assert cfg["predictors"]["feasibility"] == "autoconf"
-
-    def test_empty_orchestrator_section_yields_all_defaults(self, tmp_path):
-        """``orchestrator:`` present but null/empty still produces default predictors."""
-        cfg = load_strategy_config(_write_text(tmp_path, "orchestrator:\n"))
-        assert cfg["predictors"] == {
-            "performance": "intelligent",
-            "energy": "kavier_power",
-            "feasibility": "autoconf",
-        }
-
-    def test_strategy_section_coexists_with_legacy_orchestrator(self, tmp_path):
-        """A new ``strategy`` section and a legacy ``orchestrator`` section combine.
-
-        ``strategy`` is taken from its own section while ``predictors`` is derived
-        from the legacy ``orchestrator`` block.
-        """
-        payload = {
-            "strategy": {"name": "multi_objective", "preset": "energy_saver"},
-            "orchestrator": {"predictor": "physics_driven"},
-        }
-        cfg = load_strategy_config(_write_yaml(tmp_path, payload))
-        assert cfg["strategy"] == {"name": "multi_objective", "preset": "energy_saver"}
-        assert cfg["predictors"]["performance"] == "kavier"
-
-    def test_explicit_predictors_win_over_leftover_orchestrator(self, tmp_path):
-        """When both a new ``predictors`` block and a legacy ``orchestrator`` block
-        are present, the explicit predictors section wins (mirrors ``api/main.py``:
-        the orchestrator translation only applies when ``predictors`` is absent).
-        """
-        payload = {
-            "predictors": {"performance": "kavier", "energy": "kavier_power"},
-            "orchestrator": {"predictor": "cache_first"},  # ignored: predictors present
-        }
-        cfg = load_strategy_config(_write_yaml(tmp_path, payload))
-        assert cfg["predictors"]["performance"] == "kavier"
-
-    def test_explicit_predictors_not_replaced_by_orchestrator_defaults(self, tmp_path):
-        """Regression (issue #5): an explicit predictors block must survive a
-        leftover orchestrator block untouched — previously the translation ran
-        unconditionally and silently replaced user predictors with
-        ``{performance: intelligent, energy: kavier_power, feasibility: autoconf}``.
-        """
-        payload = {
-            "predictors": {"performance": "catboost", "feasibility": "rules"},
-            "orchestrator": {"predictor": "cache_first", "feasibility": "autoconf"},
-        }
-        cfg = load_strategy_config(_write_yaml(tmp_path, payload))
-        assert cfg["predictors"]["performance"] == "catboost"
-        assert cfg["predictors"]["feasibility"] == "rules"
-        # keys the user did not set still come from the documented defaults
-        assert cfg["predictors"]["energy"] == "kavier_power"
-
-    def test_orchestrator_still_translated_when_no_predictors_section(self, tmp_path):
-        """Sanity: without a ``predictors`` section the legacy translation applies."""
-        payload = {"orchestrator": {"predictor": "cache_first", "feasibility": "none"}}
-        cfg = load_strategy_config(_write_yaml(tmp_path, payload))
-        assert cfg["predictors"]["performance"] == "intelligent"
-        assert cfg["predictors"]["feasibility"] == "none"
 
 
 # ===========================================================================
@@ -335,7 +212,7 @@ class TestNoGlobalMutation:
         stay pristine across calls.
         """
         snapshot = copy.deepcopy(_DEFAULT_STRATEGY_CONFIG)
-        load_strategy_config(_write_yaml(tmp_path, {"grid": {"top_k": 99}, "orchestrator": {"predictor": "physics"}}))
+        load_strategy_config(_write_yaml(tmp_path, {"grid": {"top_k": 99}, "predictors": {"performance": "kavier"}}))
         assert _DEFAULT_STRATEGY_CONFIG == snapshot
 
     def test_mutating_returned_default_must_not_leak_into_module_constant(self, tmp_path):

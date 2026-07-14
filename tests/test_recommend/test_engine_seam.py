@@ -70,12 +70,22 @@ def test_build_strategy_is_reusable_across_rows():
     strategy = engine.build_strategy(config, strategy_name, preset)
 
     recs_a, _ = engine.execute_strategy(
-        strategy, workload, context, strategy_name=strategy_name, preset=preset,
-        grid=config["grid"], predictor="kavier",
+        strategy,
+        workload,
+        context,
+        strategy_name=strategy_name,
+        preset=preset,
+        grid=config["grid"],
+        predictor="kavier",
     )
     recs_b, _ = engine.execute_strategy(
-        strategy, workload, context, strategy_name=strategy_name, preset=preset,
-        grid=config["grid"], predictor="kavier",
+        strategy,
+        workload,
+        context,
+        strategy_name=strategy_name,
+        preset=preset,
+        grid=config["grid"],
+        predictor="kavier",
     )
 
     assert recs_a, "expected at least one feasible recommendation"

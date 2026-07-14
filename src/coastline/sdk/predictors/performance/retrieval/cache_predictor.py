@@ -18,15 +18,30 @@ from coastline.sdk.predictors.base import BasePredictor
 logger = logging.getLogger(__name__)
 
 
+# Default source columns for the hit value; a lookup CSV with other names sets these explicitly.
+_DEFAULT_THROUGHPUT_COL = "dataset_tokens_per_second"
+_DEFAULT_RUNTIME_COL = "train_runtime"
+
+
 class RetrievalPredictor(BasePredictor):
     """SHA256-hash-indexed exact-match cache over the curated run database.
 
     Returns the first recorded run's throughput/runtime on a hit (~0% error);
     returns None on a miss so the orchestrator falls back to simulation predictors.
+    ``throughput_col`` / ``runtime_col`` name the source columns the hit reads (defaults match
+    the run DB), so a lookup CSV that stores throughput/duration under other headers still works.
     """
 
-    def __init__(self, dataset_path: Optional[Path] = None):
+    def __init__(
+        self,
+        dataset_path: Optional[Path] = None,
+        *,
+        throughput_col: Optional[str] = None,
+        runtime_col: Optional[str] = None,
+    ):
         """Load the RAW trace (not ML-subset) and build the hash index."""
+        self._throughput_col = throughput_col or _DEFAULT_THROUGHPUT_COL
+        self._runtime_col = runtime_col or _DEFAULT_RUNTIME_COL
         if dataset_path is None:
             env = os.environ.get("DATA_DIR")
             # parents[7] == the superproject umbrella that holds the shared trace-archive/.
@@ -65,8 +80,8 @@ class RetrievalPredictor(BasePredictor):
                 "number_gpus",
                 "tokens_per_sample",
                 "batch_size",
-                "dataset_tokens_per_second",
-                "train_runtime",
+                self._throughput_col,
+                self._runtime_col,
             ]
             missing_cols = [col for col in required_cols if col not in dataset.columns]
             if missing_cols:
@@ -83,10 +98,10 @@ class RetrievalPredictor(BasePredictor):
             # Filter out rows with missing/invalid throughput or runtime values
             initial_count = len(dataset)
             dataset = dataset.loc[
-                dataset["dataset_tokens_per_second"].notna()
-                & (dataset["dataset_tokens_per_second"] > 0)
-                & dataset["train_runtime"].notna()
-                & (dataset["train_runtime"] > 0)
+                dataset[self._throughput_col].notna()
+                & (dataset[self._throughput_col] > 0)
+                & dataset[self._runtime_col].notna()
+                & (dataset[self._runtime_col] > 0)
             ].copy()
             nan_filtered = initial_count - len(dataset)
             if nan_filtered > 0:
@@ -133,8 +148,8 @@ class RetrievalPredictor(BasePredictor):
                 float(config_tuple[6]),
             )
 
-            throughputs = pd.to_numeric(group["dataset_tokens_per_second"], errors="coerce").to_numpy(dtype=float)
-            runtimes = pd.to_numeric(group["train_runtime"], errors="coerce").to_numpy(dtype=float)
+            throughputs = pd.to_numeric(group[self._throughput_col], errors="coerce").to_numpy(dtype=float)
+            runtimes = pd.to_numeric(group[self._runtime_col], errors="coerce").to_numpy(dtype=float)
 
             throughput_median = float(np.median(throughputs))
             throughput_std = float(np.std(throughputs))

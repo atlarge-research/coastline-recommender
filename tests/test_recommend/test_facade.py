@@ -1,7 +1,7 @@
 """Tests for the importable `coastline` facade (the supervisor's sketch):
 
     import coastline
-    rec = coastline(throughput_estim="Kavier")   # or "tabpfn"
+    rec = coastline(predictor="Kavier")   # or "tabpfn"
     results = rec(workload, total_gpus=[1, 2, 4, 8])
 
 Kavier throughput/power is an analytical black box: these tests assert the facade
@@ -36,24 +36,24 @@ def _workload():
     }
 
 
-def test_throughput_estim_is_normalized():
+def test_predictor_is_normalized():
     # Oracle: normalization is pure case-folding (strip+lower), independent of any
     # lookup table. "Kavier"/"TabPFN" differ from their keys only in letter case, so
     # a correct normalizer must return the all-lowercase spelling; a normalizer that
     # did nothing (or upper-cased) would leave "Kavier" != "kavier" and fail.
-    assert Coastline(throughput_estim="Kavier").throughput_estim == "kavier"
-    assert Coastline(throughput_estim="TabPFN").throughput_estim == "tabpfn"
-    assert Coastline(throughput_estim="tabpfn").throughput_estim == "tabpfn"  # idempotent on lowercase
+    assert Coastline(predictor="Kavier").predictor == "kavier"
+    assert Coastline(predictor="TabPFN").predictor == "tabpfn"
+    assert Coastline(predictor="tabpfn").predictor == "tabpfn"  # idempotent on lowercase
 
 
 def test_module_is_callable_returns_configured_instance():
     # Contract: the module object itself is callable (PEP 562 _CallableModule) and
-    # forwards throughput_estim into a real Coastline. Oracle: the returned object is
+    # forwards predictor into a real Coastline. Oracle: the returned object is
     # a Coastline whose estimator is the normalized spelling of what we passed — a
     # plain module (non-callable) would raise TypeError here.
-    rec = coastline(throughput_estim="Kavier")
+    rec = coastline(predictor="Kavier")
     assert isinstance(rec, Coastline)
-    assert rec.throughput_estim == "kavier"
+    assert rec.predictor == "kavier"
 
 
 def test_recommend_truncates_to_stable_ranked_prefix():
@@ -162,17 +162,18 @@ def test_workloadspec_canonicalizes_huggingface_model_id():
     assert WorkloadSpec(**{**_workload(), "llm_model": "mistralai/Mistral-7B-v0.1"}).llm_model == "mistral-7b-v0.1"
 
 
-def test_csv_path_accepts_flexible_column_spellings(tmp_path):
-    # The CSV reader accepts flexible spellings (model/gpu/batch), not only the trace
-    # convention (model_name/gpu_model), via the shared canonical alias map. Oracle:
-    # each written cell maps to its named WorkloadSpec field verbatim (with the two
-    # numeric columns coerced to int). A broken alias map would drop or mis-route a
-    # column, changing one of these known values.
+def test_csv_path_reads_field_name_columns(tmp_path):
+    # The CSV reader accepts the ONE canonical vocabulary: the WorkloadSpec field
+    # names (llm_model/fine_tuning_method/gpu_model/tokens_per_sample/batch_size), with
+    # no synonyms. Oracle: each written cell maps to its named WorkloadSpec field
+    # verbatim (with the two numeric columns coerced to int). A broken reader would
+    # drop or mis-route a column, changing one of these known values.
     from coastline.sdk.recommend.facade import _coerce_workload
 
     csv = tmp_path / "workload.csv"
     csv.write_text(
-        "model,method,gpu,tokens_per_sample,batch_size\nmistral-7b-v0.1,lora,NVIDIA-A100-SXM4-80GB,1024,16\n"
+        "llm_model,fine_tuning_method,gpu_model,tokens_per_sample,batch_size\n"
+        "mistral-7b-v0.1,lora,NVIDIA-A100-SXM4-80GB,1024,16\n"
     )
     wl = _coerce_workload(str(csv))
     assert wl.llm_model == "mistral-7b-v0.1"
@@ -255,7 +256,7 @@ def test_empty_csv_raises_value_error(tmp_path):
     csv = tmp_path / "empty.csv"
     # Header only, no data rows -> pandas reads an empty frame -> facade must reject
     # it with a ValueError rather than IndexError on row 0 / returning [].
-    csv.write_text("model,method,gpu,tokens_per_sample,batch_size\n")
+    csv.write_text("llm_model,fine_tuning_method,gpu_model,tokens_per_sample,batch_size\n")
     rec = Coastline("kavier")
     with pytest.raises(ValueError):
         rec.recommend(str(csv))

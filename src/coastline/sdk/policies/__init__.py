@@ -8,6 +8,8 @@ from typing import Optional, Union
 
 import yaml
 
+from coastline.sdk.constants import EnergyBackend, SelectionPolicy, Strategy
+from coastline.sdk.io.run_config import builtin_default_config
 from coastline.sdk.pipeline.feasibility import create_feasibility_checker
 from coastline.sdk.pipeline.workflow import GridWorkflowPipeline
 from coastline.sdk.policies.base import BaseStrategy
@@ -29,20 +31,9 @@ logger = logging.getLogger(__name__)
 # The coastline repo root (src/coastline/sdk/policies/ -> parents[4]); holds config/.
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 
-# Fallback when no config path given and no YAML found on disk.
-_BUILTIN_DEFAULT_CONFIG: dict = {
-    "strategy": {"name": "multi_objective", "preset": "balanced"},
-    "predictors": {
-        "performance": "intelligent",
-        "energy": "kavier_power",
-        "feasibility": "autoconf",
-    },
-    "grid": {
-        "batch_sizes": [4, 8, 16, 32, 64],
-        "total_gpus": [1, 2, 4, 8, 16, 32],
-        "top_k": 5,
-    },
-}
+# Fallback when no config path given and no YAML found on disk — the one built-in default,
+# sourced from the bundled default_experiment.yaml (not a second hardcoded copy).
+_BUILTIN_DEFAULT_CONFIG: dict = builtin_default_config()
 
 
 class PolicyFactory:
@@ -95,18 +86,18 @@ class PolicyFactory:
         predictor_config = config.get("predictors", {})
 
         if strategy_name is None:
-            strategy_name = strategy_config.get("name", "multi_objective")
+            strategy_name = strategy_config.get("name", Strategy.MULTI_OBJECTIVE.value)
 
         logger.info(f"Creating strategy: {strategy_name}")
 
-        if strategy_name == "min_gpu":
+        if strategy_name == Strategy.MIN_GPU:
             return PolicyFactory._create_min_gpu_strategy(config, predictor_config)
-        elif strategy_name == "multi_objective":
+        elif strategy_name == Strategy.MULTI_OBJECTIVE:
             return PolicyFactory._create_multi_objective_strategy(
                 config, strategy_config, predictor_config, preset, alpha, beta
             )
         else:
-            raise ValueError(f"Unknown strategy: '{strategy_name}'. Supported: 'min_gpu', 'multi_objective'")
+            raise ValueError(f"Unknown strategy: '{strategy_name}'. Supported: {[s.value for s in Strategy]}")
 
     @staticmethod
     def _lookup_path(predictor_config: dict) -> Optional[Path]:
@@ -131,41 +122,65 @@ class PolicyFactory:
         return path
 
     @staticmethod
+    def _retrieval_predictor(predictor_config: dict, lookup: Optional[Path]):
+        """A lookup/cache predictor over ``lookup``, reading throughput/duration from the columns
+        named by ``predictors.lookup_throughput_col`` / ``lookup_runtime_col`` (defaults = run DB)."""
+        return RetrievalPredictor(
+            dataset_path=lookup,
+            throughput_col=predictor_config.get("lookup_throughput_col"),
+            runtime_col=predictor_config.get("lookup_runtime_col"),
+        )
+
+    @staticmethod
+    def _resolve_simulation_predictor(name: str):
+        """The simulation model used on a cache miss (or directly as ``performance: <name>``):
+        Kavier physics or a named ML model. Never resolves to ``intelligent``/``cache`` — a
+        fallback that itself cached would nest a second lookup."""
+        if name in ("kavier", "physics", "physics_driven"):
+            return create_physics_driven()
+        named = _build_named_ml_predictor(name)
+        if named is not None:
+            return named
+        logger.warning("Unknown fallback model '%s'; using kavier", name)
+        return create_physics_driven()
+
+    @staticmethod
     def throughput_predictor(predictor_config: dict):
         performance_type = predictor_config.get("performance", "intelligent")
         lookup = PolicyFactory._lookup_path(predictor_config)
+        if performance_type == "cache":
+            return PolicyFactory._retrieval_predictor(predictor_config, lookup)
+        if performance_type == "intelligent":
+            return PolicyFactory._intelligent_throughput_predictor(predictor_config, lookup)
         if performance_type in ("kavier", "physics", "physics_driven"):
             return create_physics_driven()
-        if performance_type == "cache":
-            return RetrievalPredictor(dataset_path=lookup)
-        if performance_type == "intelligent":
-            return PolicyFactory._intelligent_throughput_predictor(lookup)
         # a specific data-driven model selected by name (catboost, xgboost, …)
         named = _build_named_ml_predictor(performance_type)
         if named is not None:
             return named
         logger.warning("Unknown predictor '%s'; using intelligent default", performance_type)
-        return PolicyFactory._intelligent_throughput_predictor(lookup)
+        return PolicyFactory._intelligent_throughput_predictor(predictor_config, lookup)
 
     @staticmethod
-    def _intelligent_throughput_predictor(lookup: Optional[Path] = None):
-        # "intelligent" = use an exact cache match (a real measured past run) when
-        # one exists for this configuration, else the Kavier analytical predictor.
-        # A cache miss yields no prediction, so the composite falls through to
-        # physics per configuration. Trained ML is opt-in by name (e.g. "catboost").
-        from coastline.sdk.predictors.performance.composite import CacheThenPhysicsPredictor
+    def _intelligent_throughput_predictor(predictor_config: dict, lookup: Optional[Path] = None):
+        # "intelligent" = an exact cache match (a real measured past run) when one exists for this
+        # configuration, else simulate with `fallback` (Kavier by default, or any model by name).
+        # A cache miss yields no prediction, so the composite falls through to the fallback per
+        # configuration.
+        from coastline.sdk.predictors.performance.composite import CacheThenSimulatePredictor
 
-        return CacheThenPhysicsPredictor(
-            cache=RetrievalPredictor(dataset_path=lookup),
-            physics=create_physics_driven(),
+        fallback = predictor_config.get("fallback", "kavier")
+        return CacheThenSimulatePredictor(
+            cache=PolicyFactory._retrieval_predictor(predictor_config, lookup),
+            fallback=PolicyFactory._resolve_simulation_predictor(fallback),
         )
 
     @staticmethod
     def power_predictor(predictor_config: dict):
-        energy_type = predictor_config.get("energy", "kavier_power")
-        if energy_type == "kavier_power":
+        energy_type = predictor_config.get("energy", EnergyBackend.KAVIER_POWER.value)
+        if energy_type == EnergyBackend.KAVIER_POWER:
             return KavierPowerPredictor()
-        raise ValueError(f"Unknown energy predictor: '{energy_type}'. Supported: 'kavier_power'")
+        raise ValueError(f"Unknown energy predictor: '{energy_type}'. Supported: {[e.value for e in EnergyBackend]}")
 
     @staticmethod
     def _create_min_gpu_strategy(config: dict, predictor_config: dict) -> MinGPUStrategy:
@@ -175,8 +190,8 @@ class PolicyFactory:
 
         pipeline = GridWorkflowPipeline.from_config(
             config=config,
-            selection_policy="min_gpu",
-            strategy_name="min_gpu",
+            selection_policy=SelectionPolicy.MIN_GPU.value,
+            strategy_name=Strategy.MIN_GPU.value,
             throughput_predictor=throughput,
             power_predictor=power,
             feasibility_checker=feasibility,

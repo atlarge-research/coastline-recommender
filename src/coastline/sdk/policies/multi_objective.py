@@ -1,26 +1,20 @@
 """Multi-objective strategy: grid → feasibility → simulate → weighted policy selection."""
 
 import logging
-from typing import List, Literal, Optional
+from typing import List, Optional
 
+from coastline.sdk.constants import PRESET_TO_POLICY, PRESET_WEIGHTS, Preset, Strategy
 from coastline.sdk.models.context import SystemContext
 from coastline.sdk.models.recommendation import Recommendation
 from coastline.sdk.models.workload import WorkloadSpec
-from coastline.sdk.pipeline.selection import PRESET_TO_POLICY, PRESET_WEIGHTS
 from coastline.sdk.pipeline.workflow import GridWorkflowPipeline
 from coastline.sdk.policies.base import BaseStrategy
 from coastline.sdk.predictors.base import BasePredictor
 
 logger = logging.getLogger(__name__)
 
-PolicyPreset = Literal[
-    "energy",
-    "balanced",
-    "performance",
-    "energy-frontier",
-    "balanced-frontier",
-    "performance-frontier",
-]
+# The preset vocabulary lives in one home (sdk/constants.py); PolicyPreset is its alias here.
+PolicyPreset = Preset
 
 
 class MultiObjectiveStrategy(BaseStrategy):
@@ -96,7 +90,7 @@ class MultiObjectiveStrategy(BaseStrategy):
         )
 
     def get_name(self) -> str:
-        return f"multi_objective_{self.preset}"
+        return f"{Strategy.MULTI_OBJECTIVE.value}_{self.preset}"
 
     def recommend(
         self,

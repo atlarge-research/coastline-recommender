@@ -66,7 +66,7 @@ generate_candidates (grid.py)  →  feasibility_checker.is_feasible  →  throug
 
 The config `predictors:` block selects one of each (`src/coastline/sdk/predictors/`):
 
-- **performance** (throughput): `"intelligent"` (default) = `CacheThenPhysicsPredictor` in `performance/composite.py` — exact cache hit of a real past run, else Kavier physics; `"kavier"` physics-only; `"cache"` retrieval-only; or a named ML model (`catboost`, `xgboost`, `lightgbm`, `tabpfn`, `random_forest`, …) resolved lazily by `_build_named_ml_predictor` so unused ML runtimes aren't imported.
+- **performance** (throughput): `"intelligent"` (default) = `CacheThenSimulatePredictor` in `performance/composite.py` — exact cache hit of a real past run, else simulate with the `predictors.fallback` model (Kavier physics by default, or any named ML model); `"kavier"` physics-only; `"cache"` retrieval-only; or a named ML model (`catboost`, `xgboost`, `lightgbm`, `tabpfn`, `random_forest`, …) resolved lazily by `_build_named_ml_predictor` so unused ML runtimes aren't imported. A cache-miss reads throughput/duration from `predictors.lookup_throughput_col`/`lookup_runtime_col` (defaults `dataset_tokens_per_second`/`train_runtime`).
 - **energy** (power): `"kavier_power"` (the only backend). Kavier returns power alongside throughput in one engine call — the pipeline reuses it when the power predictor sets `WRAPS_THROUGHPUT_ENGINE`, avoiding a second call.
 - **feasibility**: `"autoconf"` (default, OOM-aware) or `"rules"` (divisibility only). See gotcha below.
 

@@ -6,6 +6,7 @@ import logging
 import os
 from typing import Any, Protocol
 
+from coastline.sdk.constants import DEFAULT_AUTOCONF_MODEL_VERSION, FeasibilityMode
 from coastline.sdk.models.workload import WorkloadSpec
 from coastline.sdk.predictors.feasibility.autoconf import (
     AutoconfFeasibilityChecker,
@@ -34,15 +35,12 @@ class _RulesThenAutoconfChecker:
         return self._autoconf.is_feasible(workload)
 
 
-_VALID_FEASIBILITY_MODES = ("autoconf", "rules", "none")
-
-
 def create_feasibility_checker(predictor_config: dict) -> FeasibilityChecker:
     """Build feasibility checker from config (predictors.feasibility: autoconf|rules|none)."""
-    mode = predictor_config.get("feasibility", "autoconf")
-    version = predictor_config.get("autoconf_model_version", "3.1.0")
+    mode = predictor_config.get("feasibility", FeasibilityMode.AUTOCONF.value)
+    version = predictor_config.get("autoconf_model_version", DEFAULT_AUTOCONF_MODEL_VERSION)
 
-    if mode == "autoconf":
+    if mode == FeasibilityMode.AUTOCONF:
         if AutoconfFeasibilityChecker.available():
             return _RulesThenAutoconfChecker(model_version=version)
         if os.environ.get("COASTLINE_ALLOW_RULES_FALLBACK") == "1":
@@ -57,14 +55,12 @@ def create_feasibility_checker(predictor_config: dict) -> FeasibilityChecker:
             "Set COASTLINE_ALLOW_RULES_FALLBACK=1 to knowingly degrade to divisibility-only rules."
         )
 
-    if mode == "rules":
+    if mode == FeasibilityMode.RULES:
         return RulesFeasibilityChecker()
 
-    if mode == "none":
+    if mode == FeasibilityMode.NONE:
         return NoOpFeasibilityChecker()
 
-    # A typo (e.g. "Autoconf", "auto-conf", "strict") used to fall through to the
-    # divisibility-only rules checker, silently bypassing the OOM veto. Fail loudly.
-    raise ValueError(
-        f"unknown feasibility mode {mode!r}: expected one of {', '.join(repr(m) for m in _VALID_FEASIBILITY_MODES)}"
-    )
+    # A typo (e.g. "Autoconf", "auto-conf", "strict") must fail loudly rather than fall
+    # through to the rules checker and silently bypass the OOM veto.
+    raise ValueError(f"unknown feasibility mode {mode!r}: expected one of {[m.value for m in FeasibilityMode]}")

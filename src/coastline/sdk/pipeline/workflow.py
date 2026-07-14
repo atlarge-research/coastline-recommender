@@ -6,6 +6,7 @@ import logging
 import math
 from typing import List, Optional
 
+from coastline.sdk.constants import Preset
 from coastline.sdk.models.context import SystemContext
 from coastline.sdk.models.recommendation import Recommendation
 from coastline.sdk.models.workload import WorkloadSpec
@@ -14,6 +15,7 @@ from coastline.sdk.pipeline.grid import GridConfig, generate_candidates, grid_co
 from coastline.sdk.pipeline.selection import (
     PRESET_WEIGHTS,
     EvaluatedCandidate,
+    NormalizationMode,
     SelectionPolicy,
     normalize_candidates,
     rank_candidates,
@@ -38,8 +40,7 @@ class GridWorkflowPipeline:
         alpha: float = 0.5,
         beta: float = 0.5,
         preset: Optional[str] = None,
-        normalization: str = "grid",
-        energy_objective: str = "energy",
+        normalization: str = NormalizationMode.GRID.value,
         runtime_guard_k: Optional[float] = None,
     ):
         self.throughput_predictor = throughput_predictor
@@ -52,7 +53,6 @@ class GridWorkflowPipeline:
         self.beta = beta
         self.preset = preset
         self.normalization = normalization
-        self.energy_objective = energy_objective
         # Optional runtime guardrail: cap how slow a recommended config may be
         # relative to the fastest feasible one (None = off; see recommend()).
         self.runtime_guard_k = runtime_guard_k
@@ -70,7 +70,7 @@ class GridWorkflowPipeline:
                 if a is not None and b is not None:
                     a, b = float(a), float(b)
                 else:
-                    a, b = PRESET_WEIGHTS.get("balanced", (0.5, 0.5))
+                    a, b = PRESET_WEIGHTS.get(Preset.BALANCED.value, (0.5, 0.5))
             alpha = a if alpha is None else alpha
             beta = b if beta is None else beta
         total = alpha + beta
@@ -106,7 +106,6 @@ class GridWorkflowPipeline:
         beta: Optional[float] = None,
         preset: Optional[str] = None,
         normalization: Optional[str] = None,
-        energy_objective: Optional[str] = None,
         runtime_guard_k: Optional[float] = None,
     ) -> "GridWorkflowPipeline":
         strategy_cfg = config.get("strategy", {})
@@ -124,9 +123,10 @@ class GridWorkflowPipeline:
             alpha=alpha,
             beta=beta,
             preset=preset,
-            normalization=normalization if normalization is not None else strategy_cfg.get("normalization", "grid"),
-            energy_objective=(
-                energy_objective if energy_objective is not None else strategy_cfg.get("energy_objective", "energy")
+            normalization=(
+                normalization
+                if normalization is not None
+                else strategy_cfg.get("normalization", NormalizationMode.GRID.value)
             ),
             runtime_guard_k=runtime_guard_k if runtime_guard_k is not None else strategy_cfg.get("runtime_guard_k"),
         )
@@ -149,31 +149,14 @@ class GridWorkflowPipeline:
         for variant in candidates:
             feasible, feas_meta = self.feasibility_checker.is_feasible(variant)
             if not feasible:
-                logger.debug(
-                    "Skip %d×%d (total %d GPUs): not feasible",
-                    variant.gpus_per_node,
-                    variant.number_of_nodes,
-                    variant.total_gpus,
-                )
                 continue
 
             throughput_pred = self.throughput_predictor.predict(variant, context)
             if throughput_pred is None:
-                logger.debug(
-                    "Skip %d×%d: throughput predictor returned None",
-                    variant.gpus_per_node,
-                    variant.number_of_nodes,
-                )
                 continue
             throughput = throughput_pred.predicted_throughput or 0.0
             # Reject NaN, +inf, -inf, and <=0; a bare x>0 admits +inf which then poisons min-max normalization.
             if not math.isfinite(throughput) or throughput <= 0:
-                logger.debug(
-                    "Skip %d×%d: non-finite or non-positive throughput (%.2f)",
-                    variant.gpus_per_node,
-                    variant.number_of_nodes,
-                    throughput,
-                )
                 continue
 
             # Reuse the power Kavier already returned with throughput (one engine call, not
@@ -183,21 +166,10 @@ class GridWorkflowPipeline:
             else:
                 power_pred = self.power_predictor.predict(variant, context)
                 if power_pred is None:
-                    logger.debug(
-                        "Skip %d×%d: power predictor returned None",
-                        variant.gpus_per_node,
-                        variant.number_of_nodes,
-                    )
                     continue
                 power = power_pred.predicted_power or 0.0
             # Same NaN/+inf/-inf/<=0 guard as throughput.
             if not math.isfinite(power) or power <= 0:
-                logger.debug(
-                    "Skip %d×%d: non-finite or non-positive power (%.2f)",
-                    variant.gpus_per_node,
-                    variant.number_of_nodes,
-                    power,
-                )
                 continue
 
             evaluated.append(
@@ -232,7 +204,7 @@ class GridWorkflowPipeline:
                 evaluated = guarded
 
         # Normalize throughput/power scores across the whole feasible set.
-        normalize_candidates(evaluated, self.normalization, self.energy_objective)
+        normalize_candidates(evaluated, self.normalization)
 
         # top_k applies to every policy; min_gpu already sorts by (total_gpus, -throughput),
         # so top_k>1 gives a ranked shortlist.
@@ -249,7 +221,7 @@ class GridWorkflowPipeline:
 
     def _to_recommendation(self, row: EvaluatedCandidate, rank: int) -> Recommendation:
         # min_gpu has no score -> inverse-GPU proxy for ordering; other policies use combined_score.
-        score = 1.0 / max(row.total_gpus, 1) if self.selection_policy == "min_gpu" else row.combined_score
+        score = 1.0 / max(row.total_gpus, 1) if self.selection_policy == SelectionPolicy.MIN_GPU else row.combined_score
         metadata = {
             "predicted_power_watts": row.power,
             "combined_score": score,

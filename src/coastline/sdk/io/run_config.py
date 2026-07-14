@@ -1,49 +1,52 @@
-"""Load strategy YAML for CLI and map orchestrator → predictors (same rules as API)."""
+"""Resolve + load the recommendation-policy YAML (strategy / predictors / grid)."""
 
 from __future__ import annotations
 
 import copy
 import os
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-# The one default recommendation policy — multi_objective/balanced — shared by every surface
-# (CLI, facade/API, UI). Used only when no config file is found.
-_DEFAULT_STRATEGY_CONFIG: dict[str, Any] = {
-    "strategy": {"name": "multi_objective", "preset": "balanced"},
-    "predictors": {
-        "performance": "intelligent",
-        "energy": "kavier_power",
-        "feasibility": "autoconf",
-    },
-    "grid": {
-        "batch_sizes": [4, 8, 16, 32, 64],
-        "total_gpus": [1, 2, 4, 8, 16],
-        "top_k": 5,
-    },
-}
+# The one built-in recommendation-policy default (multi_objective/balanced), loaded from the
+# bundled ``default_experiment.yaml`` so every surface (CLI, facade/API, UI) shares a single
+# source instead of parallel hardcoded dicts. Used only when no config file is found.
+_BUILTIN_DEFAULT_PATH = Path(__file__).parent / "default_experiment.yaml"
+
+
+@lru_cache(maxsize=1)
+def _load_builtin_default() -> dict[str, Any]:
+    with open(_BUILTIN_DEFAULT_PATH, encoding="utf-8") as handle:
+        return yaml.safe_load(handle)
+
+
+def builtin_default_config() -> dict[str, Any]:
+    """The one built-in recommendation-policy default (``strategy``/``predictors``/``grid``),
+    loaded from the bundled ``default_experiment.yaml``. Every surface falls back to this when no
+    config file is present. Returns a fresh deep copy — callers may mutate it freely."""
+    return copy.deepcopy(_load_builtin_default())
+
+
+# Module-level default dict (the deep copy every door merges under). Kept as a name for the
+# surfaces + tests that reference it; its content is the bundled YAML, never a second literal.
+_DEFAULT_STRATEGY_CONFIG: dict[str, Any] = builtin_default_config()
 
 # The single canonical recommendation-policy config file. Every door falls back to this one
-# ``experiment.yaml`` (there is no separate ``default.yaml``/``config.yaml`` any more); an env
-# override lets a deployment point elsewhere. Repo root: io/ -> sdk/ -> coastline/ -> src/ -> repo.
-_CONFIG_ENV_KEYS = ("EXPERIMENT_CONFIG", "STRATEGY_CONFIG", "CONFIG_FILE")
-_CANONICAL_CONFIG = (
-    Path(__file__).resolve().parents[4] / "config" / "coastline_functionality" / "experiment.yaml"
-)
+# ``experiment.yaml`` (there is no separate ``default.yaml``/``config.yaml`` any more); the
+# ``EXPERIMENT_CONFIG`` env var lets a deployment point elsewhere. Repo root: io/ -> sdk/ ->
+# coastline/ -> src/ -> repo.
+_CONFIG_ENV_KEY = "EXPERIMENT_CONFIG"
+_CANONICAL_CONFIG = Path(__file__).resolve().parents[4] / "config" / "coastline_functionality" / "experiment.yaml"
 
 
 def default_experiment_path() -> Path:
     """The one recommendation-policy config every surface resolves to when none is given.
-    An env override (``EXPERIMENT_CONFIG`` / ``STRATEGY_CONFIG`` / ``CONFIG_FILE``) wins; else the
-    repo's ``experiment.yaml``. The path may not exist (stripped wheel) — callers then fall back to
-    the built-in :data:`_DEFAULT_STRATEGY_CONFIG`."""
-    for key in _CONFIG_ENV_KEYS:
-        value = os.environ.get(key)
-        if value:
-            return Path(value)
-    return _CANONICAL_CONFIG
+    The ``EXPERIMENT_CONFIG`` env var wins; else the repo's ``experiment.yaml``. The path may not
+    exist (stripped wheel) — callers then fall back to :func:`builtin_default_config`."""
+    override = os.environ.get(_CONFIG_ENV_KEY)
+    return Path(override) if override else _CANONICAL_CONFIG
 
 
 def _merge_dict(base: dict, override: dict) -> dict:
@@ -57,12 +60,10 @@ def _merge_dict(base: dict, override: dict) -> dict:
 
 
 def load_strategy_config(path: str | Path, *, default: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Build a strategy dict from experiment YAML (orchestrator section supported).
+    """Load a recommendation-policy YAML merged under a base default (``strategy``/``predictors``/``grid``).
 
-    ``default`` overrides the base config merged under the file (the UI passes its own
-    multi_objective default; the CLI uses the built-in min_gpu default). This is the
-    single source of the legacy ``orchestrator:`` -> ``predictors:`` translation — the
-    CLI and the web UI both route through it, so the mapping can never diverge.
+    ``default`` overrides the base config merged under the file; when omitted, the built-in
+    default is used. An absent file returns the base default unchanged.
     """
     config = copy.deepcopy(default if default is not None else _DEFAULT_STRATEGY_CONFIG)
     path = Path(path)
@@ -72,34 +73,11 @@ def load_strategy_config(path: str | Path, *, default: dict[str, Any] | None = N
     with open(path, encoding="utf-8") as handle:
         loaded = yaml.safe_load(handle) or {}
 
-    for section in ("strategy", "predictors", "grid", "output"):
+    for section in ("strategy", "predictors", "grid"):
         if section in loaded:
             if isinstance(loaded[section], dict):
                 config[section] = _merge_dict(config.get(section, {}), loaded[section])
             else:
                 config[section] = loaded[section]
-
-    # Legacy orchestrator block is translated only when the config has no explicit
-    # predictors section (mirrors api/main.py): a modern predictors block always
-    # wins over a leftover orchestrator block.
-    if "orchestrator" in loaded and "predictors" not in loaded:
-        orch = loaded["orchestrator"] or {}
-        # Translate legacy orchestrator predictor names; unknown names pass through.
-        _LEGACY_PERF = {
-            "cache_first": "intelligent",
-            "physics": "kavier",
-            "physics_driven": "kavier",
-            "ensemble": "intelligent",
-        }
-        perf = orch.get("predictor", "intelligent")
-        perf = _LEGACY_PERF.get(perf, perf)
-        config["predictors"] = _merge_dict(
-            config.get("predictors", {}),
-            {
-                "performance": perf,
-                "energy": orch.get("energy", "kavier_power"),
-                "feasibility": orch.get("feasibility", "autoconf"),
-            },
-        )
 
     return config

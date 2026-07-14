@@ -3,46 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
 from typing import List, Optional
 
-
-class SelectionPolicy(str, Enum):
-    """How the winning candidate is chosen: ``min_gpu`` = fewest feasible GPUs; the rest rank
-    on the weighted throughput↔energy score. (``str`` base: members compare/serialize as their
-    wire string, so ``SelectionPolicy.MIN_GPU == "min_gpu"``.)"""
-
-    MIN_GPU = "min_gpu"
-    PERFORMANCE = "performance"
-    ENERGY = "energy"
-    BALANCED = "balanced"
-
-
-class NormalizationMode(str, Enum):
-    """Score-normalization set: over all feasible candidates (``grid``) or the non-dominated frontier."""
-
-    GRID = "grid"
-    FRONTIER = "frontier"
-
-
-# -frontier variants share the same selection; they differ only in the NormalizationMode.
-PRESET_TO_POLICY: dict[str, SelectionPolicy] = {
-    "energy": SelectionPolicy.ENERGY,
-    "balanced": SelectionPolicy.BALANCED,
-    "performance": SelectionPolicy.PERFORMANCE,
-    "energy-frontier": SelectionPolicy.ENERGY,
-    "balanced-frontier": SelectionPolicy.BALANCED,
-    "performance-frontier": SelectionPolicy.PERFORMANCE,
-}
-
-PRESET_WEIGHTS = {
-    "energy": (0.8, 0.2),
-    "balanced": (0.5, 0.5),
-    "performance": (0.2, 0.8),
-    "energy-frontier": (0.8, 0.2),
-    "balanced-frontier": (0.5, 0.5),
-    "performance-frontier": (0.2, 0.8),
-}
+# The closed-set vocabulary lives in one home (sdk/constants.py); re-exported here for callers.
+from coastline.sdk.constants import (  # noqa: F401
+    PRESET_TO_POLICY,
+    PRESET_WEIGHTS,
+    NormalizationMode,
+    SelectionPolicy,
+)
 
 
 @dataclass
@@ -76,7 +45,7 @@ def rank_candidates(
 
     pool = [c for c in candidates if not c.dominated] or candidates  # drop dominated candidates before ranking
 
-    if policy == "min_gpu":
+    if policy == SelectionPolicy.MIN_GPU:
         ranked = sorted(pool, key=lambda c: (c.total_gpus, -c.throughput))
         return ranked[: max(1, min(top_k, len(ranked)))]
 
@@ -105,21 +74,19 @@ def _time_cost(c: "EvaluatedCandidate") -> float:
 
 def normalize_candidates(
     candidates: List["EvaluatedCandidate"],
-    mode: NormalizationMode = "grid",
-    energy_objective: str = "energy",
+    mode: NormalizationMode = NormalizationMode.GRID,
 ) -> None:
     """Populate throughput_score and power_score in [0,1] (higher=better).
 
     Axes: power = per-GPU watts × total_gpus; time = 1/throughput (work cancels).
     mode: ``grid`` = min-max over all feasible; ``frontier`` = drop dominated first.
-    energy_objective ignored (kept for back-compat).
     """
     if not candidates:
         return
     for c in candidates:
         c.dominated = False
 
-    if mode == "frontier":
+    if mode == NormalizationMode.FRONTIER:
         for c in candidates:
             cp, ct = _power_cost(c), _time_cost(c)
             c.dominated = any(

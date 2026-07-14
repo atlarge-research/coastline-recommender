@@ -28,10 +28,15 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, field_validator
 
+from coastline.sdk.constants import Strategy
 from coastline.sdk.exceptions import UnsupportedGPUError
 from coastline.sdk.io.infrastructure import Infrastructure, load_infrastructure
 from coastline.sdk.io.options_loader import load_available_options
-from coastline.sdk.io.run_config import default_experiment_path, load_strategy_config
+from coastline.sdk.io.run_config import (
+    builtin_default_config,
+    default_experiment_path,
+    load_strategy_config,
+)
 from coastline.sdk.logging import setup_logging
 from coastline.sdk.models.context import SystemContext
 from coastline.sdk.models.workload import WorkloadSpec
@@ -68,32 +73,19 @@ _PREDICTORS = [
     {"id": "tabpfn", "name": "TabPFN"},
 ]
 
-_DEFAULT_STRATEGY_CONFIG: dict[str, Any] = {
-    "strategy": {"name": "multi_objective", "preset": "balanced"},
-    "predictors": {
-        "performance": "intelligent",
-        "energy": "kavier_power",
-        # autoconf to mirror the shipped config/*.yaml (which all set autoconf);
-        # this only affects the config-less fallback path, keeping every default
-        # in sync. autoconf degrades to rules under COASTLINE_ALLOW_RULES_FALLBACK=1.
-        "feasibility": "autoconf",
-    },
-    "grid": {
-        "batch_sizes": [4, 8, 16, 32, 64],
-        "total_gpus": [1, 2, 4, 8, 16, 32],
-        "top_k": 5,
-    },
-}
+# The config-less fallback — the one built-in default, sourced from the bundled
+# default_experiment.yaml (not a third hardcoded copy). autoconf degrades to rules under
+# COASTLINE_ALLOW_RULES_FALLBACK=1.
+_DEFAULT_STRATEGY_CONFIG: dict[str, Any] = builtin_default_config()
 
 
 def _load_strategy_config() -> dict[str, Any]:
     """Resolve the one recommendation-policy config and load it.
 
     Discovery (env override → the repo's ``experiment.yaml``) is the shared
-    :func:`coastline.sdk.io.run_config.default_experiment_path`; file load + the legacy
-    ``orchestrator:`` -> ``predictors:`` translation are the shared ``load_strategy_config``.
-    Both are shared with the CLI so every door resolves the same config. Merged over this
-    module's multi_objective default; falls back to it when no file is found.
+    :func:`coastline.sdk.io.run_config.default_experiment_path`; the file load is the shared
+    ``load_strategy_config``. Both are shared with the CLI so every door resolves the same
+    config. Merged over the one built-in default; falls back to it when no file is found.
     """
     path = default_experiment_path()
     if path.is_file():
@@ -591,7 +583,7 @@ def recommend(body: RecommendRequest):
             **req_config.get("predictors", {}),
             "performance": body.prediction_model,
         }
-        preset = body.preset if body.strategy == "multi_objective" else None
+        preset = body.preset if body.strategy == Strategy.MULTI_OBJECTIVE else None
         total_tokens = body.dataset_size * body.training_epochs * body.tokens_per_sample
         # Route through the single engine seam; INFRA caps + hardware-mode resolution
         # (above) and serialization (below) stay UI-specific.
@@ -620,7 +612,7 @@ def recommend(body: RecommendRequest):
             "candidates": candidates,
             "rationale": engine.recommendation_rationale(recs, meta),
             "strategy": body.strategy,
-            "preset": body.preset if body.strategy == "multi_objective" else None,
+            "preset": body.preset if body.strategy == Strategy.MULTI_OBJECTIVE else None,
             "workload_summary": {
                 "llm_model": body.llm_model,
                 "fine_tuning_method": body.fine_tuning_method,

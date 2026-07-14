@@ -31,7 +31,7 @@ from coastline.sdk.pipeline import workflow as wf
 from coastline.sdk.policies import PolicyFactory, _build_named_ml_predictor
 from coastline.sdk.predictors.energy import KavierPowerPredictor
 from coastline.sdk.predictors.factory import create_physics_driven
-from coastline.sdk.predictors.performance.composite import CacheThenPhysicsPredictor
+from coastline.sdk.predictors.performance.composite import CacheThenSimulatePredictor
 from coastline.sdk.predictors.performance.physics import KavierPredictor
 from coastline.sdk.predictors.performance.retrieval.cache_predictor import RetrievalPredictor
 
@@ -60,15 +60,38 @@ class TestThroughputPredictorFactory:
         predictor = PolicyFactory.throughput_predictor({"performance": "cache"})
         assert isinstance(predictor, RetrievalPredictor)
 
-    def test_intelligent_wires_cache_first_then_physics(self):
+    def test_intelligent_wires_cache_first_then_fallback(self):
         # Contract of "intelligent" (CLAUDE.md): exact cache hit of a real past run,
         # ELSE Kavier physics. The cascade ORDER is the spec, so pin both slots:
         # a bug that swapped them (physics tried first) or wired two physics
         # predictors would pass a bare isinstance check but is caught here.
         predictor = PolicyFactory.throughput_predictor({"performance": "intelligent"})
-        assert isinstance(predictor, CacheThenPhysicsPredictor)
+        assert isinstance(predictor, CacheThenSimulatePredictor)
         assert isinstance(predictor._cache, RetrievalPredictor)  # tried first
-        assert isinstance(predictor._physics, KavierPredictor)  # fallback
+        assert isinstance(predictor._fallback, KavierPredictor)  # fallback
+
+    def test_intelligent_fallback_model_is_configurable(self):
+        # A cache MISS simulates with the configured `fallback` model, not always Kavier.
+        # Default stays Kavier; `fallback: xgboost` swaps the miss branch to that ML model
+        # while the cache stays first. Constructing is safe; we never call .predict.
+        default = PolicyFactory.throughput_predictor({"performance": "intelligent"})
+        assert isinstance(default._fallback, KavierPredictor)
+        custom = PolicyFactory.throughput_predictor({"performance": "intelligent", "fallback": "xgboost"})
+        assert isinstance(custom, CacheThenSimulatePredictor)
+        assert isinstance(custom._cache, RetrievalPredictor)  # still cache-first
+        assert type(custom._fallback).__name__ == "SklearnPortfolioPredictor"  # miss -> the ML model
+        assert custom._fallback.get_name() == "xgboost"
+
+    @pytest.mark.parametrize("bad_fallback", ["intelligent", "cache", "totally-bogus"])
+    def test_intelligent_fallback_guard_degrades_to_kavier(self, bad_fallback):
+        # A `fallback` that names a caching predictor ("intelligent"/"cache") or an unknown model
+        # must NOT nest another cache or recurse — it degrades to Kavier. Pins the
+        # _resolve_simulation_predictor guard so a future refactor that re-routes unknown names
+        # (e.g. back through throughput_predictor) can't reintroduce infinite recursion.
+        predictor = PolicyFactory.throughput_predictor({"performance": "intelligent", "fallback": bad_fallback})
+        assert isinstance(predictor, CacheThenSimulatePredictor)
+        assert isinstance(predictor._fallback, KavierPredictor)
+        assert not isinstance(predictor._fallback, CacheThenSimulatePredictor)
 
     @pytest.mark.parametrize("name", ["xgboost", "catboost"])
     def test_named_ml_model_routes_to_its_own_predictor(self, name):
@@ -82,13 +105,13 @@ class TestThroughputPredictorFactory:
         assert predictor.get_name() == name
         # Named models must reach the ML branch, NOT fall through to the intelligent
         # default composite (that fallback is reserved for UNKNOWN names).
-        assert not isinstance(predictor, CacheThenPhysicsPredictor)
+        assert not isinstance(predictor, CacheThenSimulatePredictor)
 
     def test_unknown_name_falls_back_to_intelligent_default(self):
         # Unknown performance names log a warning and fall back to the intelligent
         # default rather than raising (lenient by design).
         predictor = PolicyFactory.throughput_predictor({"performance": "totally-bogus"})
-        assert isinstance(predictor, CacheThenPhysicsPredictor)
+        assert isinstance(predictor, CacheThenSimulatePredictor)
 
 
 # ---------------------------------------------------------------------------
@@ -176,7 +199,7 @@ class TestWorkflowThroughputFactory:
         # the cache→physics COMPOSITE, never a bare Kavier/Retrieval (which is what the old
         # divergent workflow copy produced). Falsifiable: return KavierPredictor() and it reds.
         predictor = wf._create_throughput_predictor({})
-        assert isinstance(predictor, CacheThenPhysicsPredictor)
+        assert isinstance(predictor, CacheThenSimulatePredictor)
         assert not isinstance(predictor, (KavierPredictor, RetrievalPredictor))
 
 

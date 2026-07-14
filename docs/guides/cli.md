@@ -70,7 +70,8 @@ coastline recommend-job --config config.yaml
       preset: "balanced"        # throughput-vs-energy weighting
 
     predictors:
-      performance: "intelligent"   # ML with Kavier fallback; alt: kavier, cache, or model name
+      performance: "intelligent"   # exact cache hit else the `fallback` model; alt: kavier, cache, or model name
+      fallback: "kavier"           # model a cache miss simulates with (kavier | catboost | ...)
       energy: "kavier_power"       # analytical power model
       feasibility: "autoconf"      # OOM-aware AutoConf checker
       lookup: "default"            # measured-runs DB for cache/intelligent: a CSV path, or
@@ -160,7 +161,7 @@ coastline recommend-job \
 
 === "sample_workloads.csv"
     ```csv
-    model_name,method,gpu_model,tokens_per_sample,batch_size
+    llm_model,fine_tuning_method,gpu_model,tokens_per_sample,batch_size
     mistral-7b-v0.1,lora,NVIDIA-A100-SXM4-80GB,1024,16
     granite-3.3-8b,full,NVIDIA-A100-SXM4-80GB,4096,4
     granite-3.1-2b,lora,NVIDIA-A100-SXM4-80GB,1024,16
@@ -171,7 +172,7 @@ coastline recommend-job \
     Below is an example output (the `--output` flag produces this file).
 
     ```csv
-    model_name,method,gpu_model,tokens_per_sample,batch_size,recommended_total_gpus,recommended_gpus_per_node,recommended_number_of_nodes,recommended_batch_size,predicted_throughput,predicted_runtime_seconds,predicted_power_watts,tokens_per_watt,feasible,rationale
+    llm_model,fine_tuning_method,gpu_model,tokens_per_sample,batch_size,recommended_total_gpus,recommended_gpus_per_node,recommended_number_of_nodes,recommended_batch_size,predicted_throughput,predicted_runtime_seconds,predicted_power_watts,tokens_per_watt,feasible,rationale
     mistral-7b-v0.1,lora,NVIDIA-A100-SXM4-80GB,1024,16,8,8,1,32,37577.52855076191,,220.84667948500874,170.15211022592126,True,"8 GPUs (8×1, batch 32) picked for the best throughput-vs-energy balance, 4% faster than the runner-up (8 GPUs, batch 16)."
     granite-3.3-8b,full,NVIDIA-A100-SXM4-80GB,4096,4,8,8,1,32,20890.745742833682,,220.84667948500874,94.59388654404361,True,"8 GPUs (8×1, batch 32) picked for the best throughput-vs-energy balance, 4% faster than the runner-up (8 GPUs, batch 16)."
     granite-3.1-2b,lora,NVIDIA-A100-SXM4-80GB,1024,16,8,8,1,32,50610.71190113843,,220.84667948500874,229.16673240982067,True,"8 GPUs (8×1, batch 32) picked for the best throughput-vs-energy balance, 4% faster than the runner-up (8 GPUs, batch 16)."
