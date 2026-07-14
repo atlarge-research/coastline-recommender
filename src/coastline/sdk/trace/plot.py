@@ -132,7 +132,7 @@ def plot_trace_timeline(
             {"submit_s": submit, "gpus": gpus, "duration_s": duration, "nodes": nodes}
             for submit, gpus, duration, nodes in jobs
         ],
-        policy="backfill",
+        policy="distributed-backfill",
         num_nodes=num_nodes,
         node_gpus=node_gpus,
     )
