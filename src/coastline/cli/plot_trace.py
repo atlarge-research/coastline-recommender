@@ -30,9 +30,10 @@ def _build_parser() -> FriendlyParser:
     p.add_argument("--input",  required=True, help="Trace CSV (recommended or raw).")
     p.add_argument("--output", required=True, help="Output path for the timeline figure.")
     p.add_argument(
-        "--baseline",
+        "--baseline", "--original",
         action="store_true",
         default=False,
+        dest="baseline",
         help=(
             "Use the original (pre-recommendation) GPU layout columns: "
             f"{_BASELINE_GPUS_COL} and {_BASELINE_NODES_COL}.  "
