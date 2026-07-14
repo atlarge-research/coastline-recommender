@@ -15,7 +15,7 @@ from coastline.sdk.models.context import Constraints, SystemContext
 from coastline.sdk.models.workload import WorkloadSpec
 from coastline.sdk.policies import PolicyFactory
 from coastline.sdk.predictors.factory import create_physics_driven
-from coastline.sdk.predictors.performance.composite import CacheThenPhysicsPredictor
+from coastline.sdk.predictors.performance.composite import CacheThenSimulatePredictor
 from coastline.sdk.predictors.performance.retrieval.cache_predictor import RetrievalPredictor
 
 _GPU = "NVIDIA-A100-SXM4-80GB"  # a Kavier-supported GPU
@@ -73,7 +73,7 @@ def test_intelligent_returns_the_recorded_cache_value_on_an_exact_hit(tmp_path):
     # the cache short-circuits before physics is consulted.
     cache = _cache_over(tmp_path, [_cache_row(batch_size=8, throughput=4242.0, runtime=600.0)])
     physics = create_physics_driven()
-    intelligent = CacheThenPhysicsPredictor(cache=cache, physics=physics)
+    intelligent = CacheThenSimulatePredictor(cache=cache, fallback=physics)
 
     out = intelligent.predict(_workload(batch_size=8), _context())
 
@@ -91,7 +91,7 @@ def test_intelligent_falls_through_to_physics_on_a_cache_miss(tmp_path):
     # provenance (metadata predictor == "kavier") plus a finite positive
     # throughput -- the contract of the fallback branch.
     cache = _cache_over(tmp_path, [_cache_row(batch_size=999, throughput=4242.0, runtime=600.0)])
-    intelligent = CacheThenPhysicsPredictor(cache=cache, physics=create_physics_driven())
+    intelligent = CacheThenSimulatePredictor(cache=cache, fallback=create_physics_driven())
 
     out = intelligent.predict(_workload(batch_size=8), _context())
 
@@ -111,7 +111,7 @@ def test_intelligent_falls_through_to_physics_on_a_cache_miss(tmp_path):
         ("physics_driven", "KavierPredictor"),
         ("cache", "RetrievalPredictor"),
         # "intelligent" is the cache->physics cascade
-        ("intelligent", "CacheThenPhysicsPredictor"),
+        ("intelligent", "CacheThenSimulatePredictor"),
         # named ML models must reach the ML branch, not collapse to the composite or
         # to CatBoost. The six portfolio models share SklearnPortfolioPredictor (they
         # stay distinguishable by get_name; see test_config_predictor_selection); the
@@ -120,7 +120,7 @@ def test_intelligent_falls_through_to_physics_on_a_cache_miss(tmp_path):
         ("tabpfn", "TabPFNPredictor"),
         ("deep_learning", "DeepLearningPredictor"),
         # an unknown name falls back to the intelligent default (policies L117-118)
-        ("totally-not-a-real-predictor", "CacheThenPhysicsPredictor"),
+        ("totally-not-a-real-predictor", "CacheThenSimulatePredictor"),
     ],
 )
 def test_factory_resolves_each_name_to_its_own_predictor_class(name, expected_cls):

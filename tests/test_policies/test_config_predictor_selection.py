@@ -18,8 +18,8 @@ return.  The map is:
 
     performance:  kavier/physics/physics_driven -> KavierPredictor
                   cache                          -> RetrievalPredictor
-                  intelligent (default)          -> CacheThenPhysicsPredictor
-                                                    wired cache=Retrieval, physics=Kavier
+                  intelligent (default)          -> CacheThenSimulatePredictor
+                                                    wired cache=Retrieval, fallback=Kavier
                   catboost/xgboost/lightgbm/...   -> <Name>Predictor  (one class *each*)
                   <unknown name>                 -> intelligent fallback
     energy:       kavier_power (default)         -> KavierPowerPredictor (WRAPS_THROUGHPUT_ENGINE)
@@ -47,7 +47,7 @@ import coastline.sdk.predictors.performance.data_driven.ml_common as ml_common
 from coastline.sdk.io.run_config import load_strategy_config
 from coastline.sdk.policies import PolicyFactory
 from coastline.sdk.predictors.energy import KavierPowerPredictor
-from coastline.sdk.predictors.performance.composite import CacheThenPhysicsPredictor
+from coastline.sdk.predictors.performance.composite import CacheThenSimulatePredictor
 from coastline.sdk.predictors.performance.physics import KavierPredictor
 from coastline.sdk.predictors.performance.retrieval.cache_predictor import RetrievalPredictor
 
@@ -118,7 +118,7 @@ class TestNamedMLModelSelection:
         # Contract: an unrecognised performance name logs a warning and falls back
         # to the "intelligent" composite (not a crash, not CatBoost).
         strategy = _make_strategy({"performance": "totally-bogus-model"})
-        assert isinstance(strategy.throughput_predictor, CacheThenPhysicsPredictor)
+        assert isinstance(strategy.throughput_predictor, CacheThenSimulatePredictor)
 
 
 # ---------------------------------------------------------------------------
@@ -142,7 +142,7 @@ class TestPerformanceAndEnergyAreIndependent:
         # "intelligent" default (cache→physics). Proves one key does not silently
         # reset the other.
         strategy = _make_strategy({"energy": "kavier_power"})
-        assert isinstance(strategy.throughput_predictor, CacheThenPhysicsPredictor)
+        assert isinstance(strategy.throughput_predictor, CacheThenSimulatePredictor)
         assert isinstance(strategy.power_predictor, KavierPowerPredictor)
 
     def test_unknown_energy_name_raises_value_error(self):
@@ -159,19 +159,19 @@ class TestPerformanceAndEnergyAreIndependent:
 
 
 class TestDefaultsPreservedWhenKeysOmitted:
-    def test_omitted_predictors_yields_intelligent_composite_wired_cache_then_physics(self):
+    def test_omitted_predictors_yields_intelligent_composite_wired_cache_then_fallback(self):
         # No predictors section at all -> the documented default pair, and the
         # "intelligent" throughput predictor is specifically the composite that
         # tries an exact cache hit first, then Kavier physics. We assert the wiring
-        # (cache=Retrieval, physics=Kavier) and the spec name string, not just the
+        # (cache=Retrieval, fallback=Kavier) and the spec name string, not just the
         # outer class — a composite wired the wrong way round would pass a bare
         # isinstance but fail here.
         strategy = _make_strategy(None)
         tp = strategy.throughput_predictor
-        assert isinstance(tp, CacheThenPhysicsPredictor)
+        assert isinstance(tp, CacheThenSimulatePredictor)
         assert isinstance(tp._cache, RetrievalPredictor)
-        assert isinstance(tp._physics, KavierPredictor)
-        assert tp.get_name() == "intelligent (cache→kavier)"
+        assert isinstance(tp._fallback, KavierPredictor)
+        assert tp.get_name() == "intelligent (cache→Kavier Physics-Based)"
         assert isinstance(strategy.power_predictor, KavierPowerPredictor)
 
     def test_empty_none_and_explicit_intelligent_resolve_identically(self):
@@ -232,5 +232,5 @@ class TestYamlLoaderSurfacesBothKeys:
         loaded = load_strategy_config(path)
         strategy = PolicyFactory.create_strategy(config=loaded)
         assert isinstance(strategy.throughput_predictor, KavierPredictor)
-        assert not isinstance(strategy.throughput_predictor, CacheThenPhysicsPredictor)
+        assert not isinstance(strategy.throughput_predictor, CacheThenSimulatePredictor)
         assert isinstance(strategy.power_predictor, KavierPowerPredictor)

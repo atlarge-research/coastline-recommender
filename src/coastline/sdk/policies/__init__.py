@@ -124,33 +124,47 @@ class PolicyFactory:
         return path
 
     @staticmethod
+    def _resolve_simulation_predictor(name: str):
+        """The simulation model used on a cache miss (or directly as ``performance: <name>``):
+        Kavier physics or a named ML model. Never resolves to ``intelligent``/``cache`` — a
+        fallback that itself cached would nest a second lookup."""
+        if name in ("kavier", "physics", "physics_driven"):
+            return create_physics_driven()
+        named = _build_named_ml_predictor(name)
+        if named is not None:
+            return named
+        logger.warning("Unknown fallback model '%s'; using kavier", name)
+        return create_physics_driven()
+
+    @staticmethod
     def throughput_predictor(predictor_config: dict):
         performance_type = predictor_config.get("performance", "intelligent")
         lookup = PolicyFactory._lookup_path(predictor_config)
-        if performance_type in ("kavier", "physics", "physics_driven"):
-            return create_physics_driven()
         if performance_type == "cache":
             return RetrievalPredictor(dataset_path=lookup)
         if performance_type == "intelligent":
-            return PolicyFactory._intelligent_throughput_predictor(lookup)
+            return PolicyFactory._intelligent_throughput_predictor(predictor_config, lookup)
+        if performance_type in ("kavier", "physics", "physics_driven"):
+            return create_physics_driven()
         # a specific data-driven model selected by name (catboost, xgboost, …)
         named = _build_named_ml_predictor(performance_type)
         if named is not None:
             return named
         logger.warning("Unknown predictor '%s'; using intelligent default", performance_type)
-        return PolicyFactory._intelligent_throughput_predictor(lookup)
+        return PolicyFactory._intelligent_throughput_predictor(predictor_config, lookup)
 
     @staticmethod
-    def _intelligent_throughput_predictor(lookup: Optional[Path] = None):
-        # "intelligent" = use an exact cache match (a real measured past run) when
-        # one exists for this configuration, else the Kavier analytical predictor.
-        # A cache miss yields no prediction, so the composite falls through to
-        # physics per configuration. Trained ML is opt-in by name (e.g. "catboost").
-        from coastline.sdk.predictors.performance.composite import CacheThenPhysicsPredictor
+    def _intelligent_throughput_predictor(predictor_config: dict, lookup: Optional[Path] = None):
+        # "intelligent" = an exact cache match (a real measured past run) when one exists for this
+        # configuration, else simulate with `fallback` (Kavier by default, or any model by name).
+        # A cache miss yields no prediction, so the composite falls through to the fallback per
+        # configuration.
+        from coastline.sdk.predictors.performance.composite import CacheThenSimulatePredictor
 
-        return CacheThenPhysicsPredictor(
+        fallback = predictor_config.get("fallback", "kavier")
+        return CacheThenSimulatePredictor(
             cache=RetrievalPredictor(dataset_path=lookup),
-            physics=create_physics_driven(),
+            fallback=PolicyFactory._resolve_simulation_predictor(fallback),
         )
 
     @staticmethod
