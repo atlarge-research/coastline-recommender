@@ -158,9 +158,9 @@ def plot_trace_timeline(
     import sys
 
     df = pd.read_csv(enriched_csv, low_memory=False)
-    effective_dur_col  = duration_col      if duration_col      else f"metadata.estimated_duration_{method}"
+    effective_dur_col = duration_col if duration_col else f"metadata.estimated_duration_{method}"
     effective_gpus_col = gpus_per_node_col if gpus_per_node_col else _GPN
-    effective_nodes_col = nodes_col        if nodes_col         else _NODES
+    effective_nodes_col = nodes_col if nodes_col else _NODES
     # Submit col resolution is deferred to _submit_seconds; report the winner here.
     _submit_winner = next(
         (c for c in ([submit_col] if submit_col else list(_SUBMIT_COLS)) if c in df.columns),
@@ -179,8 +179,14 @@ def plot_trace_timeline(
             f"{enriched_csv} has no '{effective_dur_col}' — either pass --duration-col or "
             f"run `coastline recommend-trace --method {method}` first."
         )
+    # An EXPLICIT --submit-col that isn't present is a user error: fail loudly (mirrors the
+    # duration guard above) instead of silently enqueuing every job at t=0. The auto-resolution
+    # path (submit_col=None) keeps its documented t=0 fallback.
+    if submit_col and submit_col not in df.columns:
+        raise SystemExit(f"{enriched_csv} has no submit column '{submit_col}' — check the --submit-col value.")
     jobs, skipped = _trace_jobs(
-        df, method,
+        df,
+        method,
         duration_col=duration_col,
         submit_col=submit_col,
         gpus_per_node_col=gpus_per_node_col,

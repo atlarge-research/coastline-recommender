@@ -10,7 +10,7 @@ from coastline.cli._shared import FriendlyParser
 from coastline.sdk.trace.plot import _ORIG_GPUS, _ORIG_NODES, plot_trace_timeline
 
 # Columns used when --baseline is set (original layout, never overwritten by recommend-trace).
-_BASELINE_GPUS_COL  = _ORIG_GPUS   # "metadata.orig_number_gpus"
+_BASELINE_GPUS_COL = _ORIG_GPUS  # "metadata.orig_number_gpus"
 _BASELINE_NODES_COL = _ORIG_NODES  # "metadata.orig_num_nodes"
 
 
@@ -27,10 +27,11 @@ def _build_parser() -> FriendlyParser:
             "    --label        baseline"
         ),
     )
-    p.add_argument("--input",  required=True, help="Trace CSV (recommended or raw).")
+    p.add_argument("--input", required=True, help="Trace CSV (recommended or raw).")
     p.add_argument("--output", required=True, help="Output path for the timeline figure.")
     p.add_argument(
-        "--baseline", "--original",
+        "--baseline",
+        "--original",
         action="store_true",
         default=False,
         dest="baseline",
@@ -78,9 +79,7 @@ def _build_parser() -> FriendlyParser:
         default=None,
         metavar="COL",
         help=(
-            "Column to use as number of nodes.  "
-            "Defaults to resources.num_nodes.  "
-            "Cannot be combined with --baseline."
+            "Column to use as number of nodes.  Defaults to resources.num_nodes.  Cannot be combined with --baseline."
         ),
     )
     p.add_argument(
@@ -105,7 +104,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
 
     if args.baseline:
         gpus_per_node_col = _BASELINE_GPUS_COL
-        nodes_col         = _BASELINE_NODES_COL
+        nodes_col = _BASELINE_NODES_COL
         print(
             f"note: --baseline — using original layout columns:\n"
             f"  gpus-per-node : {_BASELINE_GPUS_COL}\n"
@@ -114,7 +113,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         )
     else:
         gpus_per_node_col = args.gpus_per_node_col
-        nodes_col         = args.nodes_col
+        nodes_col = args.nodes_col
 
     from coastline.sdk.io.infrastructure import resolve_cluster_caps
 
