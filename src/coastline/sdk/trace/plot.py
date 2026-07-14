@@ -86,20 +86,21 @@ def _trace_jobs(
     *,
     duration_col: Optional[str] = None,
     submit_col: Optional[str] = None,
+    gpus_per_node_col: Optional[str] = None,
+    nodes_col: Optional[str] = None,
 ) -> tuple[list[tuple], int]:
     """FIFO jobs from an enriched trace: the recommended layout's total GPUs scheduled
     for its predicted runtime at its submission offset.
 
     ``duration_col`` overrides the default ``metadata.estimated_duration_<method>`` column.
     ``submit_col`` overrides the default submission-time column resolution.
+    ``gpus_per_node_col`` overrides the default ``resources.num_gpus_per_node`` column.
+    ``nodes_col`` overrides the default ``resources.num_nodes`` column.
     Returns ``(jobs, n_skipped)``; each job is ``(submit_s, gpus, duration_s, nodes)``."""
     dur_col = duration_col if duration_col else f"metadata.estimated_duration_{method}"
     dur = _num(df, dur_col)
-    nodes = _num(df, _NODES)
-    total_gpus = _num(df, _GPN) * nodes
-    # fall back to the original layout where the recommended one is unusable
-    total_gpus = total_gpus.where(total_gpus > 0, _num(df, _ORIG_GPUS))
-    nodes = nodes.where(nodes >= 1, _num(df, _ORIG_NODES))
+    nodes = _num(df, nodes_col if nodes_col else _NODES)
+    total_gpus = _num(df, gpus_per_node_col if gpus_per_node_col else _GPN) * nodes
     submit = _submit_seconds(df, submit_col)
 
     jobs, skipped = [], 0
@@ -123,6 +124,8 @@ def plot_trace_timeline(
     node_gpus: int = 8,
     duration_col: Optional[str] = None,
     submit_col: Optional[str] = None,
+    gpus_per_node_col: Optional[str] = None,
+    nodes_col: Optional[str] = None,
     label: Optional[str] = None,
 ) -> dict:
     """FIFO-schedule the recommended configs from an enriched trace onto a
@@ -131,11 +134,15 @@ def plot_trace_timeline(
     jobs queued (black line, twin axis) over time. Writes output_png; returns a stats
     dict (jobs, skipped, cluster_gpus, makespan_h, peak_gpus, peak_queue).
 
-    ``duration_col``  — column holding job duration in seconds.  Defaults to
-                        ``metadata.estimated_duration_<method>``.
-    ``submit_col``    — column holding submission time (numeric seconds or ISO timestamp).
-                        Defaults to the auto-resolved submission column.
-    ``label``         — legend / title label.  Defaults to ``method``.
+    ``duration_col``      — column holding job duration in seconds.  Defaults to
+                            ``metadata.estimated_duration_<method>``.
+    ``submit_col``        — column holding submission time (numeric seconds or ISO timestamp).
+                            Defaults to the auto-resolved submission column.
+    ``gpus_per_node_col`` — column holding GPUs-per-node.  Defaults to
+                            ``resources.num_gpus_per_node``.
+    ``nodes_col``         — column holding number of nodes.  Defaults to
+                            ``resources.num_nodes``.
+    ``label``             — legend / title label.  Defaults to ``method``.
     """
     import matplotlib
 
@@ -148,14 +155,37 @@ def plot_trace_timeline(
     node_gpus = max(1, min(node_gpus, cluster_gpus))
     num_nodes = max(1, cluster_gpus // node_gpus)
 
+    import sys
+
     df = pd.read_csv(enriched_csv, low_memory=False)
-    effective_dur_col = duration_col if duration_col else f"metadata.estimated_duration_{method}"
+    effective_dur_col  = duration_col      if duration_col      else f"metadata.estimated_duration_{method}"
+    effective_gpus_col = gpus_per_node_col if gpus_per_node_col else _GPN
+    effective_nodes_col = nodes_col        if nodes_col         else _NODES
+    # Submit col resolution is deferred to _submit_seconds; report the winner here.
+    _submit_winner = next(
+        (c for c in ([submit_col] if submit_col else list(_SUBMIT_COLS)) if c in df.columns),
+        "row-order (t=0)",
+    )
+    print(
+        f"plot-trace columns:\n"
+        f"  duration      : {effective_dur_col}\n"
+        f"  gpus-per-node : {effective_gpus_col}\n"
+        f"  nodes         : {effective_nodes_col}\n"
+        f"  submit-time   : {_submit_winner}",
+        file=sys.stderr,
+    )
     if effective_dur_col not in df.columns:
         raise SystemExit(
             f"{enriched_csv} has no '{effective_dur_col}' — either pass --duration-col or "
             f"run `coastline recommend-trace --method {method}` first."
         )
-    jobs, skipped = _trace_jobs(df, method, duration_col=duration_col, submit_col=submit_col)
+    jobs, skipped = _trace_jobs(
+        df, method,
+        duration_col=duration_col,
+        submit_col=submit_col,
+        gpus_per_node_col=gpus_per_node_col,
+        nodes_col=nodes_col,
+    )
     if not jobs:
         raise SystemExit("no rows with both a positive estimated duration and a positive GPU count to schedule.")
 
