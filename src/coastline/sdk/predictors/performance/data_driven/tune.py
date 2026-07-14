@@ -218,6 +218,8 @@ def _fit_tabpfn(
         device = "cpu"
 
     if ckpt is not None:
+        # A local checkpoint may embed non-v2 (research-only) weights into the saved pickle —
+        # fine for your own custom/ model; do NOT use it to regenerate the *bundled* tabpfn.pkl.
         ckpt_path = Path(ckpt).expanduser()
         if not ckpt_path.exists():
             raise ValueError(f"--ckpt path does not exist: {ckpt_path}")

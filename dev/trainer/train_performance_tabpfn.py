@@ -74,8 +74,14 @@ def train_tabpfn(ckpt: str | None = None):
     # If a checkpoint path is explicitly provided and exists, use it instead.
     model_cls = cast(Any, TabPFNRegressor)
 
-    _ckpt_path = Path(ckpt) if ckpt is not None else None
-    if _ckpt_path is not None and _ckpt_path.exists():
+    _ckpt_path = Path(ckpt).expanduser() if ckpt is not None else None
+    if _ckpt_path is not None:
+        # An explicit --ckpt that doesn't exist is a hard error (matches the SDK tune path):
+        # silently training on v2 when you asked for your own checkpoint is a footgun.
+        if not _ckpt_path.exists():
+            raise ValueError(f"--ckpt path does not exist: {_ckpt_path}")
+        # A local checkpoint may embed non-v2 (research-only) weights into the saved pickle —
+        # fine for your own model; do NOT use it to regenerate the *bundled* tabpfn.pkl.
         print(f"  using checkpoint: {_ckpt_path}")
 
         def make_regressor():
@@ -83,8 +89,6 @@ def train_tabpfn(ckpt: str | None = None):
 
         ckpt_desc = _ckpt_path.name
     else:
-        if _ckpt_path is not None:
-            print(f"  WARNING: checkpoint not found: {_ckpt_path} — falling back to v2 weights")
 
         def make_regressor():
             return model_cls.create_default_for_version(ModelVersion.V2, device=device, ignore_pretraining_limits=True)
