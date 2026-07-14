@@ -177,7 +177,7 @@ Or, the most complex: a batch experiment, one recommendation per row of a worklo
 
 ```text
 # workloads.csv
-model_name,method,gpu_model,tokens_per_sample,batch_size
+llm_model,fine_tuning_method,gpu_model,tokens_per_sample,batch_size
 mistral-7b-v0.1,lora,NVIDIA-A100-SXM4-80GB,1024,16
 granite-3.3-8b,full,NVIDIA-A100-SXM4-80GB,4096,4
 ```
@@ -188,7 +188,7 @@ coastline recommend-job --config config/batch_config.yaml --input workloads.csv 
 
 ```text
 # recommendations.csv (excerpt)
-model_name,...,recommended_total_gpus,recommended_batch_size,predicted_throughput,feasible,rationale
+llm_model,...,recommended_total_gpus,recommended_batch_size,predicted_throughput,feasible,rationale
 mistral-7b-v0.1,...,8,32,37577.5,True,"8 GPUs (8×1, batch 32) picked for the best throughput-vs-energy balance, ..."
 ```
 

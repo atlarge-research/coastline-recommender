@@ -160,7 +160,7 @@ The config for batch experiments: one recommendation per row of a workload CSV. 
 
 ```text
 # workloads.csv
-model_name,method,gpu_model,tokens_per_sample,batch_size
+llm_model,fine_tuning_method,gpu_model,tokens_per_sample,batch_size
 mistral-7b-v0.1,lora,NVIDIA-A100-SXM4-80GB,1024,16
 granite-3.3-8b,full,NVIDIA-A100-SXM4-80GB,4096,4
 ```
@@ -173,28 +173,28 @@ Each row gains the recommended configuration, the predictions, and a rationale:
 
 ```text
 # recommendations.csv (excerpt)
-model_name,...,recommended_total_gpus,recommended_batch_size,predicted_throughput,predicted_power_watts,feasible,rationale
+llm_model,...,recommended_total_gpus,recommended_batch_size,predicted_throughput,predicted_power_watts,feasible,rationale
 mistral-7b-v0.1,...,8,32,37577.5,220.8,True,"8 GPUs (8×1, batch 32) picked for the best throughput-vs-energy balance, 4% faster than the runner-up (8 GPUs, batch 16)."
 ```
 
 ### 4.1 The input workload CSV { #input-csv }
 
-One workload per row. Coastline accepts the canonical column names and the listed alternate spellings; remap any other header under `input.columns` in the batch config.
+One workload per row, keyed by the WorkloadSpec field names (the one column vocabulary — no synonyms). Remap a non-standard header onto a field under `input.columns` in the batch config.
 
-| Column | Alternate spellings | Type | Required | Description |
-|--------|--------------------|------|----------|-------------|
-| `llm_model` | `model_name` | String | yes | LLM to fine-tune. |
-| `fine_tuning_method` | `method`, `peft` | String | yes | `full`, `lora`, or `gptq-lora`. |
-| `gpu_model` | `gpu` | String | yes | GPU model to seed the sweep. |
-| `tokens_per_sample` | `seq_len` | Int | yes | Sequence length. |
-| `batch_size` | `batch` | Int | yes | Seed per-device batch size. |
-| `number_gpus` | — | Int | no | Seed GPU count. |
-| `number_nodes` | — | Int | no | Seed node count. |
+| Column | Type | Required | Description |
+|--------|------|----------|-------------|
+| `llm_model` | String | yes | LLM to fine-tune. |
+| `fine_tuning_method` | String | yes | `full`, `lora`, or `gptq-lora`. |
+| `gpu_model` | String | yes | GPU model to seed the sweep. |
+| `tokens_per_sample` | Int | yes | Sequence length. |
+| `batch_size` | Int | yes | Seed per-device batch size. |
+| `gpus_per_node` | Int | no | Seed GPUs per node. |
+| `number_of_nodes` | Int | no | Seed node count. |
 
 A ready-to-run sample ships in `config/coastline_functionality/sample_workloads.csv`:
 
 ```text
-model_name,method,gpu_model,tokens_per_sample,batch_size
+llm_model,fine_tuning_method,gpu_model,tokens_per_sample,batch_size
 mistral-7b-v0.1,lora,NVIDIA-A100-SXM4-80GB,1024,16
 granite-3.3-8b,full,NVIDIA-A100-SXM4-80GB,4096,4
 granite-3.1-2b,lora,NVIDIA-A100-SXM4-80GB,1024,16
