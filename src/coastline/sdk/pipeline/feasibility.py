@@ -63,6 +63,4 @@ def create_feasibility_checker(predictor_config: dict) -> FeasibilityChecker:
 
     # A typo (e.g. "Autoconf", "auto-conf", "strict") must fail loudly rather than fall
     # through to the rules checker and silently bypass the OOM veto.
-    raise ValueError(
-        f"unknown feasibility mode {mode!r}: expected one of {[m.value for m in FeasibilityMode]}"
-    )
+    raise ValueError(f"unknown feasibility mode {mode!r}: expected one of {[m.value for m in FeasibilityMode]}")

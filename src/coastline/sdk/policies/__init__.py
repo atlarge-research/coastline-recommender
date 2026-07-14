@@ -97,9 +97,7 @@ class PolicyFactory:
                 config, strategy_config, predictor_config, preset, alpha, beta
             )
         else:
-            raise ValueError(
-                f"Unknown strategy: '{strategy_name}'. Supported: {[s.value for s in Strategy]}"
-            )
+            raise ValueError(f"Unknown strategy: '{strategy_name}'. Supported: {[s.value for s in Strategy]}")
 
     @staticmethod
     def _lookup_path(predictor_config: dict) -> Optional[Path]:
@@ -182,9 +180,7 @@ class PolicyFactory:
         energy_type = predictor_config.get("energy", EnergyBackend.KAVIER_POWER.value)
         if energy_type == EnergyBackend.KAVIER_POWER:
             return KavierPowerPredictor()
-        raise ValueError(
-            f"Unknown energy predictor: '{energy_type}'. Supported: {[e.value for e in EnergyBackend]}"
-        )
+        raise ValueError(f"Unknown energy predictor: '{energy_type}'. Supported: {[e.value for e in EnergyBackend]}")
 
     @staticmethod
     def _create_min_gpu_strategy(config: dict, predictor_config: dict) -> MinGPUStrategy:

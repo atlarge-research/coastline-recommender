@@ -59,6 +59,7 @@ _OUTPUT_COLUMNS = (
     "rationale",
 )
 
+
 def _drop_missing(row: dict[str, Any]) -> dict[str, Any]:
     """Drop NaN/None/blank cells so ``.get(key)`` means 'absent'."""
     out: dict[str, Any] = {}

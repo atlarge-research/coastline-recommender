@@ -55,9 +55,7 @@ def load_infrastructure() -> Infrastructure:
     return Infrastructure(**_DEFAULTS)
 
 
-def resolve_cluster_caps(
-    cluster_gpus: Optional[int] = None, node_gpus: Optional[int] = None
-) -> tuple[int, int, int]:
+def resolve_cluster_caps(cluster_gpus: Optional[int] = None, node_gpus: Optional[int] = None) -> tuple[int, int, int]:
     """Resolve the cluster GPU caps as ``(total_gpus, gpus_per_node, max_nodes)``.
 
     The cluster size is sysadmin-declared in ``infrastructure.yaml`` — it is deliberately NOT read

@@ -243,9 +243,7 @@ def execute_strategy(
 
 def run_request(request: RecommendRequest) -> tuple[list[Recommendation], dict[str, Any]]:
     """The single workflow: build the strategy, run it, return (recs, meta)."""
-    strategy = build_strategy(
-        request.config, request.strategy_name, request.preset, request.alpha, request.beta
-    )
+    strategy = build_strategy(request.config, request.strategy_name, request.preset, request.alpha, request.beta)
     return execute_strategy(
         strategy,
         request.workload,

@@ -14,7 +14,6 @@ from coastline.sdk.models.workload import WorkloadSpec
 logger = logging.getLogger(__name__)
 
 
-
 def _powers_of_two(limit: int) -> List[int]:
     """Return [1, 2, 4, …] up to and including the largest power of 2 ≤ limit."""
     result = []

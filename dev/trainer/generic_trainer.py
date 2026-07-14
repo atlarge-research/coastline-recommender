@@ -198,12 +198,8 @@ def _score(name: str, predict: Predict, X: pd.DataFrame, y: pd.DataFrame, y_log:
     y_pred_log = np.asarray(y_pred_log)
     y_pred = inverse_transform_targets(y_pred_log)
 
-    m_tput = calculate_metrics(
-        y[THROUGHPUT].to_numpy(), y_pred[:, 0], y_log[THROUGHPUT].to_numpy(), y_pred_log[:, 0]
-    )
-    m_rt = calculate_metrics(
-        y[RUNTIME].to_numpy(), y_pred[:, 1], y_log[RUNTIME].to_numpy(), y_pred_log[:, 1]
-    )
+    m_tput = calculate_metrics(y[THROUGHPUT].to_numpy(), y_pred[:, 0], y_log[THROUGHPUT].to_numpy(), y_pred_log[:, 0])
+    m_rt = calculate_metrics(y[RUNTIME].to_numpy(), y_pred[:, 1], y_log[RUNTIME].to_numpy(), y_pred_log[:, 1])
     _bar(f"{name} SET EVALUATION")
     print_metrics(m_tput, f"{name.title()} (Throughput)")
     print_metrics(m_rt, f"{name.title()} (Runtime)", unit=runtime_unit)
@@ -255,9 +251,7 @@ def _assemble(
     artifacts["val_metrics_by_target"] = {"throughput": val_tput, "runtime_seconds": val_rt}
 
     if set(artifacts) != spec.artifact_keys:
-        raise ValueError(
-            f"{spec.stem}: artifact keys {sorted(artifacts)} != declared {sorted(spec.artifact_keys)}"
-        )
+        raise ValueError(f"{spec.stem}: artifact keys {sorted(artifacts)} != declared {sorted(spec.artifact_keys)}")
     return artifacts
 
 

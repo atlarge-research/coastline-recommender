@@ -76,9 +76,7 @@ class TestThroughputPredictorFactory:
         # while the cache stays first. Constructing is safe; we never call .predict.
         default = PolicyFactory.throughput_predictor({"performance": "intelligent"})
         assert isinstance(default._fallback, KavierPredictor)
-        custom = PolicyFactory.throughput_predictor(
-            {"performance": "intelligent", "fallback": "xgboost"}
-        )
+        custom = PolicyFactory.throughput_predictor({"performance": "intelligent", "fallback": "xgboost"})
         assert isinstance(custom, CacheThenSimulatePredictor)
         assert isinstance(custom._cache, RetrievalPredictor)  # still cache-first
         assert type(custom._fallback).__name__ == "SklearnPortfolioPredictor"  # miss -> the ML model
@@ -90,9 +88,7 @@ class TestThroughputPredictorFactory:
         # must NOT nest another cache or recurse — it degrades to Kavier. Pins the
         # _resolve_simulation_predictor guard so a future refactor that re-routes unknown names
         # (e.g. back through throughput_predictor) can't reintroduce infinite recursion.
-        predictor = PolicyFactory.throughput_predictor(
-            {"performance": "intelligent", "fallback": bad_fallback}
-        )
+        predictor = PolicyFactory.throughput_predictor({"performance": "intelligent", "fallback": bad_fallback})
         assert isinstance(predictor, CacheThenSimulatePredictor)
         assert isinstance(predictor._fallback, KavierPredictor)
         assert not isinstance(predictor._fallback, CacheThenSimulatePredictor)

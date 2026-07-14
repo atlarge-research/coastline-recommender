@@ -178,7 +178,10 @@ def test_batch_recommend_default_predictor_is_kavier(client):
 
 def test_csv_endpoint_default_predictor_is_kavier(client):
     """Omitting ``predictor`` from a CSV request must default to 'kavier'."""
-    csv_in = "llm_model,fine_tuning_method,gpu_model,tokens_per_sample,batch_size\nmistral-7b-v0.1,full,NVIDIA-A100-SXM4-80GB,1024,8\n"
+    csv_in = (
+        "llm_model,fine_tuning_method,gpu_model,tokens_per_sample,batch_size\n"
+        "mistral-7b-v0.1,full,NVIDIA-A100-SXM4-80GB,1024,8\n"
+    )
     resp_default = client.post("/api/recommend/csv", json={"csv": csv_in, "max_gpus": 8})
     resp_kavier = client.post("/api/recommend/csv", json={"csv": csv_in, "predictor": "kavier", "max_gpus": 8})
     assert resp_default.status_code == 200, resp_default.text
@@ -196,7 +199,10 @@ def test_csv_endpoint_default_predictor_is_kavier(client):
 
 
 def test_recommend_csv_endpoint_returns_csv(client):
-    csv_in = "llm_model,fine_tuning_method,gpu_model,tokens_per_sample,batch_size\nmistral-7b-v0.1,full,NVIDIA-A100-SXM4-80GB,1024,8\n"
+    csv_in = (
+        "llm_model,fine_tuning_method,gpu_model,tokens_per_sample,batch_size\n"
+        "mistral-7b-v0.1,full,NVIDIA-A100-SXM4-80GB,1024,8\n"
+    )
     resp = client.post("/api/recommend/csv", json={"csv": csv_in, "predictor": "kavier", "max_gpus": 8})
     assert resp.status_code == 200, resp.text
     payload = resp.json()
@@ -326,7 +332,10 @@ def test_recommend_csv_value_error_is_422(client, monkeypatch):
         raise ValueError("bad batch input")
 
     monkeypatch.setattr(coastline, "recommend", _raise)
-    csv_in = "llm_model,fine_tuning_method,gpu_model,tokens_per_sample,batch_size\nmistral-7b-v0.1,full,NVIDIA-A100-SXM4-80GB,1024,8\n"
+    csv_in = (
+        "llm_model,fine_tuning_method,gpu_model,tokens_per_sample,batch_size\n"
+        "mistral-7b-v0.1,full,NVIDIA-A100-SXM4-80GB,1024,8\n"
+    )
     resp = client.post("/api/recommend/csv", json={"csv": csv_in, "predictor": "kavier"})
     assert resp.status_code == 422
     assert "bad batch input" in resp.json()["detail"]
@@ -336,7 +345,10 @@ def test_recommend_csv_invalid_goal_is_isolated_not_500(client):
     """An unknown goal is isolated per-row by the facade (feasible=False + the goal
     error in the row), so the endpoint returns 200 with a failed row — it does NOT
     500 or silently drop the row. This pins the documented isolation contract."""
-    csv_in = "llm_model,fine_tuning_method,gpu_model,tokens_per_sample,batch_size\nmistral-7b-v0.1,full,NVIDIA-A100-SXM4-80GB,1024,8\n"
+    csv_in = (
+        "llm_model,fine_tuning_method,gpu_model,tokens_per_sample,batch_size\n"
+        "mistral-7b-v0.1,full,NVIDIA-A100-SXM4-80GB,1024,8\n"
+    )
     resp = client.post(
         "/api/recommend/csv",
         json={"csv": csv_in, "predictor": "kavier", "goal": "no-such-goal"},

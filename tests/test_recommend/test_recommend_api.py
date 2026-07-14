@@ -144,7 +144,12 @@ def test_missing_required_core_field_is_feasible_false_not_defaulted():
 
     # A complete row is still feasible — the guard fires only on the ABSENT case.
     complete = coastline.recommend(
-        {"llm_model": "mistral-7b-v0.1", "gpu_model": "NVIDIA-A100-SXM4-80GB", "tokens_per_sample": 1024, "batch_size": 16},
+        {
+            "llm_model": "mistral-7b-v0.1",
+            "gpu_model": "NVIDIA-A100-SXM4-80GB",
+            "tokens_per_sample": 1024,
+            "batch_size": 16,
+        },
         predictor="kavier",
         max_gpus=8,
     )

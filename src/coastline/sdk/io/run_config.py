@@ -38,9 +38,7 @@ _DEFAULT_STRATEGY_CONFIG: dict[str, Any] = builtin_default_config()
 # ``EXPERIMENT_CONFIG`` env var lets a deployment point elsewhere. Repo root: io/ -> sdk/ ->
 # coastline/ -> src/ -> repo.
 _CONFIG_ENV_KEY = "EXPERIMENT_CONFIG"
-_CANONICAL_CONFIG = (
-    Path(__file__).resolve().parents[4] / "config" / "coastline_functionality" / "experiment.yaml"
-)
+_CANONICAL_CONFIG = Path(__file__).resolve().parents[4] / "config" / "coastline_functionality" / "experiment.yaml"
 
 
 def default_experiment_path() -> Path:
