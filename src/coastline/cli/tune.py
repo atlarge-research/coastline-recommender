@@ -27,6 +27,12 @@ def _build_parser() -> FriendlyParser:
         "Below 1.0 the remainder becomes a test split and MdAPE is reported.",
     )
     p.add_argument(
+        "--ckpt",
+        default=None,
+        help="Path to a local TabPFN checkpoint file (e.g. ~/.data/tabpfn/tabpfn-v2.6-regressor-v2.6_default.ckpt). "
+        "Passed as model_path to TabPFNRegressor; skips the network download. Only used when --model tabpfn.",
+    )
+    p.add_argument(
         "--output",
         default=None,
         help="Artifact path (default: the SDK's bundled models dir, custom/<model>.pkl — where "
@@ -56,6 +62,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             args.data,
             model=args.model,
             train_percentage=args.train_percentage,
+            ckpt=args.ckpt,
             output=args.output,
             seed=args.seed,
             on_step=lambda msg: print(msg, flush=True),
