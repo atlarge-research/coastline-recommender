@@ -102,6 +102,56 @@ def test_intelligent_falls_through_to_physics_on_a_cache_miss(tmp_path):
     assert out.predicted_throughput != pytest.approx(4242.0)
 
 
+def _row_with_custom_cols() -> dict:
+    """An indexable run whose throughput/duration live under NON-default headers (tps/dur)."""
+    return {
+        "model_name": _MODEL,
+        "method": "lora",
+        "gpu_model": _GPU,
+        "number_nodes": 1,
+        "number_gpus": 4,
+        "tokens_per_sample": 1024,
+        "batch_size": 8,
+        "tps": 3131.0,  # throughput under a custom header, not dataset_tokens_per_second
+        "dur": 720.0,  # duration under a custom header, not train_runtime
+    }
+
+
+def test_lookup_reads_configurable_throughput_and_runtime_columns(tmp_path):
+    # D: a lookup CSV may store throughput/duration under any headers; naming them via
+    # throughput_col / runtime_col must still produce an exact hit reading THOSE columns.
+    # Oracle: the distinctive 3131.0 planted under "tps" comes back verbatim — proving the
+    # predictor read "tps", not the default column (which is absent here, so a wrong read raises).
+    csv = tmp_path / "custom_cols.csv"
+    pd.DataFrame([_row_with_custom_cols()]).to_csv(csv, index=False)
+    cache = RetrievalPredictor(dataset_path=csv, throughput_col="tps", runtime_col="dur")
+
+    out = cache.predict(_workload(batch_size=8), _context())
+
+    assert out is not None, "an exact config match must hit even under custom column names"
+    assert out.predicted_throughput == pytest.approx(3131.0)
+    assert out.predicted_runtime_seconds == pytest.approx(720.0)
+
+
+def test_lookup_column_keys_thread_through_the_policy_factory(tmp_path):
+    # The predictors.lookup_throughput_col / lookup_runtime_col config keys must reach the
+    # RetrievalPredictor. Oracle: the built predictor reports the custom columns AND a hit
+    # returns the value planted under them.
+    csv = tmp_path / "custom_cols.csv"
+    pd.DataFrame([_row_with_custom_cols()]).to_csv(csv, index=False)
+    cache = PolicyFactory.throughput_predictor(
+        {
+            "performance": "cache",
+            "lookup": str(csv),
+            "lookup_throughput_col": "tps",
+            "lookup_runtime_col": "dur",
+        }
+    )
+    assert cache._throughput_col == "tps" and cache._runtime_col == "dur"
+    out = cache.predict(_workload(batch_size=8), _context())
+    assert out is not None and out.predicted_throughput == pytest.approx(3131.0)
+
+
 @pytest.mark.parametrize(
     "name, expected_cls",
     [

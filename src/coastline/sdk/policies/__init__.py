@@ -124,6 +124,16 @@ class PolicyFactory:
         return path
 
     @staticmethod
+    def _retrieval_predictor(predictor_config: dict, lookup: Optional[Path]):
+        """A lookup/cache predictor over ``lookup``, reading throughput/duration from the columns
+        named by ``predictors.lookup_throughput_col`` / ``lookup_runtime_col`` (defaults = run DB)."""
+        return RetrievalPredictor(
+            dataset_path=lookup,
+            throughput_col=predictor_config.get("lookup_throughput_col"),
+            runtime_col=predictor_config.get("lookup_runtime_col"),
+        )
+
+    @staticmethod
     def _resolve_simulation_predictor(name: str):
         """The simulation model used on a cache miss (or directly as ``performance: <name>``):
         Kavier physics or a named ML model. Never resolves to ``intelligent``/``cache`` — a
@@ -141,7 +151,7 @@ class PolicyFactory:
         performance_type = predictor_config.get("performance", "intelligent")
         lookup = PolicyFactory._lookup_path(predictor_config)
         if performance_type == "cache":
-            return RetrievalPredictor(dataset_path=lookup)
+            return PolicyFactory._retrieval_predictor(predictor_config, lookup)
         if performance_type == "intelligent":
             return PolicyFactory._intelligent_throughput_predictor(predictor_config, lookup)
         if performance_type in ("kavier", "physics", "physics_driven"):
@@ -163,7 +173,7 @@ class PolicyFactory:
 
         fallback = predictor_config.get("fallback", "kavier")
         return CacheThenSimulatePredictor(
-            cache=RetrievalPredictor(dataset_path=lookup),
+            cache=PolicyFactory._retrieval_predictor(predictor_config, lookup),
             fallback=PolicyFactory._resolve_simulation_predictor(fallback),
         )
 
