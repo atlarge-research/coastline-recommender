@@ -50,6 +50,13 @@ _ACT_RUNTIME = "metadata.train_runtime"
 # observed job duration — the fallback when no recommendation can be made
 _ACT_DURATION = "metadata.output.extrapolated_duration"
 
+# When BOTH of these columns are present in the trace the recommended effective
+# batch size is NOT written back to _BATCH / _ORIG_PER_DEVICE (they record the
+# original submitted config and must not be touched).  Instead the per-device
+# equivalent for the new layout is derived and written to _REC_PER_DEVICE.
+_ORIG_PER_DEVICE = "metadata.orig_per_device_train_batch_size"
+_REC_PER_DEVICE = "per_device_train_batch_size"
+
 _NO_TOT_TOKENS = None  # sentinel: tot_tokens_col not provided
 
 # coastline predictor keys for the trace's method names
@@ -63,6 +70,7 @@ _FRONT_COLS = [
     _GPN,
     _NODES,
     _BATCH,
+    _REC_PER_DEVICE,
 ]
 
 
@@ -187,17 +195,33 @@ def _recommend_row(
                Falls back to the legacy tps×runtime path only when tot_tokens_col is None.
     - ``note``: None on full success; otherwise the reason the row was kept unchanged.
     """
-    keep = {"nodes": row.get(_NODES), "gpn": row.get(_GPN), "batch": row.get(_BATCH), "thr": None, "dur": None, "note": None}
+    keep = {"nodes": row.get(_NODES), "gpn": row.get(_GPN), "batch": row.get(_BATCH), "per_device": None, "thr": None, "dur": None, "note": None}
     tokens, batch = _as_int(row.get(tokens_col)), _as_int(row.get(_BATCH))
     gpn, nodes = _as_int(row.get(_GPN)), _as_int(row.get(_NODES))
     if not (tokens and batch and gpn and nodes):
         return _unchanged(keep, row, "no recommendation: missing/invalid workload fields")
+
+    # When the trace carries per_device_train_batch_size (the flat SFTTrainer launcher
+    # arg), use it as the batch_size pivot for the recommender.  Kavier's physics engine
+    # treats batch_size as PER-DEVICE and multiplies internally by num_gpus — so feeding
+    # the total effective batch (metadata.batch_size) would overcount by num_gpus.
+    # Fall back to metadata.batch_size only when the per-device column is absent (legacy traces).
+    per_device_orig = _as_int(row.get(_REC_PER_DEVICE))
+    if per_device_orig is not None:
+        wl_batch = per_device_orig
+        logger.debug(
+            "row (%s): using %s=%d as batch_size pivot (metadata.batch_size=%d is total effective)",
+            row.get(_MODEL, "?"), _REC_PER_DEVICE, per_device_orig, batch,
+        )
+    else:
+        wl_batch = batch
+
     wl = {
         "llm_model": str(row[_MODEL]),
         "fine_tuning_method": str(row[_METHOD]),
         "gpu_model": str(row[_GPU]),
         "tokens_per_sample": tokens,
-        "batch_size": batch,
+        "batch_size": wl_batch,
     }
 
     def kavier_hint() -> str:
@@ -246,10 +270,16 @@ def _recommend_row(
                 "row (%s): no tot_tokens_col and no measured tps/runtime — throughput written, duration skipped",
                 row.get(_MODEL, "?"),
             )
+        rec_batch = _as_int(top["batch_size"]) or batch
+        rec_nodes = int(top["number_of_nodes"])
+        rec_gpn = int(top["gpus_per_node"])
+        num_devices = rec_gpn * rec_nodes
+        per_device = max(1, rec_batch // num_devices) if num_devices > 0 else rec_batch
         return {
-            "nodes": int(top["number_of_nodes"]),
-            "gpn": int(top["gpus_per_node"]),
-            "batch": _as_int(top["batch_size"]) or batch,
+            "nodes": rec_nodes,
+            "gpn": rec_gpn,
+            "batch": rec_batch,
+            "per_device": per_device,
             "thr": float(thr),
             "dur": dur,
             "note": None,
@@ -322,7 +352,31 @@ def recommend_trace(
 
     df[_NODES] = [r["nodes"] for r in recs]
     df[_GPN]   = [r["gpn"]   for r in recs]
-    df[_BATCH] = [r["batch"] for r in recs]
+
+    # Batch-size write-back: when the trace carries both the total effective
+    # batch size (metadata.batch_size) AND the original per-device value
+    # (metadata.orig_per_device_train_batch_size), those two columns record the
+    # original submitted config and must NOT be overwritten.  Instead the
+    # recommended effective batch size is converted to a per-device equivalent
+    # for the new layout and written to a separate column.
+    has_orig_per_device = (
+        _ORIG_PER_DEVICE in df.columns and _BATCH in df.columns
+    )
+    if has_orig_per_device:
+        logger.info(
+            "Trace contains both '%s' and '%s': leaving original batch-size "
+            "metadata untouched and writing recommended per-device batch size "
+            "to '%s' (= recommended_effective_batch / (gpus_per_node × nodes)).",
+            _BATCH,
+            _ORIG_PER_DEVICE,
+            _REC_PER_DEVICE,
+        )
+        df[_REC_PER_DEVICE] = [r["per_device"] for r in recs]
+    else:
+        # Legacy path: no per-device origin tracking; overwrite metadata.batch_size
+        # with the recommended effective batch size as before.
+        df[_BATCH] = [r["batch"] for r in recs]
+
     df[thr_col] = [r["thr"] for r in recs]
     df[dur_col] = [r["dur"] for r in recs]
     df["metadata.recommendation_note"] = [r["note"] for r in recs]
