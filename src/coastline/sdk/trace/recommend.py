@@ -30,7 +30,7 @@ from typing import Any, Optional
 import pandas as pd
 
 import coastline
-from coastline.sdk.constants import FeasibilityMode
+from coastline.sdk.constants import DEFAULT_BATCH_SIZES, FeasibilityMode
 from coastline.sdk.io.infrastructure import resolve_cluster_caps
 
 logger = logging.getLogger(__name__)
@@ -202,26 +202,20 @@ def _recommend_row(
         return _unchanged(keep, row, "no recommendation: missing/invalid workload fields")
 
     # When the trace carries per_device_train_batch_size (the flat SFTTrainer launcher
-    # arg), use it as the batch_size pivot for the recommender.  Kavier's physics engine
-    # treats batch_size as PER-DEVICE and multiplies internally by num_gpus — so feeding
-    # the total effective batch (metadata.batch_size) would overcount by num_gpus.
-    # Fall back to metadata.batch_size only when the per-device column is absent (legacy traces).
+    # arg), use it as the batch_size value for the workload (Kavier's physics engine
+    # treats batch_size as PER-DEVICE and multiplies internally by num_gpus).
+    # The grid must still sweep DEFAULT_BATCH_SIZES fully — not a narrow pivot derived
+    # from wl_batch — otherwise a per_device=1 pivot collapses the search to {1, 2}
+    # and makes balanced/energy produce identical results.
+    # When per_device is absent (legacy trace), fall back to metadata.batch_size + batch API.
     per_device_orig = _as_int(row.get(_REC_PER_DEVICE))
-    if per_device_orig is not None:
-        wl_batch = per_device_orig
-        logger.debug(
-            "row (%s): using %s=%d as batch_size pivot (metadata.batch_size=%d is total effective)",
-            row.get(_MODEL, "?"), _REC_PER_DEVICE, per_device_orig, batch,
-        )
-    else:
-        wl_batch = batch
 
     wl = {
         "llm_model": str(row[_MODEL]),
         "fine_tuning_method": str(row[_METHOD]),
         "gpu_model": str(row[_GPU]),
         "tokens_per_sample": tokens,
-        "batch_size": wl_batch,
+        "batch_size": per_device_orig if per_device_orig is not None else batch,
     }
 
     def kavier_hint() -> str:
@@ -232,20 +226,58 @@ def _recommend_row(
         return ""
 
     try:
-        out = coastline.recommend(
-            [wl], predictor=predictor, goal=goal, max_gpus=max_gpus, top_k=1, feasibility=feasibility, lookup=lookup
-        )
-        if out.empty or not bool(out.iloc[0]["feasible"]):
-            hint = kavier_hint()
-            reason = (
-                f"'{predictor}' could not predict this workload{hint}"
-                if hint
-                else _infeasible_note(max_gpus, feasibility)
+        if per_device_orig is not None:
+            # Use the Coastline facade: it always sweeps DEFAULT_BATCH_SIZES as the
+            # grid (not a 3-element neighbourhood), giving goals meaningful separation.
+            import math
+            from coastline.sdk.models.context import SystemContext
+            from coastline.sdk.recommend.facade import Coastline
+            facade = Coastline(predictor=predictor, feasibility=feasibility)
+            ctx = SystemContext.for_gpus(
+                [str(row[_GPU])],
+                max_gpus=max_gpus,
+                gpus_per_node=min(8, max_gpus),
+                max_nodes=max(1, math.ceil(max_gpus / 8)),
             )
-            return _unchanged(keep, row, reason)
-        top = out.iloc[0]
-        thr = top["throughput_tok_s"]
-        if not (pd.notna(thr) and thr > 0):
+            recs = facade.recommend(
+                wl, goal=goal, context=ctx,
+                batch_sizes=list(DEFAULT_BATCH_SIZES),
+                top_k=1, max_gpus=max_gpus,
+            )
+            if not recs:
+                return _unchanged(keep, row, _infeasible_note(max_gpus, feasibility))
+            rec0 = recs[0]
+            thr = rec0.predicted_throughput
+            if not (thr and thr > 0):
+                return _unchanged(keep, row, f"'{predictor}' returned no throughput for this workload")
+            rec_meta = rec0.metadata or {}
+            top = {
+                "throughput_tok_s": thr,
+                "number_of_nodes": rec0.number_of_nodes,
+                "gpus_per_node": rec0.gpus_per_node,
+                "batch_size": rec_meta.get("batch_size"),
+            }
+            logger.debug(
+                "row (%s): facade sweep DEFAULT_BATCH_SIZES, winner: gpn=%d nodes=%d batch=%s thr=%.0f",
+                row.get(_MODEL, "?"), rec0.gpus_per_node, rec0.number_of_nodes,
+                rec_meta.get("batch_size"), thr,
+            )
+        else:
+            out = coastline.recommend(
+                [wl], predictor=predictor, goal=goal, max_gpus=max_gpus,
+                top_k=1, feasibility=feasibility, lookup=lookup,
+            )
+            if out.empty or not bool(out.iloc[0]["feasible"]):
+                hint = kavier_hint()
+                reason = (
+                    f"'{predictor}' could not predict this workload{hint}"
+                    if hint
+                    else _infeasible_note(max_gpus, feasibility)
+                )
+                return _unchanged(keep, row, reason)
+            top = out.iloc[0]
+            thr = top["throughput_tok_s"]
+        if not (pd.notna(thr) and float(thr) > 0):
             return _unchanged(keep, row, f"'{predictor}' returned no throughput for this workload{kavier_hint()}")
         # Duration: use tot_tokens_col when provided; legacy fallback when not.
         total_tokens = _job_total_tokens(row, tot_tokens_col)

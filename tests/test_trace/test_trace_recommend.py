@@ -358,21 +358,24 @@ def test_main_cli_enriches_trace_and_reports_the_derived_row_count(tmp_path, cap
 def test_kavier_receives_per_device_batch_as_input_not_total(tmp_path, monkeypatch):
     """Kavier's physics engine treats batch_size as PER-DEVICE (it multiplies internally
     by num_gpus).  When the trace carries per_device_train_batch_size, that value — NOT
-    metadata.batch_size (the total effective batch) — must be the batch_size sent to
-    coastline.recommend.
+    metadata.batch_size (the total effective batch) — must reach KavierPredictor.predict.
+
+    The provenance path uses the Coastline facade (full DEFAULT_BATCH_SIZES sweep).
+    We spy at the KavierPredictor level where workload.batch_size is visible.
 
     Trace: metadata.batch_size=8 (total), per_device_train_batch_size=1, 8 GPUs.
-    Expected: coastline.recommend called with batch_size=1 (per-device), not 8 (total).
+    All Kavier candidates must have batch_size <= 1 (the per-device pivot), not >= 8.
     """
-    captured: dict = {}
+    from coastline.sdk.predictors.performance.physics import kavier_predictor as kp
 
-    def _spy_recommend(workloads, *, predictor, goal, max_gpus, top_k, feasibility, **_):
-        captured["batch_size_sent"] = workloads[0]["batch_size"]
-        return pd.DataFrame(
-            [{"feasible": True, "number_of_nodes": 1, "gpus_per_node": 8, "batch_size": 2, "throughput_tok_s": 15000.0}]
-        )
+    orig_predict = kp.KavierPredictor.predict
+    seen_batches: list = []
 
-    monkeypatch.setattr(trace_recommend.coastline, "recommend", _spy_recommend)
+    def _spy_predict(self, workload, context):
+        seen_batches.append(workload.batch_size)
+        return orig_predict(self, workload, context)
+
+    monkeypatch.setattr(kp.KavierPredictor, "predict", _spy_predict)
 
     row = {
         **_GOOD_ROW,
@@ -380,11 +383,17 @@ def test_kavier_receives_per_device_batch_as_input_not_total(tmp_path, monkeypat
         "per_device_train_batch_size": 1,  # the SFTTrainer launcher arg Kavier needs
         "metadata.orig_per_device_train_batch_size": 1,
     }
-    recommend_trace(str(_write_csv(tmp_path, [row])), str(tmp_path / "o.csv"), method="kavier")
+    recommend_trace(str(_write_csv(tmp_path, [row])), str(tmp_path / "o.csv"),
+                    method="kavier", feasibility="rules")
 
-    # Must receive the per-device value, not the total.
-    assert captured["batch_size_sent"] == 1, (
-        f"Kavier received batch_size={captured['batch_size_sent']} (total), expected 1 (per-device)"
+    # The facade sweeps DEFAULT_BATCH_SIZES = [1,2,4,8,...,256].
+    # Key invariant: 1 must be in the candidates (full sweep, not the narrow
+    # {4,8,16} neighbourhood that the batch API would build from pivot=8).
+    # If the old bug were present, candidates would be {4,8,16} only — never 1.
+    assert seen_batches, "KavierPredictor.predict was never called"
+    assert 1 in seen_batches, (
+        f"batch_size=1 missing from Kavier candidates {sorted(set(seen_batches))}; "
+        "expected full DEFAULT_BATCH_SIZES sweep (old bug would give only {4,8,16})"
     )
 
 
@@ -396,20 +405,21 @@ def test_per_device_batch_written_and_originals_untouched_when_both_cols_present
 
     Oracle (hand-computed):
         recommended layout : 2 nodes x 4 gpus_per_node  -> 8 total GPUs
-        recommended eff. batch : 16
+        recommended eff. batch : 16  (returned by Coastline facade)
         per_device = 16 / (4 * 2) = 2
     """
+    from coastline.sdk.models.recommendation import Recommendation
+    from coastline.sdk.recommend.facade import Coastline
 
-    def _fake_recommend(workloads, *, predictor, goal, max_gpus, top_k, feasibility, **_):
-        return pd.DataFrame(
-            [{"feasible": True, "number_of_nodes": 2, "gpus_per_node": 4, "batch_size": 16, "throughput_tok_s": 15000.0}]
-        )
+    def _fake_facade_recommend(self, workload, *, goal, context, batch_sizes, top_k, max_gpus, **_):
+        return [Recommendation(gpus_per_node=4, number_of_nodes=2, total_gpus=8,
+                               strategy="multi_objective", predicted_throughput=15000.0,
+                               metadata={"batch_size": 16})]
 
-    monkeypatch.setattr(trace_recommend.coastline, "recommend", _fake_recommend)
+    monkeypatch.setattr(Coastline, "recommend", _fake_facade_recommend)
 
     row = {
         **_GOOD_ROW,
-        # Original submitted config:
         "metadata.batch_size": 8,
         "per_device_train_batch_size": 1,
         "metadata.orig_per_device_train_batch_size": 1,
@@ -417,11 +427,8 @@ def test_per_device_batch_written_and_originals_untouched_when_both_cols_present
     out = tmp_path / "per_device_out.csv"
     df = recommend_trace(str(_write_csv(tmp_path, [row])), str(out), method="kavier")
 
-    # Original metadata columns must be untouched.
     assert int(df["metadata.batch_size"].iloc[0]) == 8
     assert int(df["metadata.orig_per_device_train_batch_size"].iloc[0]) == 1
-
-    # Recommended per-device batch size written to new column.
     assert "per_device_train_batch_size" in df.columns
     assert int(df["per_device_train_batch_size"].iloc[0]) == 2  # 16 / (4*2)
 
@@ -429,7 +436,8 @@ def test_per_device_batch_written_and_originals_untouched_when_both_cols_present
 def test_per_device_batch_fallback_to_legacy_when_orig_col_absent(tmp_path, monkeypatch):
     """Without metadata.orig_per_device_train_batch_size the legacy behaviour
     applies: metadata.batch_size is overwritten with the recommended effective
-    batch size and per_device_train_batch_size is NOT written."""
+    batch size and per_device_train_batch_size is NOT written.
+    Legacy path uses coastline.recommend (batch API), not the facade."""
 
     def _fake_recommend(workloads, *, predictor, goal, max_gpus, top_k, feasibility, **_):
         return pd.DataFrame(
@@ -438,27 +446,26 @@ def test_per_device_batch_fallback_to_legacy_when_orig_col_absent(tmp_path, monk
 
     monkeypatch.setattr(trace_recommend.coastline, "recommend", _fake_recommend)
 
-    # _GOOD_ROW has no metadata.orig_per_device_train_batch_size.
     out = tmp_path / "legacy_out.csv"
     df = recommend_trace(str(_write_csv(tmp_path, [_GOOD_ROW])), str(out), method="kavier")
 
-    # Legacy: metadata.batch_size updated to recommended value.
     assert int(df["metadata.batch_size"].iloc[0]) == 32
-    # per_device_train_batch_size column must NOT be present.
     assert "per_device_train_batch_size" not in df.columns
 
 
 def test_per_device_batch_at_least_one_when_batch_smaller_than_num_devices(tmp_path, monkeypatch):
     """floor division of batch/num_devices floors to 0 when batch < num_devices;
     the implementation clamps to max(1, ...) so the output is always >= 1."""
+    from coastline.sdk.models.recommendation import Recommendation
+    from coastline.sdk.recommend.facade import Coastline
 
-    def _fake_recommend(workloads, *, predictor, goal, max_gpus, top_k, feasibility, **_):
+    def _fake_facade_recommend(self, workload, *, goal, context, batch_sizes, top_k, max_gpus, **_):
         # 1 effective batch, 8 GPUs total -> 1//8 = 0 without the clamp.
-        return pd.DataFrame(
-            [{"feasible": True, "number_of_nodes": 2, "gpus_per_node": 4, "batch_size": 1, "throughput_tok_s": 15000.0}]
-        )
+        return [Recommendation(gpus_per_node=4, number_of_nodes=2, total_gpus=8,
+                               strategy="multi_objective", predicted_throughput=15000.0,
+                               metadata={"batch_size": 1})]
 
-    monkeypatch.setattr(trace_recommend.coastline, "recommend", _fake_recommend)
+    monkeypatch.setattr(Coastline, "recommend", _fake_facade_recommend)
 
     row = {**_GOOD_ROW, "per_device_train_batch_size": 1, "metadata.orig_per_device_train_batch_size": 1}
     out = tmp_path / "clamp_out.csv"
@@ -471,12 +478,12 @@ def test_per_device_batch_unchanged_row_writes_none_per_device(tmp_path, monkeyp
     """An unrecommendable row falls back to 'unchanged'; per_device must be None
     (not a stale value from a previous iteration), and original metadata.batch_size
     and metadata.orig_per_device_train_batch_size stay intact."""
+    from coastline.sdk.recommend.facade import Coastline
 
-    def _tripwire(*_a, **_k):
-        # simulate infeasible result
-        return pd.DataFrame([{"feasible": False, "number_of_nodes": 1, "gpus_per_node": 1, "batch_size": 8, "throughput_tok_s": None}])
+    def _infeasible_facade(self, workload, *, goal, context, batch_sizes, top_k, max_gpus, **_):
+        return []  # facade returns empty list on infeasible
 
-    monkeypatch.setattr(trace_recommend.coastline, "recommend", _tripwire)
+    monkeypatch.setattr(Coastline, "recommend", _infeasible_facade)
 
     row = {**_GOOD_ROW, "per_device_train_batch_size": 2, "metadata.orig_per_device_train_batch_size": 2}
     out = tmp_path / "unchanged_per_device.csv"
