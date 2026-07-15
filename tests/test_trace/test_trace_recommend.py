@@ -348,3 +348,141 @@ def test_main_cli_enriches_trace_and_reports_the_derived_row_count(tmp_path, cap
     assert "1 rows" in printed
     assert "1 with estimated_throughput" in printed
     assert "1 with estimated_duration" in printed
+
+
+# --------------------------------------------------------------------------- #
+# per_device_train_batch_size write-back (batch-size provenance mode)
+# --------------------------------------------------------------------------- #
+
+
+def test_kavier_receives_per_device_batch_as_input_not_total(tmp_path, monkeypatch):
+    """Kavier's physics engine treats batch_size as PER-DEVICE (it multiplies internally
+    by num_gpus).  When the trace carries per_device_train_batch_size, that value — NOT
+    metadata.batch_size (the total effective batch) — must be the batch_size sent to
+    coastline.recommend.
+
+    Trace: metadata.batch_size=8 (total), per_device_train_batch_size=1, 8 GPUs.
+    Expected: coastline.recommend called with batch_size=1 (per-device), not 8 (total).
+    """
+    captured: dict = {}
+
+    def _spy_recommend(workloads, *, predictor, goal, max_gpus, top_k, feasibility, **_):
+        captured["batch_size_sent"] = workloads[0]["batch_size"]
+        return pd.DataFrame(
+            [{"feasible": True, "number_of_nodes": 1, "gpus_per_node": 8, "batch_size": 2, "throughput_tok_s": 15000.0}]
+        )
+
+    monkeypatch.setattr(trace_recommend.coastline, "recommend", _spy_recommend)
+
+    row = {
+        **_GOOD_ROW,
+        "metadata.batch_size": 8,          # total effective = per_device * gpn * nodes = 1*8*1
+        "per_device_train_batch_size": 1,  # the SFTTrainer launcher arg Kavier needs
+        "metadata.orig_per_device_train_batch_size": 1,
+    }
+    recommend_trace(str(_write_csv(tmp_path, [row])), str(tmp_path / "o.csv"), method="kavier")
+
+    # Must receive the per-device value, not the total.
+    assert captured["batch_size_sent"] == 1, (
+        f"Kavier received batch_size={captured['batch_size_sent']} (total), expected 1 (per-device)"
+    )
+
+
+def test_per_device_batch_written_and_originals_untouched_when_both_cols_present(tmp_path, monkeypatch):
+    """When the trace carries both metadata.batch_size AND
+    metadata.orig_per_device_train_batch_size, the recommended effective batch
+    size must NOT overwrite either original column.  Instead the per-device
+    equivalent for the recommended layout is written to per_device_train_batch_size.
+
+    Oracle (hand-computed):
+        recommended layout : 2 nodes x 4 gpus_per_node  -> 8 total GPUs
+        recommended eff. batch : 16
+        per_device = 16 / (4 * 2) = 2
+    """
+
+    def _fake_recommend(workloads, *, predictor, goal, max_gpus, top_k, feasibility, **_):
+        return pd.DataFrame(
+            [{"feasible": True, "number_of_nodes": 2, "gpus_per_node": 4, "batch_size": 16, "throughput_tok_s": 15000.0}]
+        )
+
+    monkeypatch.setattr(trace_recommend.coastline, "recommend", _fake_recommend)
+
+    row = {
+        **_GOOD_ROW,
+        # Original submitted config:
+        "metadata.batch_size": 8,
+        "per_device_train_batch_size": 1,
+        "metadata.orig_per_device_train_batch_size": 1,
+    }
+    out = tmp_path / "per_device_out.csv"
+    df = recommend_trace(str(_write_csv(tmp_path, [row])), str(out), method="kavier")
+
+    # Original metadata columns must be untouched.
+    assert int(df["metadata.batch_size"].iloc[0]) == 8
+    assert int(df["metadata.orig_per_device_train_batch_size"].iloc[0]) == 1
+
+    # Recommended per-device batch size written to new column.
+    assert "per_device_train_batch_size" in df.columns
+    assert int(df["per_device_train_batch_size"].iloc[0]) == 2  # 16 / (4*2)
+
+
+def test_per_device_batch_fallback_to_legacy_when_orig_col_absent(tmp_path, monkeypatch):
+    """Without metadata.orig_per_device_train_batch_size the legacy behaviour
+    applies: metadata.batch_size is overwritten with the recommended effective
+    batch size and per_device_train_batch_size is NOT written."""
+
+    def _fake_recommend(workloads, *, predictor, goal, max_gpus, top_k, feasibility, **_):
+        return pd.DataFrame(
+            [{"feasible": True, "number_of_nodes": 1, "gpus_per_node": 8, "batch_size": 32, "throughput_tok_s": 15000.0}]
+        )
+
+    monkeypatch.setattr(trace_recommend.coastline, "recommend", _fake_recommend)
+
+    # _GOOD_ROW has no metadata.orig_per_device_train_batch_size.
+    out = tmp_path / "legacy_out.csv"
+    df = recommend_trace(str(_write_csv(tmp_path, [_GOOD_ROW])), str(out), method="kavier")
+
+    # Legacy: metadata.batch_size updated to recommended value.
+    assert int(df["metadata.batch_size"].iloc[0]) == 32
+    # per_device_train_batch_size column must NOT be present.
+    assert "per_device_train_batch_size" not in df.columns
+
+
+def test_per_device_batch_at_least_one_when_batch_smaller_than_num_devices(tmp_path, monkeypatch):
+    """floor division of batch/num_devices floors to 0 when batch < num_devices;
+    the implementation clamps to max(1, ...) so the output is always >= 1."""
+
+    def _fake_recommend(workloads, *, predictor, goal, max_gpus, top_k, feasibility, **_):
+        # 1 effective batch, 8 GPUs total -> 1//8 = 0 without the clamp.
+        return pd.DataFrame(
+            [{"feasible": True, "number_of_nodes": 2, "gpus_per_node": 4, "batch_size": 1, "throughput_tok_s": 15000.0}]
+        )
+
+    monkeypatch.setattr(trace_recommend.coastline, "recommend", _fake_recommend)
+
+    row = {**_GOOD_ROW, "per_device_train_batch_size": 1, "metadata.orig_per_device_train_batch_size": 1}
+    out = tmp_path / "clamp_out.csv"
+    df = recommend_trace(str(_write_csv(tmp_path, [row])), str(out), method="kavier")
+
+    assert int(df["per_device_train_batch_size"].iloc[0]) >= 1
+
+
+def test_per_device_batch_unchanged_row_writes_none_per_device(tmp_path, monkeypatch):
+    """An unrecommendable row falls back to 'unchanged'; per_device must be None
+    (not a stale value from a previous iteration), and original metadata.batch_size
+    and metadata.orig_per_device_train_batch_size stay intact."""
+
+    def _tripwire(*_a, **_k):
+        # simulate infeasible result
+        return pd.DataFrame([{"feasible": False, "number_of_nodes": 1, "gpus_per_node": 1, "batch_size": 8, "throughput_tok_s": None}])
+
+    monkeypatch.setattr(trace_recommend.coastline, "recommend", _tripwire)
+
+    row = {**_GOOD_ROW, "per_device_train_batch_size": 2, "metadata.orig_per_device_train_batch_size": 2}
+    out = tmp_path / "unchanged_per_device.csv"
+    df = recommend_trace(str(_write_csv(tmp_path, [row])), str(out), method="kavier")
+
+    assert int(df["metadata.batch_size"].iloc[0]) == 8
+    assert int(df["metadata.orig_per_device_train_batch_size"].iloc[0]) == 2
+    assert pd.isna(df["per_device_train_batch_size"].iloc[0])
+
