@@ -178,7 +178,8 @@ def test_job_total_tokens_is_throughput_times_runtime():
         }
     )
     # By hand: 15000 tok/s sustained for 3600 s (one hour) = 54,000,000 tokens.
-    assert _job_total_tokens(row) == pytest.approx(54_000_000.0)
+    # tot_tokens_col=None triggers the legacy tps×runtime path.
+    assert _job_total_tokens(row, None) == pytest.approx(54_000_000.0)
 
 
 @pytest.mark.parametrize(
@@ -198,7 +199,7 @@ def test_job_total_tokens_returns_none_for_missing_or_nonpositive(tps, rt):
         fields["metadata.output.train_tokens_per_second"] = tps
     if rt is not None:
         fields["metadata.train_runtime"] = rt
-    assert _job_total_tokens(pd.Series(fields)) is None
+    assert _job_total_tokens(pd.Series(fields), None) is None
 
 
 # --------------------------------------------------------------------------- #
@@ -262,6 +263,53 @@ def test_enrich_resolves_predictor_and_computes_duration_from_recommended_throug
     assert captured["predictor"] == "somemodel"
 
 
+def test_setup_time_col_adds_overhead_to_estimated_duration(tmp_path, monkeypatch):
+    """When setup_time_col is provided the duration formula is:
+        estimated_duration = setup_time + extrapolated_num_tokens / throughput
+
+    Oracle (all numbers hand-computed):
+        extrapolated_num_tokens = 54,000,000  (from tot_tokens_col)
+        setup_time              = 120.0 s     (from setup_time_col)
+        recommended_throughput  = 15000 tok/s (fake recommender)
+        training_time           = 54,000,000 / 15000 = 3600 s
+        estimated_duration      = 120 + 3600 = 3720 s
+
+    Without setup_time_col the duration must be just 3600 s (regression guard).
+    """
+
+    def _fake_recommend(workloads, *, predictor, goal, max_gpus, top_k, feasibility, **_):
+        return pd.DataFrame(
+            [{"feasible": True, "number_of_nodes": 1, "gpus_per_node": 8, "batch_size": 8, "throughput_tok_s": 15000.0}]
+        )
+
+    monkeypatch.setattr(trace_recommend.coastline, "recommend", _fake_recommend)
+
+    row = {
+        **_GOOD_ROW,
+        "my_tot_tokens": 54_000_000,
+        "my_setup_time": 120.0,
+    }
+
+    # With setup_time_col: 120 + 54_000_000 / 15000 = 3720 s
+    df_with = recommend_trace(
+        str(_write_csv(tmp_path, [row])),
+        str(tmp_path / "with_setup.csv"),
+        method="kavier",
+        tot_tokens_col="my_tot_tokens",
+        setup_time_col="my_setup_time",
+    )
+    assert df_with["metadata.estimated_duration_kavier"].iloc[0] == pytest.approx(3720.0)
+
+    # Without setup_time_col: 54_000_000 / 15000 = 3600 s
+    df_without = recommend_trace(
+        str(_write_csv(tmp_path, [row])),
+        str(tmp_path / "without_setup.csv"),
+        method="kavier",
+        tot_tokens_col="my_tot_tokens",
+    )
+    assert df_without["metadata.estimated_duration_kavier"].iloc[0] == pytest.approx(3600.0)
+
+
 # --------------------------------------------------------------------------- #
 # main() / the coastline recommend-trace CLI (via monkeypatched argv)
 # --------------------------------------------------------------------------- #
@@ -290,10 +338,13 @@ def test_main_cli_enriches_trace_and_reports_the_derived_row_count(tmp_path, cap
 
     assert out.exists()
     enriched = pd.read_csv(out)
+    # throughput is always written; duration is written via legacy tps×runtime fallback
+    assert "metadata.estimated_throughput_kavier" in enriched.columns
     assert "metadata.estimated_duration_kavier" in enriched.columns
     assert len(enriched) == 1
-    # The single granite/A100 row is feasible, so exactly 1 duration is produced.
+    # The single granite/A100 row is feasible: 1 throughput and 1 duration produced.
     printed = capsys.readouterr().out
     assert str(out) in printed
     assert "1 rows" in printed
-    assert "1 with an estimated_duration_kavier" in printed
+    assert "1 with estimated_throughput" in printed
+    assert "1 with estimated_duration" in printed
