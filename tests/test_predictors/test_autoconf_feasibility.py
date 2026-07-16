@@ -180,15 +180,16 @@ def test_autoconf_none_metadata_normalized_to_empty_dict(monkeypatch):
 
 
 def test_autoconf_maps_workload_fields_into_job_config(monkeypatch):
-    """The workload -> JobConfig field mapping must be correct, including the
-    derived total_gpus (gpus_per_node x number_of_nodes) feeding number_gpus.
+    """The workload -> JobConfig field mapping must be correct: the derived total_gpus
+    (gpus_per_node x number_of_nodes) feeds number_gpus, AND the per-device batch is converted
+    to AutoConf's TOTAL/effective batch at the boundary (AutoConf's batch_size is not per-device).
 
-    Oracle: hand-derived layout — 4 GPUs/node x 2 nodes = 8 total GPUs — plus
-    the verbatim pass-through of the remaining fields.
+    Oracle: hand-derived layout — 4 GPUs/node x 2 nodes = 8 total GPUs — and effective batch =
+    per_device 16 x 8 GPUs = 128; the remaining fields pass through verbatim.
     """
     predict_calls: list = []
     monkeypatch.setattr(af, "_autoconf_modules", lambda: _make_mods(1, {}, predict_calls=predict_calls))
-    wl = _workload(batch_size=16, gpus_per_node=4, number_of_nodes=2)  # total = 4*2 = 8
+    wl = _workload(batch_size=16, gpus_per_node=4, number_of_nodes=2)  # per-device 16, total = 4*2 = 8
     AutoconfFeasibilityChecker().is_feasible(wl)
 
     assert len(predict_calls) == 1
@@ -198,7 +199,7 @@ def test_autoconf_maps_workload_fields_into_job_config(monkeypatch):
         "method": "full",
         "gpu_model": _GPU,
         "tokens_per_sample": 512,
-        "batch_size": 16,
+        "batch_size": 128,  # per-device 16 -> effective 16 x 8 GPUs (AutoConf batch_size is TOTAL)
         "number_gpus": 8,  # 4 GPUs/node x 2 nodes
     }
 

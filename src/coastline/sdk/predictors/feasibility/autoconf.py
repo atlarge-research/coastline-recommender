@@ -78,7 +78,11 @@ class AutoconfFeasibilityChecker:
                     "method": workload.fine_tuning_method,
                     "gpu_model": workload.gpu_model,
                     "tokens_per_sample": workload.tokens_per_sample,
-                    "batch_size": workload.batch_size,
+                    # AutoConf's JobConfig.batch_size is the TOTAL/effective batch — it divides by
+                    # number_gpus internally (and its rule-based classifier requires divisibility).
+                    # WorkloadSpec.batch_size is PER-DEVICE, so convert at this boundary:
+                    # effective = per_device × total_gpus (always divisible by total_gpus).
+                    "batch_size": workload.batch_size * workload.total_gpus,
                     "number_gpus": workload.total_gpus,
                 }
             )

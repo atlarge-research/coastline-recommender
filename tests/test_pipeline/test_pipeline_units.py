@@ -87,7 +87,6 @@ class TestRulesFeasibility:
         ok, meta = RulesFeasibilityChecker().is_feasible(wl)
         assert ok is True
         assert meta == {}
-        assert meta == {}
 
     def test_default_layout_single_gpu_always_divisible(self):
         # No layout given -> total_gpus defaults to 1; everything divisible by 1.

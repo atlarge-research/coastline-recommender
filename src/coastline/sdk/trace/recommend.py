@@ -134,7 +134,7 @@ def _infeasible_note(max_gpus: int, feasibility: str) -> str:
     cause = (
         "every config would run out of GPU memory (autoconf OOM check)"
         if feasibility == FeasibilityMode.AUTOCONF
-        else "no config passes the divisibility rules"
+        else "no feasible config within the GPU budget (rules checker)"
     )
     return f"infeasible within {max_gpus} GPUs: {cause}"
 
@@ -198,8 +198,8 @@ def _recommend_row(
     - ``note``: None on full success; otherwise the reason the row was kept unchanged.
     """
     # In per-device mode the recommendation is keyed off the real per-device batch and written
-    # back to per_device_train_batch_size; an UNCHANGED row keeps its original per-device value
-    # (seed_pd) so metadata.batch_size stays consistent.
+    # back to per_device_train_batch_size. An UNCHANGED (non-recommended) row is left as-is: its
+    # original per_device and metadata.batch_size are preserved verbatim, never recomputed.
     seed_pd = _as_int(row.get(_REC_PER_DEVICE)) or _as_int(row.get(_ORIG_PER_DEVICE))
     keep = {
         "nodes": row.get(_NODES),
