@@ -384,7 +384,7 @@ def recommend_trace(
     if per_device_mode:
         # VV's patch target: the recommended per-device batch. metadata.batch_size above was
         # already recomputed as per_device × gpn × nodes for recommended rows (invariant holds).
-        df[_REC_PER_DEVICE] = [r.get("per_device") for r in recs]
+        df[_REC_PER_DEVICE] = [r["per_device"] for r in recs]
     df[thr_col] = [r["thr"] for r in recs]
     df[dur_col] = [r["dur"] for r in recs]
     df["metadata.recommendation_note"] = [r["note"] for r in recs]
