@@ -132,6 +132,9 @@ def _answers_for(
     if answers.get("predictor") is not None:
         # Fail a typo'd predictor visibly per row rather than silently defaulting in the engine.
         normalize_predictor(answers["predictor"])
+    if kwargs.get("batch_sizes"):
+        # An explicit batch grid (a list) — bypasses the per-column int-coercion above.
+        answers["batch_sizes"] = list(kwargs["batch_sizes"])
 
     slowdown = _pick(row, "max_slowdown")
     if slowdown is None:
@@ -176,6 +179,7 @@ def recommend(
     epochs: Optional[int] = None,
     feasibility: str = "autoconf",
     lookup: Optional[str] = None,
+    batch_sizes: Optional[list[int]] = None,
 ) -> pd.DataFrame:
     """Recommend GPU/node configurations for a batch — returns a ``pandas.DataFrame`` of the input
     rows plus the chosen config + predictions (one row per ranked pick).
@@ -198,6 +202,7 @@ def recommend(
         "dataset_size": dataset_size,
         "epochs": epochs,
         "lookup": lookup,
+        "batch_sizes": batch_sizes,
     }
 
     out_rows: list[dict[str, Any]] = []

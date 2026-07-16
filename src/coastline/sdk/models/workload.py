@@ -23,7 +23,12 @@ class WorkloadSpec(BaseModel):
     fine_tuning_method: str = Field(..., description="Fine-tuning method (full, lora, qlora, etc.)")
     gpu_model: str = Field(..., description="GPU model")
     tokens_per_sample: int = Field(..., gt=0, description="Tokens per sample")
-    batch_size: int = Field(..., gt=0, description="Batch size")
+    batch_size: int = Field(
+        ...,
+        gt=0,
+        description="Per-device (per-GPU) train batch size. Effective/global batch = "
+        "batch_size × gpus_per_node × number_of_nodes; Kavier and AutoConf consume it as per-device.",
+    )
     gpus_per_node: Optional[int] = Field(None, ge=1, description="GPUs per node")
     number_of_nodes: Optional[int] = Field(None, ge=1, description="Number of nodes")
     torch_dtype: Optional[str] = Field(

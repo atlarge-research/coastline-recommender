@@ -30,7 +30,7 @@ from typing import Any, Optional
 import pandas as pd
 
 import coastline
-from coastline.sdk.constants import FeasibilityMode
+from coastline.sdk.constants import DEFAULT_BATCH_SIZES, FeasibilityMode
 from coastline.sdk.io.infrastructure import resolve_cluster_caps
 
 logger = logging.getLogger(__name__)
@@ -50,6 +50,14 @@ _ACT_RUNTIME = "metadata.train_runtime"
 # observed job duration — the fallback when no recommendation can be made
 _ACT_DURATION = "metadata.output.extrapolated_duration"
 
+# per-device batch provenance. Kavier's batch_size is PER-DEVICE (it multiplies by total GPUs
+# internally); metadata.batch_size is the TOTAL effective batch (= per_device × gpn × nodes).
+# VV needs the recommendation written to per_device_train_batch_size, with metadata.batch_size
+# recomputed from it. A trace is in "per-device mode" when either column is present.
+_REC_PER_DEVICE = "per_device_train_batch_size"  # write target for the recommended per-device batch
+_ORIG_PER_DEVICE = "metadata.orig_per_device_train_batch_size"  # seed fallback (original per-device)
+_PER_DEVICE_COLS = (_REC_PER_DEVICE, _ORIG_PER_DEVICE)
+
 _NO_TOT_TOKENS = None  # sentinel: tot_tokens_col not provided
 
 # coastline predictor keys for the trace's method names
@@ -63,6 +71,7 @@ _FRONT_COLS = [
     _GPN,
     _NODES,
     _BATCH,
+    _REC_PER_DEVICE,
 ]
 
 
@@ -166,6 +175,7 @@ def _recommend_row(
     tokens_col: str = _TOKENS,
     tot_tokens_col: Optional[str] = _NO_TOT_TOKENS,
     setup_time_col: Optional[str] = None,
+    per_device_mode: bool = False,
 ) -> dict[str, Any]:
     """Recommend a layout for one trace row; fall back to the original layout on any failure.
 
@@ -187,10 +197,15 @@ def _recommend_row(
                Falls back to the legacy tps×runtime path only when tot_tokens_col is None.
     - ``note``: None on full success; otherwise the reason the row was kept unchanged.
     """
+    # In per-device mode the recommendation is keyed off the real per-device batch and written
+    # back to per_device_train_batch_size; an UNCHANGED row keeps its original per-device value
+    # (seed_pd) so metadata.batch_size stays consistent.
+    seed_pd = _as_int(row.get(_REC_PER_DEVICE)) or _as_int(row.get(_ORIG_PER_DEVICE))
     keep = {
         "nodes": row.get(_NODES),
         "gpn": row.get(_GPN),
         "batch": row.get(_BATCH),
+        "per_device": seed_pd,
         "thr": None,
         "dur": None,
         "note": None,
@@ -199,12 +214,15 @@ def _recommend_row(
     gpn, nodes = _as_int(row.get(_GPN)), _as_int(row.get(_NODES))
     if not (tokens and batch and gpn and nodes):
         return _unchanged(keep, row, "no recommendation: missing/invalid workload fields")
+    # Kavier's batch_size is per-device; in per-device mode seed with the per-device value
+    # (the full DEFAULT_BATCH_SIZES sweep below overrides the seed anyway).
+    seed_batch = seed_pd if (per_device_mode and seed_pd) else batch
     wl = {
         "llm_model": str(row[_MODEL]),
         "fine_tuning_method": str(row[_METHOD]),
         "gpu_model": str(row[_GPU]),
         "tokens_per_sample": tokens,
-        "batch_size": batch,
+        "batch_size": seed_batch,
     }
 
     def kavier_hint() -> str:
@@ -215,8 +233,18 @@ def _recommend_row(
         return ""
 
     try:
+        # Per-device mode sweeps the FULL per-device grid so the recommendation can move the
+        # per-device batch freely; legacy mode keeps the batch-API neighbourhood around the seed.
+        sweep = {"batch_sizes": list(DEFAULT_BATCH_SIZES)} if per_device_mode else {}
         out = coastline.recommend(
-            [wl], predictor=predictor, goal=goal, max_gpus=max_gpus, top_k=1, feasibility=feasibility, lookup=lookup
+            [wl],
+            predictor=predictor,
+            goal=goal,
+            max_gpus=max_gpus,
+            top_k=1,
+            feasibility=feasibility,
+            lookup=lookup,
+            **sweep,
         )
         if out.empty or not bool(out.iloc[0]["feasible"]):
             hint = kavier_hint()
@@ -254,10 +282,21 @@ def _recommend_row(
                 "row (%s): no tot_tokens_col and no measured tps/runtime — throughput written, duration skipped",
                 row.get(_MODEL, "?"),
             )
+        rec_gpn = int(top["gpus_per_node"])
+        rec_nodes = int(top["number_of_nodes"])
+        rec_pd = _as_int(top["batch_size"])  # the engine treats batch_size as per-device
+        if per_device_mode and rec_pd is None:
+            # never reinterpret the total batch as per-device — keep the row unchanged instead
+            return _unchanged(keep, row, f"'{predictor}' returned no batch size — kept unchanged")
+        # metadata.batch_size is the TOTAL effective batch. In per-device mode recompute it from
+        # the recommended per-device batch (invariant: total = per_device × gpn × nodes); in
+        # legacy mode keep the engine's recommended value.
+        total_batch = (rec_pd * rec_gpn * rec_nodes) if per_device_mode else (rec_pd or batch)
         return {
-            "nodes": int(top["number_of_nodes"]),
-            "gpn": int(top["gpus_per_node"]),
-            "batch": _as_int(top["batch_size"]) or batch,
+            "nodes": rec_nodes,
+            "gpn": rec_gpn,
+            "batch": total_batch,
+            "per_device": rec_pd if per_device_mode else None,
             "thr": float(thr),
             "dur": dur,
             "note": None,
@@ -313,6 +352,10 @@ def recommend_trace(
     total_gpus, _, _ = resolve_cluster_caps(cluster_gpus, node_gpus)
     predictor = _METHOD_TO_PREDICTOR.get(method.lower(), method.lower())
     df = pd.read_csv(input_csv, low_memory=False)
+    # Per-device mode when the trace carries a per-device batch column: recommend on the
+    # per-device batch and patch per_device_train_batch_size (VV's target) rather than the
+    # total-effective metadata.batch_size.
+    per_device_mode = any(c in df.columns for c in _PER_DEVICE_COLS)
     recs = [
         _recommend_row(
             row,
@@ -324,6 +367,7 @@ def recommend_trace(
             tokens_col=tokens_col,
             tot_tokens_col=tot_tokens_col,
             setup_time_col=setup_time_col,
+            per_device_mode=per_device_mode,
         )
         for _, row in df.iterrows()
     ]
@@ -337,6 +381,10 @@ def recommend_trace(
     df[_NODES] = [r["nodes"] for r in recs]
     df[_GPN] = [r["gpn"] for r in recs]
     df[_BATCH] = [r["batch"] for r in recs]
+    if per_device_mode:
+        # VV's patch target: the recommended per-device batch. metadata.batch_size above was
+        # already recomputed as per_device × gpn × nodes for recommended rows (invariant holds).
+        df[_REC_PER_DEVICE] = [r.get("per_device") for r in recs]
     df[thr_col] = [r["thr"] for r in recs]
     df[dur_col] = [r["dur"] for r in recs]
     df["metadata.recommendation_note"] = [r["note"] for r in recs]

@@ -141,8 +141,12 @@ def build_config(
         "grid": {
             # The chosen batch size plus its neighbours, so the ranked table
             # shows real trade-offs rather than a single row.
-            "batch_sizes": sorted(
-                {answers["batch_size"], max(1, answers["batch_size"] // 2), answers["batch_size"] * 2}
+            # An explicit batch grid (e.g. the trace's full per-device sweep) overrides the
+            # default neighbourhood around the seed batch size.
+            "batch_sizes": (
+                list(answers["batch_sizes"])
+                if answers.get("batch_sizes")
+                else sorted({answers["batch_size"], max(1, answers["batch_size"] // 2), answers["batch_size"] * 2})
             ),
             "total_gpus": [g for g in GPU_BUDGETS if g <= answers["max_gpus"]],
             "top_k": top_k,

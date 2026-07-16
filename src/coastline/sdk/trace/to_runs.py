@@ -29,6 +29,7 @@ from coastline.sdk.trace.recommend import (
     _METHOD,
     _MODEL,
     _NODES,
+    _REC_PER_DEVICE,
     _TOKENS,
 )
 
@@ -64,16 +65,24 @@ def trace_to_runs(input_csv: str, output_csv: Optional[str] = None) -> pd.DataFr
     """
     df = pd.read_csv(input_csv, low_memory=False)
 
+    # The flat schema's batch_size is PER-DEVICE (Kavier/calibrate convention). Prefer the trace's
+    # per_device_train_batch_size when present; else fall back to metadata.batch_size (the total
+    # effective batch — a known imprecision on legacy traces without the per-device column).
+    mapping = dict(_TRACE_TO_FLAT)
+    if _REC_PER_DEVICE in df.columns:
+        mapping.pop(_BATCH, None)
+        mapping[_REC_PER_DEVICE] = "batch_size"
+
     if set(_FLAT_REQUIRED).issubset(df.columns):
         flat = df.copy()  # already flat — pass through
-    elif set(_TRACE_TO_FLAT).issubset(df.columns):
-        flat = df.rename(columns=_TRACE_TO_FLAT)
+    elif set(mapping).issubset(df.columns):
+        flat = df.rename(columns=mapping)
     else:
-        missing = [c for c in _TRACE_TO_FLAT if c not in df.columns]
+        missing = [c for c in mapping if c not in df.columns]
         raise ValueError(
             "input is neither a fine-tuning trace nor a flat measured-runs CSV; "
             f"missing trace columns: {missing}. Provide either the flat schema "
-            f"({', '.join(_FLAT_REQUIRED)}) or the trace columns ({', '.join(_TRACE_TO_FLAT)})."
+            f"({', '.join(_FLAT_REQUIRED)}) or the trace columns ({', '.join(mapping)})."
         )
 
     if "is_valid" not in flat.columns:
