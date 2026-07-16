@@ -187,7 +187,14 @@ def _recommend_row(
                Falls back to the legacy tps×runtime path only when tot_tokens_col is None.
     - ``note``: None on full success; otherwise the reason the row was kept unchanged.
     """
-    keep = {"nodes": row.get(_NODES), "gpn": row.get(_GPN), "batch": row.get(_BATCH), "thr": None, "dur": None, "note": None}
+    keep = {
+        "nodes": row.get(_NODES),
+        "gpn": row.get(_GPN),
+        "batch": row.get(_BATCH),
+        "thr": None,
+        "dur": None,
+        "note": None,
+    }
     tokens, batch = _as_int(row.get(tokens_col)), _as_int(row.get(_BATCH))
     gpn, nodes = _as_int(row.get(_GPN)), _as_int(row.get(_NODES))
     if not (tokens and batch and gpn and nodes):
@@ -238,7 +245,8 @@ def _recommend_row(
             # col was provided but this row has no value — warn but still write throughput
             logger.warning(
                 "row (%s): tot_tokens_col '%s' is null — throughput written, duration skipped",
-                row.get(_MODEL, "?"), tot_tokens_col,
+                row.get(_MODEL, "?"),
+                tot_tokens_col,
             )
         elif dur is None and tot_tokens_col is None:
             # legacy path: no output data available
@@ -307,8 +315,14 @@ def recommend_trace(
     df = pd.read_csv(input_csv, low_memory=False)
     recs = [
         _recommend_row(
-            row, predictor, goal, feasibility, total_gpus, lookup,
-            tokens_col=tokens_col, tot_tokens_col=tot_tokens_col,
+            row,
+            predictor,
+            goal,
+            feasibility,
+            total_gpus,
+            lookup,
+            tokens_col=tokens_col,
+            tot_tokens_col=tot_tokens_col,
             setup_time_col=setup_time_col,
         )
         for _, row in df.iterrows()
@@ -321,7 +335,7 @@ def recommend_trace(
     dur_col = f"metadata.estimated_duration_{method}"
 
     df[_NODES] = [r["nodes"] for r in recs]
-    df[_GPN]   = [r["gpn"]   for r in recs]
+    df[_GPN] = [r["gpn"] for r in recs]
     df[_BATCH] = [r["batch"] for r in recs]
     df[thr_col] = [r["thr"] for r in recs]
     df[dur_col] = [r["dur"] for r in recs]
