@@ -59,50 +59,31 @@ def _context(max_gpus: int = 16, gpus_per_node: int = 8, max_nodes: int = 2) -> 
 
 
 # --------------------------------------------------------------------------- #
-# RulesFeasibilityChecker — divisibility rule + total_gpus bound
+# RulesFeasibilityChecker — per-device sanity guards (no divisibility rule)
 # --------------------------------------------------------------------------- #
 class TestRulesFeasibility:
-    def test_divisible_batch_is_feasible(self):
-        # total_gpus = 1 * 4 = 4; batch_size 8 % 4 == 0 -> feasible
+    def test_valid_per_device_batch_is_feasible(self):
+        # Any valid per-device workload is feasible (no divisibility rule). total_gpus = 4.
         wl = _workload(batch_size=8, gpus_per_node=4, number_of_nodes=1)
         assert wl.total_gpus == 4
         ok, meta = RulesFeasibilityChecker().is_feasible(wl)
         assert ok is True
         assert meta == {}
 
-    def test_indivisible_batch_is_rejected(self):
-        # total_gpus = 3; batch_size 8 % 3 != 0 -> rejected with explanatory metadata
+    def test_non_divisible_batch_is_feasible(self):
+        # batch_size is PER-DEVICE: it need NOT divide the GPU count. total_gpus = 3, per-device
+        # batch 8 -> feasible (the old ``8 % 3`` divisibility rejection is gone).
         wl = _workload(batch_size=8, gpus_per_node=3, number_of_nodes=1)
         assert wl.total_gpus == 3
         ok, meta = RulesFeasibilityChecker().is_feasible(wl)
-        assert ok is False
-        assert "error" in meta
-        assert "divisible" in meta["error"]
-
-    def test_batch_equals_total_gpus_is_feasible(self):
-        # boundary: batch_size == total_gpus -> remainder 0 -> feasible
-        wl = _workload(batch_size=8, gpus_per_node=8, number_of_nodes=1)
-        ok, meta = RulesFeasibilityChecker().is_feasible(wl)
         assert ok is True
-        assert meta == {}  # feasible => no explanatory error payload
+        assert meta == {}
 
-    def test_divisibility_keys_off_total_gpus_not_per_node(self):
-        # Discriminating case: total_gpus = 8 * 2 = 16, batch_size = 8.
-        # Oracle: 8 % 16 == 8 != 0  -> MUST be rejected.
-        # A bug keying off gpus_per_node (8) would compute 8 % 8 == 0 and WRONGLY
-        # accept; that is exactly the regression this test pins. (batch==total==16
-        # cannot discriminate, since 16 is divisible by both 16 and 8.)
+    def test_per_device_batch_feasible_regardless_of_total_gpus(self):
+        # A per-device batch of 8 is feasible on ANY GPU count, including 16 where the old
+        # divisibility rule (8 % 16 != 0) would have wrongly rejected it.
         wl = _workload(batch_size=8, gpus_per_node=8, number_of_nodes=2)
         assert wl.total_gpus == 16  # 8 * 2, hand-computed
-        ok, meta = RulesFeasibilityChecker().is_feasible(wl)
-        assert ok is False
-        assert "divisible" in meta["error"]
-
-    def test_multi_node_divisible_by_total_is_feasible(self):
-        # Multi-node feasible path: total_gpus = 8 * 2 = 16, batch_size = 32.
-        # Oracle: 32 % 16 == 0 -> feasible.
-        wl = _workload(batch_size=32, gpus_per_node=8, number_of_nodes=2)
-        assert wl.total_gpus == 16
         ok, meta = RulesFeasibilityChecker().is_feasible(wl)
         assert ok is True
         assert meta == {}

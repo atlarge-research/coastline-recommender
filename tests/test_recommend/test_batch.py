@@ -3,7 +3,7 @@
 Every assertion is tied to an independent oracle:
   * min_gpu contract — ranks feasible configs by (total_gpus asc, throughput desc),
     so with the runtime guard OFF it must pick the fewest GPUs in the grid.
-  * divisibility feasibility rule — a config is feasible iff batch_size % total_gpus == 0.
+  * feasibility — the rules checker admits any valid per-device workload (no divisibility rule).
   * derived metrics — tokens_per_watt = predicted_throughput / per-GPU power.
   * hardware envelope — per-GPU power lies in [idle, TDP] for the recommended GPU.
 The Kavier engine's exact throughput/power magnitudes are treated as black boxes; we
@@ -184,29 +184,10 @@ def test_custom_column_override_maps_headers(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# Infeasible rows are marked, not dropped.
+# Infeasible rows are marked, not dropped — covered by
+# test_unknown_gpu_row_is_marked_feasible_false_not_crash below. (Divisibility is no longer a
+# feasibility rule — batch_size is per-device — so it can no longer be used to force infeasibility.)
 # --------------------------------------------------------------------------- #
-def test_infeasible_row_marked_false_and_retained_with_blanks(tmp_path):
-    # Divisibility rule: feasible iff batch_size % total_gpus == 0. Grid batch=3 over
-    # total_gpus {2,4,8}: 3 % 2, 3 % 4, 3 % 8 are all != 0 -> NO feasible config, so the
-    # pipeline raises and the row is caught. It must still appear (marked, not dropped),
-    # with feasible=False and every recommendation column blank.
-    cfg = _base_config()
-    cfg["grid"]["batch_sizes"] = [3]
-    cfg["grid"]["total_gpus"] = [2, 4, 8]
-    _, rows = _run_batch(
-        tmp_path,
-        cfg,
-        CANONICAL_HEADER,
-        [["mistral-7b-v0.1", "lora", "NVIDIA-A100-SXM4-80GB", 1024, 8]],
-    )
-    assert len(rows) == 1  # retained, not dropped
-    r = rows[0]
-    assert r["llm_model"] == "mistral-7b-v0.1"  # input still echoed
-    assert r["feasible"] == "False"
-    assert r["recommended_total_gpus"] == ""
-    assert r["predicted_throughput"] == ""
-    assert r["tokens_per_watt"] == ""
 
 
 # --------------------------------------------------------------------------- #

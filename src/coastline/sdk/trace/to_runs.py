@@ -29,6 +29,7 @@ from coastline.sdk.trace.recommend import (
     _METHOD,
     _MODEL,
     _NODES,
+    _REC_PER_DEVICE,
     _TOKENS,
 )
 
@@ -68,6 +69,11 @@ def trace_to_runs(input_csv: str, output_csv: Optional[str] = None) -> pd.DataFr
         flat = df.copy()  # already flat — pass through
     elif set(_TRACE_TO_FLAT).issubset(df.columns):
         flat = df.rename(columns=_TRACE_TO_FLAT)
+        # batch_size is PER-DEVICE in the flat schema (Kavier/calibrate convention). When the trace
+        # carries per_device_train_batch_size, prefer it per-row, falling back to the renamed total
+        # metadata.batch_size only where the per-device value is missing.
+        if _REC_PER_DEVICE in df.columns:
+            flat["batch_size"] = pd.to_numeric(df[_REC_PER_DEVICE], errors="coerce").fillna(flat["batch_size"])
     else:
         missing = [c for c in _TRACE_TO_FLAT if c not in df.columns]
         raise ValueError(

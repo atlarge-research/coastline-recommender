@@ -11,6 +11,7 @@ Oracles used here:
 import pandas as pd
 import pytest
 
+from coastline.sdk.constants import DEFAULT_BATCH_SIZES
 from coastline.sdk.trace import recommend as trace_recommend
 from coastline.sdk.trace.recommend import (
     _METHOD_TO_PREDICTOR,
@@ -37,6 +38,96 @@ def _write_csv(tmp_path, rows, name="trace.csv"):
     path = tmp_path / name
     pd.DataFrame(rows).to_csv(path, index=False)
     return path
+
+
+# --------------------------------------------------------------------------- #
+# Per-device batch mode: patch per_device_train_batch_size, recompute metadata.batch_size.
+# --------------------------------------------------------------------------- #
+# _GOOD_ROW plus the per-device columns -> per-device mode. The input already satisfies the
+# invariant: metadata.batch_size 8 == per_device 1 x gpn 8 x nodes 1.
+_GOOD_ROW_PD = {
+    **_GOOD_ROW,
+    "per_device_train_batch_size": 1,
+    "metadata.orig_per_device_train_batch_size": 1,
+}
+
+
+def test_per_device_mode_writes_per_device_and_holds_batch_invariant(tmp_path):
+    """With a per-device batch column present, recommend-trace patches per_device_train_batch_size
+    (VV's target), keeps it through _tidy_columns, and recomputes metadata.batch_size so the
+    invariant holds: metadata.batch_size == per_device_train_batch_size x num_gpus_per_node x num_nodes.
+    """
+    out = tmp_path / "pd.csv"
+    df = recommend_trace(str(_write_csv(tmp_path, [_GOOD_ROW_PD])), str(out), method="kavier")
+
+    # the per-device column survives _tidy_columns (non-dotted; would otherwise be dropped)
+    assert "per_device_train_batch_size" in df.columns
+    row = df.iloc[0]
+    per_device = int(row["per_device_train_batch_size"])
+    total = int(row["metadata.batch_size"])
+    gpn = int(row["resources.num_gpus_per_node"])
+    nodes = int(row["resources.num_nodes"])
+    assert total == per_device * gpn * nodes  # the invariant
+    assert per_device in set(DEFAULT_BATCH_SIZES)
+    # the original per-device column is preserved untouched
+    assert int(row["metadata.orig_per_device_train_batch_size"]) == 1
+
+
+def test_per_device_mode_uses_the_full_batch_sweep(tmp_path, monkeypatch):
+    """Per-device mode sweeps the full DEFAULT_BATCH_SIZES grid; legacy mode keeps the batch-API
+    neighbourhood (no batch_sizes override)."""
+    captured: dict = {}
+
+    def _fake_recommend(workloads, **kw):
+        captured.clear()
+        captured.update(kw)
+        return pd.DataFrame(
+            [{"feasible": True, "number_of_nodes": 1, "gpus_per_node": 8, "batch_size": 4, "throughput_tok_s": 15000.0}]
+        )
+
+    monkeypatch.setattr(trace_recommend.coastline, "recommend", _fake_recommend)
+
+    recommend_trace(
+        str(_write_csv(tmp_path, [_GOOD_ROW_PD], name="pd.csv")), str(tmp_path / "pd_out.csv"), method="kavier"
+    )
+    assert list(captured.get("batch_sizes", [])) == list(DEFAULT_BATCH_SIZES)
+
+    recommend_trace(
+        str(_write_csv(tmp_path, [_GOOD_ROW], name="legacy.csv")), str(tmp_path / "legacy_out.csv"), method="kavier"
+    )
+    assert "batch_sizes" not in captured  # legacy mode: no explicit sweep
+
+
+def test_per_device_mode_missing_batch_keeps_row_unchanged(tmp_path, monkeypatch):
+    """If the engine returns no batch size in per-device mode, the row is kept UNCHANGED (its
+    original per-device value) rather than reinterpreting the total batch as per-device."""
+
+    def _fake_recommend(workloads, **kw):
+        return pd.DataFrame(
+            [
+                {
+                    "feasible": True,
+                    "number_of_nodes": 1,
+                    "gpus_per_node": 8,
+                    "batch_size": None,
+                    "throughput_tok_s": 15000.0,
+                }
+            ]
+        )
+
+    monkeypatch.setattr(trace_recommend.coastline, "recommend", _fake_recommend)
+    df = recommend_trace(str(_write_csv(tmp_path, [_GOOD_ROW_PD])), str(tmp_path / "out.csv"), method="kavier")
+    row = df.iloc[0]
+    assert pd.notna(row["metadata.recommendation_note"])  # kept unchanged, with a reason
+    assert int(row["per_device_train_batch_size"]) == 1  # original per-device preserved
+
+
+def test_legacy_mode_has_no_per_device_column(tmp_path):
+    """A trace WITHOUT any per-device column stays in legacy mode: metadata.batch_size is written
+    and no per_device_train_batch_size column is added."""
+    df = recommend_trace(str(_write_csv(tmp_path, [_GOOD_ROW])), str(tmp_path / "out.csv"), method="kavier")
+    assert "metadata.batch_size" in df.columns
+    assert "per_device_train_batch_size" not in df.columns
 
 
 def test_estimated_duration_scales_linearly_with_the_jobs_actual_work(tmp_path):

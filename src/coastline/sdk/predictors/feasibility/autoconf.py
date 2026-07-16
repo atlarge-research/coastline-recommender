@@ -78,7 +78,11 @@ class AutoconfFeasibilityChecker:
                     "method": workload.fine_tuning_method,
                     "gpu_model": workload.gpu_model,
                     "tokens_per_sample": workload.tokens_per_sample,
-                    "batch_size": workload.batch_size,
+                    # AutoConf's JobConfig.batch_size is the TOTAL/effective batch — it divides by
+                    # number_gpus internally (and its rule-based classifier requires divisibility).
+                    # WorkloadSpec.batch_size is PER-DEVICE, so convert at this boundary:
+                    # effective = per_device × total_gpus (always divisible by total_gpus).
+                    "batch_size": workload.batch_size * workload.total_gpus,
                     "number_gpus": workload.total_gpus,
                 }
             )
@@ -109,17 +113,17 @@ class AutoconfFeasibilityChecker:
 
 
 class RulesFeasibilityChecker:
-    """Lightweight feasibility without AutoConf (divisibility rule only)."""
+    """Lightweight feasibility without AutoConf (basic per-device sanity guards; no OOM check)."""
 
     def is_feasible(self, workload: WorkloadSpec) -> tuple[bool, dict[str, Any]]:
-        total = workload.total_gpus
-        if total < 1:
+        # batch_size is PER-DEVICE (Kavier's convention — it multiplies by total GPUs
+        # internally): a per-device batch need not divide the GPU count, so the old
+        # ``batch_size % total_gpus`` rule was wrong. Keep only basic sanity guards; the
+        # real OOM constraint is the AutoConf checker's job.
+        if workload.total_gpus < 1:
             return False, {"error": "invalid total_gpus"}
-        if workload.batch_size % total != 0:
-            return (
-                False,
-                {"error": "batch_size must be evenly divisible by number_gpus"},
-            )
+        if workload.batch_size < 1:
+            return False, {"error": "batch_size must be >= 1 (per-device)"}
         return True, {}
 
 

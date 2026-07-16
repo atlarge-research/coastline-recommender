@@ -234,16 +234,18 @@ def test_preset_weights_match_documented_spec():
 @pytest.mark.parametrize(
     "gpus_per_node, number_of_nodes, expected",
     [
-        # batch_size=8; rule is batch_size % total_gpus == 0. Divisors of 8 → feasible.
-        (1, 1, True),  # total 1  | 8 % 1 == 0
-        (2, 1, True),  # total 2  | 8 % 2 == 0
-        (4, 1, True),  # total 4  | 8 % 4 == 0
-        (8, 1, True),  # total 8  | 8 % 8 == 0
-        (3, 1, False),  # total 3  | 8 % 3 == 2
-        (8, 2, False),  # total 16 | 8 % 16 == 8
+        # batch_size is PER-DEVICE: it need not divide the GPU count, so EVERY per-device batch
+        # is feasible (the old ``batch_size % total_gpus`` rule is gone). (3, 1) and (8, 2) would
+        # have been rejected by that rule; now they pass.
+        (1, 1, True),  # total 1
+        (2, 1, True),  # total 2
+        (4, 1, True),  # total 4
+        (8, 1, True),  # total 8
+        (3, 1, True),  # total 3  (old rule: 8 % 3 != 0 -> rejected)
+        (8, 2, True),  # total 16 (old rule: 8 % 16 != 0 -> rejected)
     ],
 )
-def test_rules_feasibility_divisibility(gpus_per_node, number_of_nodes, expected):
+def test_rules_feasibility_admits_any_per_device_batch(gpus_per_node, number_of_nodes, expected):
     w = WorkloadSpec(
         llm_model="mistral-7b-v0.1",
         fine_tuning_method="lora",
@@ -257,9 +259,9 @@ def test_rules_feasibility_divisibility(gpus_per_node, number_of_nodes, expected
     assert feasible is expected
 
 
-def test_rules_feasibility_drops_indivisible_config_in_pipeline(workload, context):
-    # Grid [1, 3] with batch_size=8: 8 % 1 == 0 (kept) but 8 % 3 == 2 (dropped by rules).
-    # A pipeline that ignored feasibility would emit two recs including the 3-GPU config.
+def test_rules_feasibility_keeps_all_per_device_configs_in_pipeline(workload, context):
+    # Grid [1, 3] with per-device batch 8: rules no longer drops on divisibility (batch is
+    # per-device), so BOTH GPU counts survive to the ranked output (was [1] under the old rule).
     pred = Prediction(
         gpus_per_node=1,
         number_of_nodes=1,
@@ -277,7 +279,7 @@ def test_rules_feasibility_drops_indivisible_config_in_pipeline(workload, contex
     )
     recs = pipeline.recommend(workload, context)
 
-    assert [r.total_gpus for r in recs] == [1]  # only the divisible 1-GPU config survives
+    assert len(recs) == 2  # both per-device configs (1 and 3 GPUs) are feasible now
 
 
 # -------------------------------------------------------------- Kavier integration
