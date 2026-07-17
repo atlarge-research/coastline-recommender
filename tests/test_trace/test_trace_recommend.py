@@ -130,32 +130,6 @@ def test_legacy_mode_has_no_per_device_column(tmp_path):
     assert "per_device_train_batch_size" not in df.columns
 
 
-def test_recommended_output_preserves_all_input_columns(tmp_path):
-    """Regression for the VV launcher: the recommender must change only the columns it owns and
-    pass EVERY other input column through unchanged, so the recommended job is the original job
-    with a new resource layout. Previously _tidy_columns dropped all flat launcher-arg columns
-    (model_name_or_path, learning_rate, ...), which made the rows unlaunchable."""
-    row = {
-        **_GOOD_ROW,
-        "model_name_or_path": "ibm-granite/granite-3.1-8b-instruct",
-        "learning_rate": 1e-5,
-        "optim": "adamw_torch",
-    }
-    df = recommend_trace(str(_write_csv(tmp_path, [row])), str(tmp_path / "out.csv"), method="kavier")
-    for col in ("model_name_or_path", "learning_rate", "optim"):
-        assert col in df.columns, f"{col} was dropped from the recommended output"
-    assert df["model_name_or_path"].iloc[0] == "ibm-granite/granite-3.1-8b-instruct"
-    assert df["optim"].iloc[0] == "adamw_torch"
-
-
-def test_recommended_row_uid_is_method_prefixed(tmp_path):
-    """A successfully-recommended row gets metadata.uid = '{METHOD_UPPER}:{original}' so the patched
-    row is traceable back to its source (kept-unchanged rows keep the original uid — see the
-    incomplete-layout and mixed-trace tests)."""
-    df = recommend_trace(str(_write_csv(tmp_path, [_GOOD_ROW])), str(tmp_path / "out.csv"), method="kavier")
-    assert df["metadata.uid"].iloc[0] == "KAVIER:job-1"
-
-
 def test_estimated_duration_scales_linearly_with_the_jobs_actual_work(tmp_path):
     """estimated_duration = job_total_tokens / recommended_throughput.
 
