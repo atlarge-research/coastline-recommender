@@ -76,17 +76,19 @@ _FRONT_COLS = [
 
 
 def _tidy_columns(df: pd.DataFrame, throughput_col: str, duration_col: Optional[str]) -> pd.DataFrame:
-    """Put the decision columns first and drop raw fine-tuning args (adam_beta1, ...).
+    """Put the decision columns first, then keep every other input column unchanged.
 
-    Only dotted ``metadata.*`` / ``resources.*`` columns are kept after the front
-    block — the flat launcher-arg columns carry no signal for trace analysis.
+    The recommender mutates only the columns it owns (the resource layout + the estimate
+    columns); every other input column — including flat launcher args like ``model_name_or_path``,
+    ``learning_rate``, ``optim`` — passes through verbatim, so a recommended row stays a complete,
+    launchable job spec (the workload-generator replayer needs the full original config).
     """
     priority = [throughput_col]
     if duration_col:
         priority.append(duration_col)
     priority.append("metadata.recommendation_note")
     front = [c for c in [*_FRONT_COLS, *priority] if c in df.columns]
-    rest = [c for c in df.columns if c not in front and "." in c]
+    rest = [c for c in df.columns if c not in front]
     return df[front + rest]
 
 
@@ -388,6 +390,14 @@ def recommend_trace(
     df[thr_col] = [r["thr"] for r in recs]
     df[dur_col] = [r["dur"] for r in recs]
     df["metadata.recommendation_note"] = [r["note"] for r in recs]
+
+    # Trace-linked uid: prefix successfully-recommended rows with the method name so the patched
+    # row is traceable to its source (VV convention "{METHOD}:{orig_uid}"); kept-unchanged rows
+    # (r["note"] set) retain the original uid.
+    _uid = "metadata.uid"
+    if _uid in df.columns:
+        prefix = f"{method.upper()}:"
+        df[_uid] = [prefix + str(u) if not r["note"] else str(u) for u, r in zip(df[_uid], recs)]
 
     has_duration = df[dur_col].notna().any()
     df = _tidy_columns(df, thr_col, dur_col if has_duration else None)

@@ -130,6 +130,32 @@ def test_legacy_mode_has_no_per_device_column(tmp_path):
     assert "per_device_train_batch_size" not in df.columns
 
 
+def test_recommended_output_preserves_all_input_columns(tmp_path):
+    """Regression for the VV launcher: the recommender must change only the columns it owns and
+    pass EVERY other input column through unchanged, so the recommended job is the original job
+    with a new resource layout. Previously _tidy_columns dropped all flat launcher-arg columns
+    (model_name_or_path, learning_rate, ...), which made the rows unlaunchable."""
+    row = {
+        **_GOOD_ROW,
+        "model_name_or_path": "ibm-granite/granite-3.1-8b-instruct",
+        "learning_rate": 1e-5,
+        "optim": "adamw_torch",
+    }
+    df = recommend_trace(str(_write_csv(tmp_path, [row])), str(tmp_path / "out.csv"), method="kavier")
+    for col in ("model_name_or_path", "learning_rate", "optim"):
+        assert col in df.columns, f"{col} was dropped from the recommended output"
+    assert df["model_name_or_path"].iloc[0] == "ibm-granite/granite-3.1-8b-instruct"
+    assert df["optim"].iloc[0] == "adamw_torch"
+
+
+def test_recommended_row_uid_is_method_prefixed(tmp_path):
+    """A successfully-recommended row gets metadata.uid = '{METHOD_UPPER}:{original}' so the patched
+    row is traceable back to its source (kept-unchanged rows keep the original uid — see the
+    incomplete-layout and mixed-trace tests)."""
+    df = recommend_trace(str(_write_csv(tmp_path, [_GOOD_ROW])), str(tmp_path / "out.csv"), method="kavier")
+    assert df["metadata.uid"].iloc[0] == "KAVIER:job-1"
+
+
 def test_estimated_duration_scales_linearly_with_the_jobs_actual_work(tmp_path):
     """estimated_duration = job_total_tokens / recommended_throughput.
 
@@ -148,8 +174,8 @@ def test_estimated_duration_scales_linearly_with_the_jobs_actual_work(tmp_path):
 
     col = "metadata.estimated_duration_kavier"
     assert col in df.columns
-    one = df[df["metadata.uid"] == "one-hour"].iloc[0]
-    two = df[df["metadata.uid"] == "two-hour"].iloc[0]
+    one = df[df["metadata.uid"] == "KAVIER:one-hour"].iloc[0]
+    two = df[df["metadata.uid"] == "KAVIER:two-hour"].iloc[0]
 
     # Both feasible -> finite, positive durations.
     assert one[col] > 0 and pd.notna(one[col])
@@ -161,8 +187,8 @@ def test_estimated_duration_scales_linearly_with_the_jobs_actual_work(tmp_path):
     total = int(df["resources.num_gpus_per_node"].iloc[0]) * int(df["resources.num_nodes"].iloc[0])
     assert 1 <= total <= 8
 
-    # Unrelated column survives; round-trips to disk with the same row count.
-    assert df["metadata.uid"].iloc[0] == "one-hour"
+    # Recommended rows get the method-prefixed uid (traceable to the original); round-trips to disk.
+    assert df["metadata.uid"].iloc[0] == "KAVIER:one-hour"
     assert out.exists() and len(pd.read_csv(out)) == 2
 
 
@@ -242,8 +268,8 @@ def test_mixed_trace_recommends_good_row_and_preserves_the_unrecommendable_one(t
     df = recommend_trace(str(_write_csv(tmp_path, [good, bad])), str(out), method="kavier")
 
     assert len(df) == 2 and out.exists()
-    g = df[df["metadata.uid"] == "good"].iloc[0]
-    b = df[df["metadata.uid"] == "bad"].iloc[0]
+    g = df[df["metadata.uid"] == "KAVIER:good"].iloc[0]  # recommended -> method-prefixed uid
+    b = df[df["metadata.uid"] == "bad"].iloc[0]  # kept unchanged (unknown model) -> original uid
 
     col = "metadata.estimated_duration_kavier"
     assert g[col] > 0 and pd.notna(g[col])
