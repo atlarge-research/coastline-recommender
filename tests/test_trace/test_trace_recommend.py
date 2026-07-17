@@ -148,8 +148,8 @@ def test_estimated_duration_scales_linearly_with_the_jobs_actual_work(tmp_path):
 
     col = "metadata.estimated_duration_kavier"
     assert col in df.columns
-    one = df[df["metadata.uid"] == "one-hour"].iloc[0]
-    two = df[df["metadata.uid"] == "two-hour"].iloc[0]
+    one = df[df["metadata.uid"] == "KAVIER:one-hour"].iloc[0]
+    two = df[df["metadata.uid"] == "KAVIER:two-hour"].iloc[0]
 
     # Both feasible -> finite, positive durations.
     assert one[col] > 0 and pd.notna(one[col])
@@ -161,8 +161,8 @@ def test_estimated_duration_scales_linearly_with_the_jobs_actual_work(tmp_path):
     total = int(df["resources.num_gpus_per_node"].iloc[0]) * int(df["resources.num_nodes"].iloc[0])
     assert 1 <= total <= 8
 
-    # Unrelated column survives; round-trips to disk with the same row count.
-    assert df["metadata.uid"].iloc[0] == "one-hour"
+    # Recommended rows get the method-prefixed uid (traceable to the original); round-trips to disk.
+    assert df["metadata.uid"].iloc[0] == "KAVIER:one-hour"
     assert out.exists() and len(pd.read_csv(out)) == 2
 
 
@@ -242,8 +242,8 @@ def test_mixed_trace_recommends_good_row_and_preserves_the_unrecommendable_one(t
     df = recommend_trace(str(_write_csv(tmp_path, [good, bad])), str(out), method="kavier")
 
     assert len(df) == 2 and out.exists()
-    g = df[df["metadata.uid"] == "good"].iloc[0]
-    b = df[df["metadata.uid"] == "bad"].iloc[0]
+    g = df[df["metadata.uid"] == "KAVIER:good"].iloc[0]  # recommended -> method-prefixed uid
+    b = df[df["metadata.uid"] == "bad"].iloc[0]  # kept unchanged (unknown model) -> original uid
 
     col = "metadata.estimated_duration_kavier"
     assert g[col] > 0 and pd.notna(g[col])
