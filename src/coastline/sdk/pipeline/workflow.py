@@ -201,7 +201,24 @@ class GridWorkflowPipeline:
             threshold = max(c.throughput for c in evaluated) / self.runtime_guard_k
             guarded = [c for c in evaluated if c.throughput >= threshold]
             if guarded:
+                if len(guarded) < len(evaluated):
+                    logger.info(
+                        "Runtime guard (k=%s) dropped %d of %d candidates",
+                        self.runtime_guard_k,
+                        len(evaluated) - len(guarded),
+                        len(evaluated),
+                    )
                 evaluated = guarded
+            else:
+                # The guard would empty the set, so it disarms itself and returns the full set.
+                # That means the caller gets configurations VIOLATING the max_slowdown they asked
+                # for; silently was the old behaviour and it is indistinguishable from the guard
+                # having been satisfied. Say so.
+                logger.warning(
+                    "Runtime guard (k=%s) would reject every candidate, so it was not applied: "
+                    "the returned configurations may exceed the requested max slowdown.",
+                    self.runtime_guard_k,
+                )
 
         # Normalize throughput/power scores across the whole feasible set.
         normalize_candidates(evaluated, self.normalization)
