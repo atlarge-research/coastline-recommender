@@ -104,3 +104,17 @@ DEFAULT_TOKENS_PER_SAMPLE: list[int] = [512, 1024, 2048, 4096, 8192]
 
 # The AutoConf OOM model version used when a config doesn't pin one.
 DEFAULT_AUTOCONF_MODEL_VERSION = "3.1.0"
+
+# The empirical OOM guard's per-device token ceiling, re-derived from the nine Zurich campaigns
+# (135 jobs: 49 OOM, 86 completed). 60,224 is the UNIQUE accuracy maximum at 89.63% (121/135),
+# catching 36 of 49 OOMs with a single false alarm.
+#
+# The comparison is STRICTLY greater-than and that is load-bearing: 14 jobs sit at exactly
+# 60,224 tokens/device and every one of them completed. Using >= drops accuracy to 79.3%.
+#
+# This rule cannot do better. Completed jobs run up to 79,200 tokens/device while OOMs start at
+# 15,104, so the classes overlap over 87 of the 135 jobs; 89.63% is the provable ceiling for any
+# single tokens/device threshold. The 13 missed OOMs separate on gradient_checkpointing instead.
+# Treat it as a guard, not a classifier: the threshold was selected on the same campaigns it is
+# scored against, so true out-of-sample accuracy is lower.
+EMPIRICAL_OOM_TOKEN_BUDGET = 60_224
