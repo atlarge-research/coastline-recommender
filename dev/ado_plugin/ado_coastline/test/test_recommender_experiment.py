@@ -67,9 +67,8 @@ def test_find_coastline_root_locates_checkout() -> None:
     """When present, the sibling-checkout fallback resolves the COASTLINE layout."""
     root = find_coastline_root()
     assert root is not None, "Expected to locate the COASTLINE checkout"
-    assert (root / "coastline" / "facade.py").is_file()
-    assert (root / "coastline_recommender").is_dir()
-    assert (root / "common" / "coastline_common").is_dir()
+    assert (root / "src" / "coastline" / "__init__.py").is_file()
+    assert (root / "src" / "coastline" / "sdk" / "recommend" / "facade.py").is_file()
 
 
 # ---------------------------------------------------------------------------
