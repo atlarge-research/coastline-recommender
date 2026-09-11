@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "coastline-recommender"
-version = "0.2.1"
+version = "0.2.2"
 description = "Context-aware GPU/datacenter configuration recommender for LLM fine-tuning"
 readme = "README.md"
 license = "MIT"
