@@ -40,6 +40,8 @@ jobs:
           uv run --no-sync coastline --help
           uv run --no-sync coastline recommend-job --help
           uv run --no-sync coastline recommend-trace --help
+          uv run --no-sync coastline simulate --help
+          uv run --no-sync coastline explain --help
           uv run --no-sync coastline utils --help
           uv run --no-sync coastline utils plot-trace --help
           uv run --no-sync python -m coastline.cli --help

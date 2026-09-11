@@ -26,6 +26,18 @@ def _run_recommend_trace(argv: Optional[Sequence[str]]) -> None:
     main(argv)
 
 
+def _run_simulate(argv: Optional[Sequence[str]]) -> None:
+    from coastline.cli.simulate import main
+
+    main(argv)
+
+
+def _run_explain(argv: Optional[Sequence[str]]) -> None:
+    from coastline.cli.explain import main
+
+    main(argv)
+
+
 def _run_utils(argv: Optional[Sequence[str]]) -> None:
     from coastline.cli.utils import main
 
@@ -40,6 +52,14 @@ _COMMANDS: dict[str, tuple[str, _Handler]] = {
     "recommend-trace": (
         "Recommend a config for every job in a fine-tuning trace CSV (--visual for the timeline).",
         _run_recommend_trace,
+    ),
+    "simulate": (
+        "Predict throughput/power/runtime for ONE declared config, without ranking.",
+        _run_simulate,
+    ),
+    "explain": (
+        "Show WHY a recommendation won: ranked candidates, score components, weights.",
+        _run_explain,
     ),
     "utils": ("Auxiliary tooling: tune | trace-to-runs | plot-trace.", _run_utils),
 }
