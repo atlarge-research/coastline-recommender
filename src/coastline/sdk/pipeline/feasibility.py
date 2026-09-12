@@ -73,6 +73,22 @@ class _RulesThenAutoconfChecker:
             return ok, meta
         return self._autoconf.is_feasible(workload)
 
+    def check_chunk(self, workloads: Sequence[WorkloadSpec]) -> list[tuple[bool, dict[str, Any]]]:
+        """Rules per candidate, then ONE classifier call for everything the rules let through."""
+        results: list[Any] = [None] * len(workloads)
+        survivors: list[WorkloadSpec] = []
+        positions: list[int] = []
+        for position, workload in enumerate(workloads):
+            ok, meta = self._rules.is_feasible(workload)
+            if ok:
+                survivors.append(workload)
+                positions.append(position)
+            else:
+                results[position] = (ok, meta)
+        for position, verdict in zip(positions, self._autoconf.check_chunk(survivors)):
+            results[position] = verdict
+        return results
+
 
 def _wrap_with_empirical_guard(checker: FeasibilityChecker, predictor_config: dict) -> FeasibilityChecker:
     """Layer the empirical per-device token ceiling on top of the selected backend.

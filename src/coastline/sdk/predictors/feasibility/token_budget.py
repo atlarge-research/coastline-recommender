@@ -17,7 +17,7 @@ infeasible one, and it is opt-in. It wraps whatever backend the config already s
 from __future__ import annotations
 
 import logging
-from typing import Any, Protocol
+from typing import Any, Protocol, Sequence
 
 from coastline.sdk.models.workload import WorkloadSpec
 
@@ -87,3 +87,31 @@ class GuardedFeasibilityChecker:
         # Keep both: the caller can see the guard ran and what headroom the config had.
         merged = {**guard_metadata, **backend_metadata}
         return ok, merged
+
+    def check_chunk(self, workloads: Sequence[WorkloadSpec]) -> list[tuple[bool, dict[str, Any]]]:
+        """Guard every candidate, then hand the survivors to the backend in one go.
+
+        Without this the guard would hide any batching the backend offers, since it is the
+        outermost checker whenever the empirical OOM guard is enabled.
+        """
+        results: list[Any] = [None] * len(workloads)
+        survivors: list[WorkloadSpec] = []
+        guard_metas: list[dict[str, Any]] = []
+        positions: list[int] = []
+        for position, workload in enumerate(workloads):
+            ok, guard_metadata = self._guard.is_feasible(workload)
+            if not ok:
+                logger.debug("token-budget guard vetoed a candidate: %s", guard_metadata.get("reason"))
+                results[position] = (False, guard_metadata)
+                continue
+            survivors.append(workload)
+            guard_metas.append(guard_metadata)
+            positions.append(position)
+
+        backend_chunk = getattr(self._backend, "check_chunk", None)
+        backend_results = (
+            backend_chunk(survivors) if backend_chunk is not None else [self._backend.is_feasible(w) for w in survivors]
+        )
+        for position, guard_metadata, (ok, backend_metadata) in zip(positions, guard_metas, backend_results):
+            results[position] = (ok, {**guard_metadata, **backend_metadata})
+        return results

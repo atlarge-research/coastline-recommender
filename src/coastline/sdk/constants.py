@@ -105,6 +105,13 @@ DEFAULT_TOKENS_PER_SAMPLE: list[int] = [512, 1024, 2048, 4096, 8192]
 # The AutoConf OOM model version used when a config doesn't pin one.
 DEFAULT_AUTOCONF_MODEL_VERSION = "3.1.0"
 
+#: The AutoConf model whose classifier may decide a whole chunk of candidates in one call.
+#: Verified on this version only: batched and per-row predicts agree on every verdict over
+#: 3,339 real grid candidates and 81,928 synthetic ones, with probabilities drifting at most
+#: 6e-7 against a 1.8e-3 margin to the decision threshold. Another version falls back to one
+#: call per candidate. COASTLINE_NO_AUTOCONF_BATCH=1 opts out entirely.
+BATCHABLE_AUTOCONF_MODEL_VERSION = "3.1.0"
+
 # The empirical OOM guard's per-device token ceiling, re-derived from the nine Zurich campaigns
 # (135 jobs: 49 OOM, 86 completed). 60,224 is the UNIQUE accuracy maximum at 89.63% (121/135),
 # catching 36 of 49 OOMs with a single false alarm.
