@@ -180,6 +180,7 @@ def recommend(
     feasibility: str = "autoconf",
     lookup: Optional[str] = None,
     batch_sizes: Optional[list[int]] = None,
+    strategy_cache: Optional[engine.StrategyCache] = None,
 ) -> pd.DataFrame:
     """Recommend GPU/node configurations for a batch — returns a ``pandas.DataFrame`` of the input
     rows plus the chosen config + predictions (one row per ranked pick).
@@ -191,6 +192,8 @@ def recommend(
     ``rules`` for the divisibility-only path that needs no AutoConf install.
     ``lookup`` points the ``cache``/``intelligent`` predictors at a measured-runs CSV
     (or ``"default"`` for the small bundled lookup DB); other predictors ignore it.
+    ``strategy_cache`` lets a caller that loops over many batches (e.g. a trace, one row per
+    call) reuse one strategy across the calls that share a config; ``None`` builds per call.
     """
     rows = _normalise(batch)
     base = engine.defaults(engine.resolve_options())
@@ -219,7 +222,13 @@ def recommend(
         # failed row with the reason, never crashing the rest of the batch.
         try:
             answers, slowdown = _answers_for(row, kwargs, base)
-            recs, meta = engine.run_pipeline(answers, top_k=top_k, max_slowdown=slowdown, feasibility=feasibility)
+            recs, meta = engine.run_pipeline(
+                answers,
+                top_k=top_k,
+                max_slowdown=slowdown,
+                feasibility=feasibility,
+                strategy_cache=strategy_cache,
+            )
         except Exception as exc:  # noqa: BLE001 — isolate any per-row error
             out_rows.append(_failed_row(row, str(exc)[:200] or type(exc).__name__))
             continue

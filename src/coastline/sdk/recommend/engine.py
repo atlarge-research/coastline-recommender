@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -209,6 +211,61 @@ def build_strategy(
     )
 
 
+class StrategyCache:
+    """Reuse one built strategy across many calls that share the SAME config.
+
+    :func:`build_strategy` constructs every predictor and the feasibility checker, so calling
+    it once per trace row re-pays those constructions. The config is NOT constant across rows
+    -- :func:`build_config` derives ``grid.batch_sizes`` from the row's own batch size unless
+    an explicit sweep is passed -- and the grid is baked into the pipeline at construction, so
+    this keys on the fully-formed config instead of assuming one strategy fits a whole trace.
+    An unserializable config builds uncached rather than risking a wrong hit.
+    """
+
+    def __init__(self, capacity: int = 128) -> None:
+        self._capacity = capacity
+        self._entries: "OrderedDict[str, BaseStrategy]" = OrderedDict()
+        self.builds = 0  # strategies actually constructed (observability + tests)
+        self.hits = 0
+
+    @staticmethod
+    def _key(
+        config: dict[str, Any],
+        strategy_name: str,
+        preset: Optional[str],
+        alpha: Optional[float],
+        beta: Optional[float],
+    ) -> Optional[str]:
+        try:
+            return json.dumps([config, strategy_name, preset, alpha, beta], sort_keys=True, default=repr)
+        except (TypeError, ValueError):
+            return None
+
+    def get(
+        self,
+        config: dict[str, Any],
+        strategy_name: str,
+        preset: Optional[str] = None,
+        alpha: Optional[float] = None,
+        beta: Optional[float] = None,
+    ) -> "BaseStrategy":
+        key = self._key(config, strategy_name, preset, alpha, beta)
+        if key is None:
+            self.builds += 1
+            return build_strategy(config, strategy_name, preset, alpha, beta)
+        cached = self._entries.get(key)
+        if cached is not None:
+            self.hits += 1
+            self._entries.move_to_end(key)
+            return cached
+        strategy = build_strategy(config, strategy_name, preset, alpha, beta)
+        self.builds += 1
+        self._entries[key] = strategy
+        if len(self._entries) > self._capacity:
+            self._entries.popitem(last=False)
+        return strategy
+
+
 def execute_strategy(
     strategy: "BaseStrategy",
     workload: WorkloadSpec,
@@ -245,9 +302,16 @@ def execute_strategy(
     return recs, meta
 
 
-def run_request(request: RecommendRequest) -> tuple[list[Recommendation], dict[str, Any]]:
-    """The single workflow: build the strategy, run it, return (recs, meta)."""
-    strategy = build_strategy(request.config, request.strategy_name, request.preset, request.alpha, request.beta)
+def run_request(
+    request: RecommendRequest, strategy_cache: Optional[StrategyCache] = None
+) -> tuple[list[Recommendation], dict[str, Any]]:
+    """The single workflow: build the strategy, run it, return (recs, meta).
+
+    ``strategy_cache`` lets a batch caller (a trace, a CSV) reuse one strategy across rows that
+    share a config. ``None`` builds per call, which is the historical behaviour.
+    """
+    args = (request.config, request.strategy_name, request.preset, request.alpha, request.beta)
+    strategy = build_strategy(*args) if strategy_cache is None else strategy_cache.get(*args)
     return execute_strategy(
         strategy,
         request.workload,
@@ -265,6 +329,7 @@ def run_pipeline(
     top_k: int,
     max_slowdown: Optional[float] = None,
     feasibility: str = "autoconf",
+    strategy_cache: Optional[StrategyCache] = None,
 ) -> tuple[list[Recommendation], dict[str, Any]]:
     """Answers-driven entry (interactive REPL, no-TTY path, and ``batch_api``): derive a
     ``RecommendRequest`` from an ``answers`` dict and run it. Signature and return are
@@ -283,7 +348,8 @@ def run_pipeline(
             strategy_name=strategy_name,
             preset=preset,
             total_tokens=total_tokens,
-        )
+        ),
+        strategy_cache=strategy_cache,
     )
 
 

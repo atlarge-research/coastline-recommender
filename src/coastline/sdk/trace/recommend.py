@@ -32,6 +32,7 @@ import pandas as pd
 import coastline
 from coastline.sdk.constants import DEFAULT_BATCH_SIZES, FeasibilityMode
 from coastline.sdk.io.infrastructure import resolve_cluster_caps
+from coastline.sdk.recommend.engine import StrategyCache
 
 logger = logging.getLogger(__name__)
 
@@ -118,11 +119,23 @@ def _job_total_tokens(row: pd.Series, tot_tokens_col: Optional[str]) -> Optional
     return None
 
 
-def _kavier_can_predict(wl: dict[str, Any], goal: str, feasibility: str, max_gpus: int) -> bool:
+def _kavier_can_predict(
+    wl: dict[str, Any],
+    goal: str,
+    feasibility: str,
+    max_gpus: int,
+    strategy_cache: Optional[StrategyCache] = None,
+) -> bool:
     """True when the kavier physics path yields a feasible config with a throughput."""
     try:
         out = coastline.recommend(
-            [wl], predictor="kavier", goal=goal, max_gpus=max_gpus, top_k=1, feasibility=feasibility
+            [wl],
+            predictor="kavier",
+            goal=goal,
+            max_gpus=max_gpus,
+            top_k=1,
+            feasibility=feasibility,
+            strategy_cache=strategy_cache,
         )
         if out.empty or not bool(out.iloc[0]["feasible"]):
             return False
@@ -178,6 +191,7 @@ def _recommend_row(
     tot_tokens_col: Optional[str] = _NO_TOT_TOKENS,
     setup_time_col: Optional[str] = None,
     per_device_mode: bool = False,
+    strategy_cache: Optional[StrategyCache] = None,
 ) -> dict[str, Any]:
     """Recommend a layout for one trace row; fall back to the original layout on any failure.
 
@@ -230,7 +244,7 @@ def _recommend_row(
     def kavier_hint() -> str:
         if predictor == "kavier":
             return ""
-        if _kavier_can_predict(wl, goal, feasibility, max_gpus):
+        if _kavier_can_predict(wl, goal, feasibility, max_gpus, strategy_cache):
             return " — kavier CAN handle this workload: rerun with --method kavier"
         return ""
 
@@ -246,6 +260,7 @@ def _recommend_row(
             top_k=1,
             feasibility=feasibility,
             lookup=lookup,
+            strategy_cache=strategy_cache,
             **sweep,
         )
         if out.empty or not bool(out.iloc[0]["feasible"]):
@@ -358,6 +373,10 @@ def recommend_trace(
     # per-device batch and patch per_device_train_batch_size (VV's target) rather than the
     # total-effective metadata.batch_size.
     per_device_mode = any(c in df.columns for c in _PER_DEVICE_COLS)
+    # One strategy per distinct config instead of one per row: build_config derives
+    # grid.batch_sizes from the row's own batch size in legacy mode, so the cache keys on the
+    # config rather than hoisting a single strategy (which would be wrong there).
+    strategy_cache = StrategyCache()
     recs = [
         _recommend_row(
             row,
@@ -370,9 +389,13 @@ def recommend_trace(
             tot_tokens_col=tot_tokens_col,
             setup_time_col=setup_time_col,
             per_device_mode=per_device_mode,
+            strategy_cache=strategy_cache,
         )
         for _, row in df.iterrows()
     ]
+    logger.info(
+        "strategy cache: %d built, %d reused across %d rows", strategy_cache.builds, strategy_cache.hits, len(df)
+    )
     for i, r in enumerate(recs):
         if r["note"]:
             logger.warning("row %d (%s): %s", i, df.iloc[i].get(_MODEL, "?"), r["note"])
