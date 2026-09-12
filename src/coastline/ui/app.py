@@ -16,6 +16,7 @@ import math
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal, NamedTuple, Optional
@@ -815,8 +816,8 @@ def predict(body: PredictRequest):
             detail=f"Too many models requested ({len(models)}); max {_max_models} per request.",
         )
 
-    results = []
-    for model_id in models:
+    def _predict_one(model_id: str) -> dict:
+        """Run one model in its own subprocess and return its row for the response."""
         label = name_by_id.get(model_id, model_id)
         payload = {
             "model_id": model_id,
@@ -848,21 +849,19 @@ def predict(body: PredictRequest):
             # Launch/timeout failure (subprocess never produced a clean result) —
             # isolate it as "this model is unavailable" rather than failing the batch.
             logger.warning("Predict worker for %s errored: %s", model_id, exc)
-            results.append({"model": model_id, "label": label, "available": False})
-            continue
+            return {"model": model_id, "label": label, "available": False}
 
         if proc.returncode != 0 or not proc.stdout.strip():
             # The worker exited non-zero (e.g. a missing ML artifact / native crash);
             # that model is simply unavailable for this config.
             logger.warning("Predict worker for %s exited rc=%s", model_id, proc.returncode)
-            results.append({"model": model_id, "label": label, "available": False})
-            continue
+            return {"model": model_id, "label": label, "available": False}
 
         # rc==0 with output: the worker claims success, so a JSON parse failure is a
         # contract violation (corrupt worker output), not "model unavailable". Surface
         # it as a 500 carrying the worker's stderr so the cause is visible.
         try:
-            results.append(json.loads(proc.stdout))
+            return json.loads(proc.stdout)
         except json.JSONDecodeError as exc:
             logger.error(
                 "Predict worker for %s returned rc=0 but unparseable stdout: %s; stderr=%s",
@@ -877,6 +876,18 @@ def predict(body: PredictRequest):
                     f"{exc}. Worker stderr: {proc.stderr.strip() or '<empty>'}"
                 ),
             ) from exc
+
+    # The models are independent and each call blocks on its own child process, so run them
+    # concurrently: the page waits for the slowest model (TabPFN ~77 ms of inference behind a
+    # ~0.5 s interpreter start) instead of the sum of all of them. Threads, not processes — the
+    # work already happens in child processes, and a thread waiting on one holds no GIL.
+    # ``map`` yields in request order, so the response rows keep the order the caller asked for,
+    # and a malformed-output 500 still surfaces for the first offending model.
+    if len(models) == 1:
+        results = [_predict_one(models[0])]
+    else:
+        with ThreadPoolExecutor(max_workers=len(models)) as pool:
+            results = list(pool.map(_predict_one, models))
 
     return {
         "success": True,
