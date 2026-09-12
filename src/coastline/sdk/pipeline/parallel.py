@@ -1,9 +1,14 @@
 """Per-stage parallel execution over grid candidates.
 
-The pipeline runs its stages one after another with a barrier between them: feasibility forks
-its candidates across worker processes and joins, then simulation forks the survivors and joins.
-Ranking is a whole-set reduction (min-max over the feasible set, then a sort) and stays
-sequential — splitting it would need a merge costing more than the sort it replaces.
+The pipeline runs its stages one after another with a barrier between them: each stage may split
+its candidates across worker processes and join before the next one starts. Ranking is a whole-set
+reduction (min-max over the feasible set, then a sort) and stays sequential — splitting it would
+need a merge costing more than the sort it replaces.
+
+In practice only two things fork: the simulation stage when its predictor is a data-driven model
+(2-53 ms a prediction), and the feasibility stage when its classifier cannot be batched. A batched
+classifier decides a whole chunk in one call, which beats forking by so much that forking on top of
+it is a wash — so it does not.
 
 Two properties are load-bearing:
 
@@ -47,13 +52,17 @@ DEFAULT_CLI_WORKERS = 4
 # * A stage that costs per CANDIDATE -- the ML predictors (2-77 ms each), or the AutoConf
 #   classifier when batching is unavailable (~4.9 ms each) -- pays for a fork almost immediately:
 #   a handful of candidates already outweighs the ~1 ms of pickling a chunk.
-# * A stage that has already been BATCHED into one vectorised call costs ~4.5 ms fixed plus
-#   ~0.2 ms per candidate (the per-row rule classifier and frame build, which cannot batch).
-#   Splitting it pays k times that fixed cost, so it only wins once the linear part dominates.
-#   Measured on a 405-row trace with an 18-candidate grid: 16.1 s sequential against 20.4 s at
-#   2 workers and 24.8 s at 8 -- forking a batched stage this small is pure loss.
+# * A stage that has already been BATCHED into one vectorised call is never worth forking, at any
+#   size. Splitting it pays the batched call's fixed cost k times over, and what is left per
+#   candidate is small enough that shipping the candidate to a worker cancels the gain exactly.
+#   Measured on the AutoConf gate at 840 / 3,360 / 7,680 / 15,360 candidates: 1.02x / 1.04x /
+#   1.03x / 1.03x at 4 workers -- flat, across an 18x range of grid sizes. On a small grid it is
+#   worse than flat: a 405-row trace with an 18-candidate grid went from 16.1 s sequential to
+#   20.4 s at 2 workers and 24.8 s at 8.
+#   The same gate with batching unavailable (an unmeasured model version, or the opt-out) is back
+#   in the per-candidate regime at ~4.9 ms a candidate, and there forking pays properly: 3.11x at
+#   840 candidates, 3.17x at 3,360.
 MIN_ITEMS_PER_ROW_STAGE = 8
-MIN_ITEMS_BATCHED_STAGE = 256
 
 # Starting the pool is not free: a worker re-pays its model load before it can answer anything --
 # 0.57 s for catboost, 1.4-1.6 s for xgboost/lightgbm/knn/svr/random_forest, 2.3 s for the neural
@@ -284,10 +293,11 @@ def run_feasibility(
     """
     from coastline.sdk.pipeline.feasibility import evaluate_chunk, is_expensive
 
-    # A checker that batches has already collapsed its per-candidate cost, so it needs a much
-    # bigger grid before splitting it is worth k batched calls instead of one.
-    min_items = MIN_ITEMS_BATCHED_STAGE if _batches(checker) else MIN_ITEMS_PER_ROW_STAGE
-    n_chunks = plan_chunks(len(workloads), workers, min_items) if (predictor_config and is_expensive(checker)) else 1
+    # A checker that batches has already collapsed its per-candidate cost to the point where
+    # splitting it is a wash at every grid size measured, so it simply never forks. The same
+    # checker without batching is back in the per-candidate regime, where forking pays.
+    worth_forking = bool(predictor_config) and is_expensive(checker) and not _batches(checker)
+    n_chunks = plan_chunks(len(workloads), workers, MIN_ITEMS_PER_ROW_STAGE) if worth_forking else 1
     if n_chunks <= 1:
         return evaluate_chunk(checker, workloads)
     payloads = [(predictor_config, part) for part in chunk(workloads, n_chunks)]

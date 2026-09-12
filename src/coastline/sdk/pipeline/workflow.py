@@ -166,15 +166,21 @@ class GridWorkflowPipeline:
         normalization: Optional[str] = None,
         runtime_guard_k: Optional[float] = None,
         workers: Optional[int] = None,
+        components_from_config: bool = False,
     ) -> "GridWorkflowPipeline":
         strategy_cfg = config.get("strategy", {})
         alpha, beta = cls._resolve_weights(strategy_cfg, preset, alpha, beta)
         # A caller may hand us a ready-made predictor or checker instead of naming one in the
-        # config. A worker process can only rebuild what the config describes, so an injected
-        # component would be replaced by a different object in the fork -- a silently different
-        # answer. Withholding the predictor config keeps every stage in this process, which is
-        # what identity requires.
-        injected = any(
+        # config. A worker process can only rebuild what the config describes, so such a component
+        # would be replaced by a different object in the fork -- a silently different answer.
+        # Withholding the predictor config keeps every stage in this process, which is what
+        # identity requires.
+        #
+        # ``components_from_config`` is how PolicyFactory says "I built these from the very
+        # predictors block you are holding". It builds them itself (and passes them on to the
+        # strategy, which exposes them), so without this every real path would look injected and
+        # nothing would ever fork.
+        injected = not components_from_config and any(
             component is not None for component in (throughput_predictor, power_predictor, feasibility_checker)
         )
         throughput_predictor, power_predictor, feasibility_checker = cls._build_predictors(

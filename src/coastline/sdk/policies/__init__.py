@@ -195,6 +195,9 @@ class PolicyFactory:
             throughput_predictor=throughput,
             power_predictor=power,
             feasibility_checker=feasibility,
+            # Built from this very predictors block, so a worker rebuilding from it gets the
+            # same objects and the stages may fork.
+            components_from_config=True,
         )
         return MinGPUStrategy(pipeline=pipeline)
 
@@ -259,6 +262,7 @@ class PolicyFactory:
             alpha=alpha,
             beta=beta,
             config=config,
+            components_from_config=True,  # see _create_min_gpu_strategy
         )
 
 

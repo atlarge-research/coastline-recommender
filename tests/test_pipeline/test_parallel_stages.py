@@ -50,7 +50,6 @@ from coastline.sdk.pipeline.feasibility import (
 )
 from coastline.sdk.pipeline.grid import GridConfig, generate_candidates
 from coastline.sdk.pipeline.parallel import (
-    MIN_ITEMS_BATCHED_STAGE,
     MIN_ITEMS_PER_ROW_STAGE,
     MIN_ITEMS_TO_START_A_POOL,
     chunk,
@@ -205,9 +204,9 @@ class _ExpensiveRulesChecker(RulesFeasibilityChecker):
 class _BatchingRulesChecker(_ExpensiveRulesChecker):
     """Expensive AND batched — the regime of the AutoConf backend on the verified model.
 
-    One call decides the whole chunk, so the per-candidate cost is already collapsed and the fork
-    threshold moves up to MIN_ITEMS_BATCHED_STAGE. The verdicts are still the rules backend's, so a
-    forked run (whose worker rebuilds a plain rules checker from the config) stays comparable.
+    One call decides the whole chunk, so the per-candidate cost is already collapsed and the stage
+    never forks at any size. The verdicts are still the rules backend's, so a run that DID fork
+    (whose worker rebuilds a plain rules checker from the config) stays comparable.
     """
 
     def batches(self) -> bool:
@@ -396,22 +395,6 @@ class TestPlanChunks:
         assert plan_chunks(n_items, workers, MIN_ITEMS_PER_ROW_STAGE) == expected  # the default
 
     @pytest.mark.parametrize(
-        "n_items, workers, expected",
-        [
-            # Batched regime: one vectorised call is already cheap per candidate, so the floor is
-            # MIN_ITEMS_BATCHED_STAGE = 256 — below it, k batched calls cost more than one.
-            (8, 4, 1),
-            (255, 8, 1),  # one short of the batched floor
-            (256, 2, 2),
-            (256, 4, 4),
-            (256, 8, 8),
-            (1024, 4, 4),
-        ],
-    )
-    def test_plan_table_for_a_batched_stage(self, n_items, workers, expected):
-        assert plan_chunks(n_items, workers, MIN_ITEMS_BATCHED_STAGE) == expected
-
-    @pytest.mark.parametrize(
         "n_items, expected",
         [
             (8, 1),  # would fork against a warm pool; not worth starting one
@@ -427,13 +410,8 @@ class TestPlanChunks:
         monkeypatch.setattr(parallel, "pool_is_warm", lambda: False)
         assert plan_chunks(n_items, 4) == expected
 
-    def test_the_two_floors_are_ordered(self):
-        # A batched stage must never fork sooner than a per-candidate one — that ordering is the
-        # whole point of having two constants.
-        assert MIN_ITEMS_BATCHED_STAGE > MIN_ITEMS_PER_ROW_STAGE >= 1
-
     @pytest.mark.parametrize("workers", [1, 2, 3, 4, 8])
-    @pytest.mark.parametrize("min_items", [MIN_ITEMS_PER_ROW_STAGE, MIN_ITEMS_BATCHED_STAGE])
+    @pytest.mark.parametrize("min_items", [MIN_ITEMS_PER_ROW_STAGE, 256])
     def test_a_planned_chunk_is_never_starved(self, workers, min_items):
         # Property over every grid size around the floor: the plan never exceeds the worker count,
         # always reassembles the input, never forks below the floor, and never hands a worker less
@@ -799,29 +777,32 @@ class TestRunFeasibility:
         assert all(cfg == {"feasibility": "rules"} for cfg, _ in call["payloads"])
         assert no_pool == [4]  # it really tried to fork; only the pool itself was stubbed out
 
-    def test_a_batched_stage_stays_inline_on_a_small_grid(self, context, map_calls, no_pool):
-        # Eight candidates is plenty for a per-candidate stage and far short of the batched floor:
-        # splitting one vectorised call into four would pay the fixed cost four times.
-        checker = _BatchingRulesChecker()
-        candidates = _candidates(context, batch_sizes=(4, 8))
-        assert len(candidates) == 8 >= MIN_ITEMS_PER_ROW_STAGE
+    @pytest.mark.parametrize("size", [8, 256, 4096])
+    def test_a_batched_stage_never_forks_at_any_size(self, context, map_calls, no_pool, size):
+        # One call already decides the whole chunk, and splitting it pays that call's fixed cost k
+        # times over. Measured on the real gate at 840 / 3,360 / 7,680 / 15,360 candidates:
+        # 1.02x / 1.04x / 1.03x / 1.03x at 4 workers -- flat across an 18x range, so there is no
+        # size at which this becomes worth doing.
+        grid = _candidates(context, batch_sizes=(4, 8))
+        candidates = (grid * (size // len(grid) + 1))[:size]
 
-        verdicts = run_feasibility(checker, {"feasibility": "rules"}, candidates, workers=4)
+        verdicts = run_feasibility(_BatchingRulesChecker(), {"feasibility": "rules"}, candidates, workers=4)
 
         assert verdicts == [RulesFeasibilityChecker().is_feasible(c) for c in candidates]
-        assert map_calls == []
+        assert map_calls == []  # never reached the fork
 
-    def test_a_batched_stage_forks_once_the_grid_is_big_enough(self, context, map_calls, no_pool):
-        # At the batched floor the linear part finally dominates the fixed cost, so it splits.
+    def test_the_same_checker_without_batching_does_fork(self, context, map_calls, no_pool):
+        # The fork is not dead code: strip the batching (an unmeasured AutoConf version, or
+        # COASTLINE_NO_AUTOCONF_BATCH=1) and the stage is back to per-candidate cost, where
+        # forking pays properly -- 3.11x at 840 candidates on the real gate.
         grid = _candidates(context, batch_sizes=(4, 8))
-        candidates = (grid * (MIN_ITEMS_BATCHED_STAGE // len(grid) + 1))[:MIN_ITEMS_BATCHED_STAGE]
+        candidates = (grid * 64)[:512]
         sequential = run_feasibility(RulesFeasibilityChecker(), {"feasibility": "rules"}, candidates, workers=1)
 
-        forked = run_feasibility(_BatchingRulesChecker(), {"feasibility": "rules"}, candidates, workers=4)
+        forked = run_feasibility(_ExpensiveRulesChecker(), {"feasibility": "rules"}, candidates, workers=4)
 
         assert forked == sequential
         assert len(map_calls) == 1
-        assert len(map_calls[0]["payloads"]) == plan_chunks(len(candidates), 4, MIN_ITEMS_BATCHED_STAGE)
         assert [c for _, part in map_calls[0]["payloads"] for c in part] == candidates
 
     @pytest.mark.parametrize("workers", [1, 4])
