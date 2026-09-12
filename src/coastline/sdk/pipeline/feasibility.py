@@ -73,6 +73,10 @@ class _RulesThenAutoconfChecker:
             return ok, meta
         return self._autoconf.is_feasible(workload)
 
+    def batches(self) -> bool:
+        """One classifier call per chunk exactly when the AutoConf leg can batch."""
+        return bool(self._autoconf.batches())
+
     def check_chunk(self, workloads: Sequence[WorkloadSpec]) -> list[tuple[bool, dict[str, Any]]]:
         """Rules per candidate, then ONE classifier call for everything the rules let through."""
         results: list[Any] = [None] * len(workloads)

@@ -18,6 +18,7 @@ from coastline.sdk.constants import (
 from coastline.sdk.models.context import SystemContext
 from coastline.sdk.models.recommendation import Recommendation
 from coastline.sdk.models.workload import WorkloadSpec
+from coastline.sdk.pipeline.parallel import RUNTIME_SECTION, WORKERS_KEY
 from coastline.sdk.recommend import _goals
 
 if TYPE_CHECKING:  # avoid importing the heavy policies package at module load
@@ -119,11 +120,14 @@ def build_config(
     top_k: int,
     max_slowdown: Optional[float] = None,
     feasibility: str = "autoconf",
+    workers: Optional[int] = None,
 ) -> tuple[dict, str, Optional[str]]:
     """Build strategy-config dict for PolicyFactory; max_slowdown maps to runtime_guard_k.
 
     ``feasibility`` selects the checker (``autoconf`` | ``rules`` | ``none``); the
     answers dict may override it via a ``feasibility`` key.
+    ``workers`` sets ``runtime.parallel_workers``, the per-stage worker count the pipeline
+    forks candidates across; None leaves the block out and the pipeline runs sequentially.
     """
     strategy_name, preset = GOALS[answers["goal_label"]]
     predictor = answers["predictor"]
@@ -154,6 +158,8 @@ def build_config(
             "top_k": top_k,
         },
     }
+    if workers is not None:
+        config[RUNTIME_SECTION] = {WORKERS_KEY: int(workers)}
     return config, strategy_name, preset
 
 
@@ -330,6 +336,7 @@ def run_pipeline(
     max_slowdown: Optional[float] = None,
     feasibility: str = "autoconf",
     strategy_cache: Optional[StrategyCache] = None,
+    workers: Optional[int] = None,
 ) -> tuple[list[Recommendation], dict[str, Any]]:
     """Answers-driven entry (interactive REPL, no-TTY path, and ``batch_api``): derive a
     ``RecommendRequest`` from an ``answers`` dict and run it. Signature and return are
@@ -338,7 +345,7 @@ def run_pipeline(
     ``feasibility`` (``autoconf`` | ``rules`` | ``none``) picks the feasibility
     checker; an answers ``feasibility`` key takes precedence (see ``build_config``).
     """
-    config, strategy_name, preset = build_config(answers, top_k, max_slowdown, feasibility)
+    config, strategy_name, preset = build_config(answers, top_k, max_slowdown, feasibility, workers)
     total_tokens = int(answers["dataset_size"] * answers["epochs"] * answers["tokens_per_sample"])
     return run_request(
         RecommendRequest(

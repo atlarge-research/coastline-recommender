@@ -85,6 +85,13 @@ def _build_parser() -> FriendlyParser:
             "Ignored when --tot-tokens-col is not set."
         ),
     )
+    p.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Processes each pipeline stage forks its candidates across (default: "
+        "runtime.parallel_workers from experiment.yaml, else 4). Use 1 to run sequentially.",
+    )
     add_trace_layout_args(p)
     return p
 
@@ -92,6 +99,7 @@ def _build_parser() -> FriendlyParser:
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = _build_parser().parse_args(argv)
     from coastline.sdk.io.infrastructure import resolve_cluster_caps
+    from coastline.sdk.io.run_config import resolve_cli_workers
     from coastline.sdk.trace.recommend import _TOKENS as _DEFAULT_TOKENS
 
     cluster_gpus, node_gpus, _ = resolve_cluster_caps(args.cluster_gpus, args.node_gpus)
@@ -107,6 +115,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         tokens_col=args.tokens_col if args.tokens_col else _DEFAULT_TOKENS,
         tot_tokens_col=args.tot_tokens_col if args.tot_tokens_col else None,
         setup_time_col=args.setup_time_col if args.setup_time_col else None,
+        workers=resolve_cli_workers(args.workers),
     )
     thr_col = f"metadata.estimated_throughput_{args.method}"
     dur_col = f"metadata.estimated_duration_{args.method}"

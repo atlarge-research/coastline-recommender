@@ -88,6 +88,11 @@ class GuardedFeasibilityChecker:
         merged = {**guard_metadata, **backend_metadata}
         return ok, merged
 
+    def batches(self) -> bool:
+        """Delegates: the guard itself is per candidate, the backend decides the regime."""
+        backend_batches = getattr(self._backend, "batches", None)
+        return bool(backend_batches()) if backend_batches is not None else False
+
     def check_chunk(self, workloads: Sequence[WorkloadSpec]) -> list[tuple[bool, dict[str, Any]]]:
         """Guard every candidate, then hand the survivors to the backend in one go.
 

@@ -41,8 +41,19 @@ WORKERS_KEY = "parallel_workers"
 #: work into subprocesses, where monkeypatched modules and in-process globals do not follow.
 DEFAULT_CLI_WORKERS = 4
 
-#: Below this many candidates a fork cannot pay for itself even on an expensive stage.
-MIN_ITEMS_PER_WORKER = 2
+# How many candidates a stage needs before splitting it across processes wins. These are two
+# very different regimes, both measured on this machine:
+#
+# * A stage that costs per CANDIDATE -- the ML predictors (2-77 ms each), or the AutoConf
+#   classifier when batching is unavailable (~4.9 ms each) -- pays for a fork almost immediately:
+#   a handful of candidates already outweighs the ~1 ms of pickling a chunk.
+# * A stage that has already been BATCHED into one vectorised call costs ~4.5 ms fixed plus
+#   ~0.2 ms per candidate (the per-row rule classifier and frame build, which cannot batch).
+#   Splitting it pays k times that fixed cost, so it only wins once the linear part dominates.
+#   Measured on a 405-row trace with an 18-candidate grid: 16.1 s sequential against 20.4 s at
+#   2 workers and 24.8 s at 8 -- forking a batched stage this small is pure loss.
+MIN_ITEMS_PER_ROW_STAGE = 8
+MIN_ITEMS_BATCHED_STAGE = 256
 
 
 def resolve_workers(requested: Optional[int]) -> int:
@@ -52,11 +63,15 @@ def resolve_workers(requested: Optional[int]) -> int:
     return max(1, min(int(requested), os.cpu_count() or 1))
 
 
-def plan_chunks(n_items: int, workers: int) -> int:
-    """How many chunks to split ``n_items`` into — 1 means "run inline"."""
-    if workers <= 1 or n_items < MIN_ITEMS_PER_WORKER * 2:
+def plan_chunks(n_items: int, workers: int, min_items: int = MIN_ITEMS_PER_ROW_STAGE) -> int:
+    """How many chunks to split ``n_items`` into — 1 means "run inline".
+
+    ``min_items`` is the point where forking starts to pay for this stage; below it the dispatch
+    costs more than the work, so the stage runs in the calling process.
+    """
+    if workers <= 1 or n_items < min_items:
         return 1
-    return max(1, min(workers, n_items // MIN_ITEMS_PER_WORKER))
+    return max(1, min(workers, n_items // max(1, min_items // workers or 1)))
 
 
 def chunk(items: Sequence[T], n_chunks: int) -> list[list[T]]:
@@ -180,6 +195,14 @@ def worker_predictors(predictor_config: dict[str, Any]) -> tuple[Any, Any]:
     return pair
 
 
+def _batches(checker: Any) -> bool:
+    """Whether this checker decides a whole chunk in one call rather than one call per candidate."""
+    can_batch = getattr(checker, "batches", None)
+    if can_batch is not None:
+        return bool(can_batch())
+    return False
+
+
 def feasibility_worker(payload: tuple[dict[str, Any], list[Any]]) -> list[Any]:
     """Pool entry point for the feasibility stage: one chunk of candidates in, verdicts out."""
     predictor_config, workloads = payload
@@ -201,7 +224,12 @@ def run_feasibility(
     """
     from coastline.sdk.pipeline.feasibility import evaluate_chunk, is_expensive
 
-    n_chunks = plan_chunks(len(workloads), workers) if (predictor_config and is_expensive(checker)) else 1
+    # A checker that batches has already collapsed its per-candidate cost, so it needs a much
+    # bigger grid before splitting it is worth k batched calls instead of one.
+    min_items = MIN_ITEMS_BATCHED_STAGE if _batches(checker) else MIN_ITEMS_PER_ROW_STAGE
+    n_chunks = (
+        plan_chunks(len(workloads), workers, min_items) if (predictor_config and is_expensive(checker)) else 1
+    )
     if n_chunks <= 1:
         return evaluate_chunk(checker, workloads)
     payloads = [(predictor_config, part) for part in chunk(workloads, n_chunks)]
@@ -235,7 +263,9 @@ def run_simulation(
     from coastline.sdk.pipeline.workflow import simulate_chunk
 
     expensive = bool(getattr(throughput_predictor, "EXPENSIVE", False))
-    n_chunks = plan_chunks(len(workloads), workers) if (predictor_config and expensive) else 1
+    n_chunks = (
+        plan_chunks(len(workloads), workers, MIN_ITEMS_PER_ROW_STAGE) if (predictor_config and expensive) else 1
+    )
     if n_chunks <= 1:
         return simulate_chunk(throughput_predictor, power_predictor, list(workloads), context)
     payloads = [(predictor_config, context, part) for part in chunk(workloads, n_chunks)]

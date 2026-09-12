@@ -192,6 +192,7 @@ def _recommend_row(
     setup_time_col: Optional[str] = None,
     per_device_mode: bool = False,
     strategy_cache: Optional[StrategyCache] = None,
+    workers: int = 1,
 ) -> dict[str, Any]:
     """Recommend a layout for one trace row; fall back to the original layout on any failure.
 
@@ -261,6 +262,7 @@ def _recommend_row(
             feasibility=feasibility,
             lookup=lookup,
             strategy_cache=strategy_cache,
+            workers=workers,
             **sweep,
         )
         if out.empty or not bool(out.iloc[0]["feasible"]):
@@ -335,6 +337,7 @@ def recommend_trace(
     tokens_col: str = _TOKENS,
     tot_tokens_col: Optional[str] = _NO_TOT_TOKENS,
     setup_time_col: Optional[str] = None,
+    workers: int = 1,
 ) -> pd.DataFrame:
     """Recommend a layout per trace row, write the recommended-trace CSV, and return the DataFrame.
 
@@ -350,6 +353,9 @@ def recommend_trace(
     ``cluster_gpus`` / ``node_gpus`` bound every job to the cluster: they resolve (with
     ``infrastructure.yaml`` as the default) to the GPU budget each job is optimised within, so no
     recommendation ever exceeds the cluster. The cluster size is never taken from the trace.
+
+    ``workers`` forks each pipeline stage's candidates across that many processes (1 =
+    sequential). The CLI resolves it from ``--workers`` or ``runtime.parallel_workers``.
 
     ``tokens_col`` overrides the default ``metadata.tokens_per_sample`` column used as the
     ``tokens_per_sample`` input to the physics/ML predictors. Override with e.g.
@@ -390,6 +396,7 @@ def recommend_trace(
             setup_time_col=setup_time_col,
             per_device_mode=per_device_mode,
             strategy_cache=strategy_cache,
+            workers=workers,
         )
         for _, row in df.iterrows()
     ]

@@ -31,3 +31,9 @@ grid:
   batch_sizes: [4, 8, 16, 32, 64]
   total_gpus: [1, 2, 4, 8, 16, 32]
   top_k: 3
+
+# How the tool itself runs (the machine it runs ON, not the cluster it reasons about --
+# that lives in infrastructure.yaml). Each pipeline stage forks its candidates across this
+# many processes and joins before the next stage starts; 1 runs everything sequentially.
+runtime:
+  parallel_workers: 4

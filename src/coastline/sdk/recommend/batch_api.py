@@ -181,6 +181,7 @@ def recommend(
     lookup: Optional[str] = None,
     batch_sizes: Optional[list[int]] = None,
     strategy_cache: Optional[engine.StrategyCache] = None,
+    workers: Optional[int] = None,
 ) -> pd.DataFrame:
     """Recommend GPU/node configurations for a batch — returns a ``pandas.DataFrame`` of the input
     rows plus the chosen config + predictions (one row per ranked pick).
@@ -194,6 +195,9 @@ def recommend(
     (or ``"default"`` for the small bundled lookup DB); other predictors ignore it.
     ``strategy_cache`` lets a caller that loops over many batches (e.g. a trace, one row per
     call) reuse one strategy across the calls that share a config; ``None`` builds per call.
+    ``workers`` forks each pipeline stage's candidates across that many processes; ``None``
+    (the default) runs sequentially, so a library call never moves a caller's work into
+    subprocesses unasked.
     """
     rows = _normalise(batch)
     base = engine.defaults(engine.resolve_options())
@@ -228,6 +232,7 @@ def recommend(
                 max_slowdown=slowdown,
                 feasibility=feasibility,
                 strategy_cache=strategy_cache,
+                workers=workers,
             )
         except Exception as exc:  # noqa: BLE001 — isolate any per-row error
             out_rows.append(_failed_row(row, str(exc)[:200] or type(exc).__name__))

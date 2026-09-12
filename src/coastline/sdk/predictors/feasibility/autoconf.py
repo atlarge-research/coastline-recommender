@@ -86,6 +86,10 @@ class AutoconfFeasibilityChecker:
             }
         )
 
+    def batches(self) -> bool:
+        """Whether one classifier call decides a whole chunk (see :meth:`_can_batch`)."""
+        return self._can_batch()
+
     def _can_batch(self) -> bool:
         """Whether one classifier call may decide a whole chunk of candidates.
 
