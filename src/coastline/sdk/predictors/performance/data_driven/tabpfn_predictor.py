@@ -84,6 +84,9 @@ class TabPFNPredictor(BasePredictor):
     re-scored per job and policy arm so most rows repeat. TabPFN forward pass dominates cost.
     """
 
+    #: A transformer forward pass: ~77 ms per prediction, the slowest model in the portfolio.
+    EXPENSIVE = True
+
     _prediction_cache: dict = {}
 
     def __init__(self, model_path: Optional[Path] = None):

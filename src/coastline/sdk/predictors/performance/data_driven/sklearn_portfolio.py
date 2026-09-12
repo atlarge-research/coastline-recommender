@@ -89,6 +89,9 @@ def _alias_legacy_catboost_module() -> None:
 class SklearnPortfolioPredictor(BasePredictor):
     """Featv3 sklearn-style throughput predictor, configured by name + metadata fields."""
 
+    #: A pickled sklearn/boosted-tree model: 0.9-51 ms per prediction, worth a worker dispatch.
+    EXPENSIVE = True
+
     def __init__(
         self,
         name: str,

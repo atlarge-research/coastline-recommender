@@ -29,6 +29,9 @@ DL_MODEL_DIR = performance_deep_learning_model_dir()
 class DeepLearningPredictor(BasePredictor):
     """EmbeddingNN-backed performance predictor (auto-selects CUDA/MPS/CPU at load time)."""
 
+    #: A torch forward pass: ~4 ms per prediction.
+    EXPENSIVE = True
+
     def __init__(self, model_dir: Optional[Path] = None):
         self.model_dir = model_dir or DL_MODEL_DIR
         self._model: Optional[EmbeddingNN] = None

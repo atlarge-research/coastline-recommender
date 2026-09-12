@@ -36,6 +36,9 @@ class TokenBudgetFeasibilityChecker:
     not the effective batch, is what tracks the observed OOMs.
     """
 
+    #: Arithmetic on two integers; never worth a worker dispatch on its own.
+    EXPENSIVE = False
+
     def __init__(self, threshold: int) -> None:
         if threshold < 1:
             raise ValueError(f"token-budget threshold must be >= 1, got {threshold}")
@@ -69,6 +72,11 @@ class GuardedFeasibilityChecker:
     def __init__(self, guard: TokenBudgetFeasibilityChecker, backend: _Checker) -> None:
         self._guard = guard
         self._backend = backend
+
+    @property
+    def EXPENSIVE(self) -> bool:  # noqa: N802 — mirrors the class-level flag on plain checkers
+        """Worth forking exactly when the wrapped backend is: the guard itself is arithmetic."""
+        return bool(getattr(self._backend, "EXPENSIVE", False))
 
     def is_feasible(self, workload: WorkloadSpec) -> tuple[bool, dict[str, Any]]:
         ok, guard_metadata = self._guard.is_feasible(workload)

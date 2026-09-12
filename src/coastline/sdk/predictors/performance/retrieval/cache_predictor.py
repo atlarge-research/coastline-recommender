@@ -32,6 +32,9 @@ class RetrievalPredictor(BasePredictor):
     the run DB), so a lookup CSV that stores throughput/duration under other headers still works.
     """
 
+    #: A hash into a prebuilt index at ~4.6 us -- never worth a dispatch.
+    EXPENSIVE = False
+
     def __init__(
         self,
         dataset_path: Optional[Path] = None,

@@ -46,6 +46,10 @@ class KavierPredictor(BasePredictor):
     so Kavier returns 0.0 and we report None rather than a fake runtime.
     """
 
+    #: Closed-form arithmetic at ~2.6 us per prediction -- a worker dispatch would cost far more
+    #: than the work, so this predictor always runs inline.
+    EXPENSIVE = False
+
     def __init__(self):
         if not KAVIER_AVAILABLE:
             logger.warning(f"Kavier not available: {_import_error}")

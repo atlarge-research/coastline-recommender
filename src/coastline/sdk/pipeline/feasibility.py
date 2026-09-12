@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Protocol
+from typing import Any, Protocol, Sequence
 
 from coastline.sdk.constants import (
     DEFAULT_AUTOCONF_MODEL_VERSION,
@@ -29,12 +29,43 @@ class FeasibilityChecker(Protocol):
     def is_feasible(self, workload: WorkloadSpec) -> tuple[bool, dict[str, Any]]: ...
 
 
+def evaluate_chunk(checker: FeasibilityChecker, workloads: Sequence[WorkloadSpec]) -> list[tuple[bool, dict[str, Any]]]:
+    """Verdicts for a run of candidates, in input order.
+
+    A free function, NOT a Protocol default: ``FeasibilityChecker`` is satisfied structurally and
+    no implementer inherits from it, so a method body added to the Protocol would reach none of
+    them. A checker may offer ``check_chunk`` to evaluate a whole run at once (the AutoConf
+    backend batches its classifier call that way); otherwise each candidate is checked in turn,
+    which is exactly today's behaviour.
+    """
+    batched = getattr(checker, "check_chunk", None)
+    if batched is not None:
+        verdicts = batched(workloads)
+        if len(verdicts) != len(workloads):  # pragma: no cover - defensive
+            raise RuntimeError(
+                f"{type(checker).__name__}.check_chunk returned {len(verdicts)} verdicts "
+                f"for {len(workloads)} candidates"
+            )
+        return list(verdicts)
+    return [checker.is_feasible(workload) for workload in workloads]
+
+
+def is_expensive(checker: FeasibilityChecker) -> bool:
+    """Whether one call costs enough to be worth shipping to a worker process."""
+    return bool(getattr(checker, "EXPENSIVE", False))
+
+
 class _RulesThenAutoconfChecker:
     """Divisibility rules first, then AutoConf OOM classifier. Rules guard configs the classifier never trained on."""
 
     def __init__(self, model_version: str):
         self._rules = RulesFeasibilityChecker()
         self._autoconf = AutoconfFeasibilityChecker(model_version=model_version)
+
+    @property
+    def EXPENSIVE(self) -> bool:  # noqa: N802 — mirrors the class-level flag on plain checkers
+        """Worth forking exactly when the AutoConf leg is: the rules leg is a modulo."""
+        return bool(getattr(self._autoconf, "EXPENSIVE", False))
 
     def is_feasible(self, workload: WorkloadSpec) -> tuple[bool, dict[str, Any]]:
         ok, meta = self._rules.is_feasible(workload)

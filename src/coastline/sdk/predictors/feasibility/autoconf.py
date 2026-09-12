@@ -49,6 +49,10 @@ def _autoconf_modules():
 class AutoconfFeasibilityChecker:
     """Rule + AutoGluon validity check for a single candidate layout."""
 
+    #: An AutoGluon predict per candidate (~3.3 ms) dominates the cost of shipping the candidate
+    #: to a worker process, so this backend is worth forking across candidates.
+    EXPENSIVE = True
+
     def __init__(self, model_version: str = DEFAULT_AUTOCONF_MODEL_VERSION):
         self.model_version = model_version
         self._predictor: Any = None
@@ -115,6 +119,9 @@ class AutoconfFeasibilityChecker:
 class RulesFeasibilityChecker:
     """Lightweight feasibility without AutoConf (basic per-device sanity guards; no OOM check)."""
 
+    #: Two integer comparisons — dispatching them to a worker would cost more than the work.
+    EXPENSIVE = False
+
     def is_feasible(self, workload: WorkloadSpec) -> tuple[bool, dict[str, Any]]:
         # batch_size is PER-DEVICE (Kavier's convention — it multiplies by total GPUs
         # internally): a per-device batch need not divide the GPU count, so the old
@@ -129,6 +136,8 @@ class RulesFeasibilityChecker:
 
 class NoOpFeasibilityChecker:
     """Accept all candidates (for tests or when feasibility is disabled)."""
+
+    EXPENSIVE = False
 
     def is_feasible(self, workload: WorkloadSpec) -> tuple[bool, dict[str, Any]]:
         return True, {}
