@@ -52,6 +52,7 @@ from coastline.sdk.pipeline.grid import GridConfig, generate_candidates
 from coastline.sdk.pipeline.parallel import (
     MIN_ITEMS_BATCHED_STAGE,
     MIN_ITEMS_PER_ROW_STAGE,
+    MIN_ITEMS_TO_START_A_POOL,
     chunk,
     map_chunks,
     plan_chunks,
@@ -96,6 +97,9 @@ def no_pool(monkeypatch):
 
     Returns the list of worker counts it was asked for, so a test can assert the stage really
     tried to fork (and with how many workers) without a process ever being spawned.
+
+    The pool also reports warm: these tests are about the fork decision and the gather, not about
+    whether a stage is big enough to justify starting workers from cold (covered in TestPlanChunks).
     """
     asked: list[int] = []
 
@@ -104,6 +108,7 @@ def no_pool(monkeypatch):
         return None
 
     monkeypatch.setattr(parallel, "get_pool", _fake_get_pool)
+    monkeypatch.setattr(parallel, "pool_is_warm", lambda: True)
     return asked
 
 
@@ -360,6 +365,15 @@ class TestChunk:
 # plan_chunks() / resolve_workers()
 # --------------------------------------------------------------------------- #
 class TestPlanChunks:
+    @pytest.fixture(autouse=True)
+    def warm_pool(self, monkeypatch):
+        """These tables describe a pool that is already up.
+
+        A cold pool raises the bar to MIN_ITEMS_TO_START_A_POOL, because the first stage to fork
+        also pays every worker's model load. That regime is covered separately below.
+        """
+        monkeypatch.setattr(parallel, "pool_is_warm", lambda: True)
+
     @pytest.mark.parametrize(
         "n_items, workers, expected",
         [
@@ -396,6 +410,22 @@ class TestPlanChunks:
     )
     def test_plan_table_for_a_batched_stage(self, n_items, workers, expected):
         assert plan_chunks(n_items, workers, MIN_ITEMS_BATCHED_STAGE) == expected
+
+    @pytest.mark.parametrize(
+        "n_items, expected",
+        [
+            (8, 1),  # would fork against a warm pool; not worth starting one
+            (256, 1),  # even a batched-regime grid is not worth a cold start
+            (MIN_ITEMS_TO_START_A_POOL - 1, 1),
+            (MIN_ITEMS_TO_START_A_POOL, 4),
+            (4 * MIN_ITEMS_TO_START_A_POOL, 4),
+        ],
+    )
+    def test_a_cold_pool_has_to_earn_its_start_up(self, n_items, expected, monkeypatch):
+        # Starting workers costs 0.6-2.3 s of model loading each, so the stage that pays for it
+        # has to be big enough to get that back. Once the pool is up the ordinary floors apply.
+        monkeypatch.setattr(parallel, "pool_is_warm", lambda: False)
+        assert plan_chunks(n_items, 4) == expected
 
     def test_the_two_floors_are_ordered(self):
         # A batched stage must never fork sooner than a per-candidate one — that ordering is the

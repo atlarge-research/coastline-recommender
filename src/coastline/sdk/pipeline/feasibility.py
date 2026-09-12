@@ -95,9 +95,7 @@ class _RulesThenAutoconfChecker:
                 results[position] = (ok, meta)
         verdicts = self._autoconf.check_chunk(survivors)
         if len(verdicts) != len(survivors):  # pragma: no cover - the backend asserts this itself
-            raise RuntimeError(
-                f"AutoConf returned {len(verdicts)} verdicts for {len(survivors)} rule-valid candidates"
-            )
+            raise RuntimeError(f"AutoConf returned {len(verdicts)} verdicts for {len(survivors)} rule-valid candidates")
         for position, verdict in zip(positions, verdicts):
             results[position] = verdict
         return results

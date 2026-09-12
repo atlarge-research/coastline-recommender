@@ -86,6 +86,28 @@ def _alias_legacy_catboost_module() -> None:
         sys.modules["trainer.train_performance_catboost"] = shim
 
 
+def _pin_to_one_thread(model: Any, name: str) -> Any:
+    """Make a pickled ensemble reproduce its own numbers, and (for the forests) run faster.
+
+    ``random_forest.pkl`` carries ``n_jobs=-1`` from training. At predict time sklearn then
+    accumulates 1,200 tree outputs into a shared array from a joblib thread pool, and float
+    addition is not associative, so the reduction order decides the last bits: the same candidate,
+    in the same process, through the same object, yields several distinct throughputs (measured:
+    6 distinct float64 values in 30 predicts, spread ~9e-15 relative). That is a silent violation
+    of the determinism the tool promises, and it has nothing to do with parallelism -- it is
+    there on a plain sequential run.
+
+    Pinning to one thread makes the result bit-stable, and for the forest it is also ~3.5x
+    faster (53 ms -> 15 ms per prediction), because dispatching 1,200 single-row tree calls
+    through a thread pool costs more than running them.
+    """
+    n_jobs = getattr(model, "n_jobs", None)
+    if n_jobs is not None and n_jobs != 1:
+        model.n_jobs = 1
+        logger.info("%s: pinned n_jobs %s -> 1 for reproducible predictions", name, n_jobs)
+    return model
+
+
 class SklearnPortfolioPredictor(BasePredictor):
     """Featv3 sklearn-style throughput predictor, configured by name + metadata fields."""
 
@@ -128,7 +150,7 @@ class SklearnPortfolioPredictor(BasePredictor):
             with open(self._model_path, "rb") as f:
                 artifacts = pickle.load(f)
 
-            self._model = artifacts["model"]
+            self._model = _pin_to_one_thread(artifacts["model"], self._name)
             self._cat_features = artifacts["cat_features"]
             self._num_features = artifacts["num_features"]
             # catboost uses native categoricals, so it ships no encoders.

@@ -55,6 +55,14 @@ DEFAULT_CLI_WORKERS = 4
 MIN_ITEMS_PER_ROW_STAGE = 8
 MIN_ITEMS_BATCHED_STAGE = 256
 
+# Starting the pool is not free: a worker re-pays its model load before it can answer anything --
+# 0.57 s for catboost, 1.4-1.6 s for xgboost/lightgbm/knn/svr/random_forest, 2.3 s for the neural
+# net, and ~1.65 s for the AutoGluon feasibility model. Against per-call costs of 0.8-53 ms that
+# is a break-even of roughly 350-1,000 candidates for a worker that only ever serves one grid. The
+# pool is reused for the whole run, so a trace amortises it over every job, but the FIRST stage to
+# fork pays it alone -- so a cold pool has to see a much bigger stage before it is worth starting.
+MIN_ITEMS_TO_START_A_POOL = 512
+
 
 def resolve_workers(requested: Optional[int]) -> int:
     """Clamp a requested worker count to something this machine can honour (>= 1)."""
@@ -63,12 +71,20 @@ def resolve_workers(requested: Optional[int]) -> int:
     return max(1, min(int(requested), os.cpu_count() or 1))
 
 
+def pool_is_warm() -> bool:
+    """Whether a pool already exists, so a stage would not pay to start one."""
+    return _POOL is not None
+
+
 def plan_chunks(n_items: int, workers: int, min_items: int = MIN_ITEMS_PER_ROW_STAGE) -> int:
     """How many chunks to split ``n_items`` into — 1 means "run inline".
 
     ``min_items`` is the point where forking starts to pay for this stage; below it the dispatch
-    costs more than the work, so the stage runs in the calling process.
+    costs more than the work, so the stage runs in the calling process. While the pool is still
+    cold the bar is higher, because this stage would also be paying for every worker's model load.
     """
+    if not pool_is_warm():
+        min_items = max(min_items, MIN_ITEMS_TO_START_A_POOL)
     if workers <= 1 or n_items < min_items:
         return 1
     return max(1, min(workers, n_items // max(1, min_items // workers or 1)))
@@ -96,6 +112,7 @@ def chunk(items: Sequence[T], n_chunks: int) -> list[list[T]]:
 # saves — so the pool is a module-level singleton, replaced only when the worker count changes
 # and otherwise left to the interpreter to reap.
 # --------------------------------------------------------------------------------------------
+
 
 class WorkerPoolFailure(RuntimeError):
     """A worker process died. Its own type so the per-row isolation layers can let it through.
@@ -270,9 +287,7 @@ def run_feasibility(
     # A checker that batches has already collapsed its per-candidate cost, so it needs a much
     # bigger grid before splitting it is worth k batched calls instead of one.
     min_items = MIN_ITEMS_BATCHED_STAGE if _batches(checker) else MIN_ITEMS_PER_ROW_STAGE
-    n_chunks = (
-        plan_chunks(len(workloads), workers, min_items) if (predictor_config and is_expensive(checker)) else 1
-    )
+    n_chunks = plan_chunks(len(workloads), workers, min_items) if (predictor_config and is_expensive(checker)) else 1
     if n_chunks <= 1:
         return evaluate_chunk(checker, workloads)
     payloads = [(predictor_config, part) for part in chunk(workloads, n_chunks)]
@@ -306,9 +321,7 @@ def run_simulation(
     from coastline.sdk.pipeline.workflow import simulate_chunk
 
     expensive = getattr(throughput_predictor, "EXPENSIVE", False) is True
-    n_chunks = (
-        plan_chunks(len(workloads), workers, MIN_ITEMS_PER_ROW_STAGE) if (predictor_config and expensive) else 1
-    )
+    n_chunks = plan_chunks(len(workloads), workers, MIN_ITEMS_PER_ROW_STAGE) if (predictor_config and expensive) else 1
     if n_chunks <= 1:
         return simulate_chunk(throughput_predictor, power_predictor, list(workloads), context)
     payloads = [(predictor_config, context, part) for part in chunk(workloads, n_chunks)]

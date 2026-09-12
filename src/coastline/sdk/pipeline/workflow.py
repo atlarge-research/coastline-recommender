@@ -196,9 +196,7 @@ class GridWorkflowPipeline:
                 else strategy_cfg.get("normalization", NormalizationMode.GRID.value)
             ),
             runtime_guard_k=runtime_guard_k if runtime_guard_k is not None else strategy_cfg.get("runtime_guard_k"),
-            workers=(
-                workers if workers is not None else (config.get(RUNTIME_SECTION) or {}).get(WORKERS_KEY, 1)
-            ),
+            workers=(workers if workers is not None else (config.get(RUNTIME_SECTION) or {}).get(WORKERS_KEY, 1)),
             predictor_config=None if injected else config.get("predictors", {}),
         )
 
@@ -222,9 +220,7 @@ class GridWorkflowPipeline:
         # list comes back in candidate order, which is what keeps the tie-break below stable.
         verdicts = run_feasibility(self.feasibility_checker, self.predictor_config, candidates, self.workers)
 
-        survivors = [
-            (variant, feas_meta) for variant, (feasible, feas_meta) in zip(candidates, verdicts) if feasible
-        ]
+        survivors = [(variant, feas_meta) for variant, (feasible, feas_meta) in zip(candidates, verdicts) if feasible]
 
         # Second stage barrier: simulate every survivor, then build the ranking input. Forked only
         # when the predictor is a data-driven model (ms per call); Kavier and the cache run inline.
