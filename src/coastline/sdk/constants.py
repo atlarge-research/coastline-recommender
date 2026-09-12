@@ -105,12 +105,19 @@ DEFAULT_TOKENS_PER_SAMPLE: list[int] = [512, 1024, 2048, 4096, 8192]
 # The AutoConf OOM model version used when a config doesn't pin one.
 DEFAULT_AUTOCONF_MODEL_VERSION = "3.1.0"
 
-#: The AutoConf model whose classifier may decide a whole chunk of candidates in one call.
-#: Verified on this version only: batched and per-row predicts agree on every verdict over
-#: 3,339 real grid candidates and 81,928 synthetic ones, with probabilities drifting at most
-#: 6e-7 against a 1.8e-3 margin to the decision threshold. Another version falls back to one
-#: call per candidate. COASTLINE_NO_AUTOCONF_BATCH=1 opts out entirely.
-BATCHABLE_AUTOCONF_MODEL_VERSION = "3.1.0"
+#: AutoConf models whose classifier may decide a whole chunk of candidates in one call, rather
+#: than one call per candidate. Membership is earned by measurement, not assumed: each was
+#: checked over 3,339 real grid candidates and an 81,928-row adversarial grid, at chunk sizes
+#: 1/8/35/250/1000, comparing verdicts, metadata and probabilities against the per-row path.
+#:
+#:   3.1.0 (CatBoost + WeightedEnsemble_L2) -- bitwise identical, max drift 0.0.
+#:   3.0.0 (NeuralNetTorch + WeightedEnsemble_L2) -- zero verdict differences; probabilities
+#:          drift up to 1.4e-6 while the candidate nearest the 0.5 decision threshold sits
+#:          3.4e-5 away, a margin of ~25x.
+#:
+#: An unrecognised version falls back to one call per candidate, because that evidence does not
+#: transfer to a model nobody has measured. COASTLINE_NO_AUTOCONF_BATCH=1 opts out entirely.
+BATCHABLE_AUTOCONF_MODEL_VERSIONS = frozenset({"3.1.0", "3.0.0"})
 
 # The empirical OOM guard's per-device token ceiling, re-derived from the nine Zurich campaigns
 # (135 jobs: 49 OOM, 86 completed). 60,224 is the UNIQUE accuracy maximum at 89.63% (121/135),

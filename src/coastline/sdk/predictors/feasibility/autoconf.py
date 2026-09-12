@@ -10,7 +10,7 @@ from typing import Any, Optional, Sequence
 
 from pydantic import ValidationError
 
-from coastline.sdk.constants import BATCHABLE_AUTOCONF_MODEL_VERSION, DEFAULT_AUTOCONF_MODEL_VERSION
+from coastline.sdk.constants import BATCHABLE_AUTOCONF_MODEL_VERSIONS, DEFAULT_AUTOCONF_MODEL_VERSION
 from coastline.sdk.models.workload import WorkloadSpec
 
 logger = logging.getLogger(__name__)
@@ -93,15 +93,13 @@ class AutoconfFeasibilityChecker:
     def _can_batch(self) -> bool:
         """Whether one classifier call may decide a whole chunk of candidates.
 
-        Measured on this model: over 3,339 real grid candidates plus 81,928 synthetic ones, a
-        batched predict and N one-row predicts agree on every verdict; probabilities drift by at
-        most 6e-7 while the candidate nearest the 0.5 decision threshold sits 1.8e-3 away, a
-        margin of ~2,900x. That evidence is version-specific, so a different model (or an
-        explicit opt-out) falls back to one call per candidate.
+        Only for models that have actually been measured against the per-row path
+        (see :data:`BATCHABLE_AUTOCONF_MODEL_VERSIONS`); anything else, or an explicit opt-out,
+        falls back to one call per candidate.
         """
         if os.environ.get("COASTLINE_NO_AUTOCONF_BATCH") == "1":
             return False
-        return self.model_version == BATCHABLE_AUTOCONF_MODEL_VERSION
+        return self.model_version in BATCHABLE_AUTOCONF_MODEL_VERSIONS
 
     def check_chunk(self, workloads: "Sequence[WorkloadSpec]") -> list[tuple[bool, dict[str, Any]]]:
         """Verdicts for a run of candidates, in input order, with ONE classifier call.
@@ -148,14 +146,31 @@ class AutoconfFeasibilityChecker:
                 results[position] = self._decide_one(config, predictor, get_model_prediction_and_metadata)
             return [result for result in results if result is not None]  # type: ignore[misc]
 
-        # Rule stage, per row (ado's is_row_valid takes exactly one row).
+        # Rule stage. ado's is_row_valid takes exactly one row, and building a one-row DataFrame
+        # per candidate costs ~195 us -- once the classifier is batched, that dominates everything
+        # else and caps the whole gate at ~25x. The rule itself is one modulo, so evaluate it over
+        # the whole frame at once and delegate only the rows the fast path cannot clear back to
+        # ado, which stays the authority on both the verdict and the error text. In the production
+        # path nothing is ever delegated: the effective batch is per_device x total_gpus, so it
+        # always divides total_gpus.
         from autoconf.utils.rule_based_classifier import is_row_valid
+
+        rows = [config.model_dump() for config in configs]
+        gpus = pd.to_numeric(pd.Series([row.get("number_gpus") for row in rows]), errors="coerce")
+        batch = pd.to_numeric(pd.Series([row.get("batch_size") for row in rows]), errors="coerce")
+        # Anything the fast path cannot speak for -- non-numeric, a non-positive GPU count, or a
+        # non-zero remainder -- goes to ado rather than being judged here.
+        clearly_valid = ((gpus > 0) & (batch % gpus == 0)).fillna(False).to_numpy()
 
         rule_errors: dict[int, str] = {}
         batched_positions: list[int] = []
         batched_rows: list[dict[str, Any]] = []
-        for position, config in zip(positions, configs):
-            row = config.model_dump()
+        for offset, (position, row) in enumerate(zip(positions, rows)):
+            if clearly_valid[offset]:
+                rule_errors[position] = ""
+                batched_positions.append(position)
+                batched_rows.append(row)
+                continue
             row_valid, errors = is_row_valid(pd.DataFrame([row], index=[0]))
             rule_errors[position] = " ".join(errors)
             if int(row_valid) == 1:
