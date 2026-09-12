@@ -51,8 +51,12 @@ def evaluate_chunk(checker: FeasibilityChecker, workloads: Sequence[WorkloadSpec
 
 
 def is_expensive(checker: FeasibilityChecker) -> bool:
-    """Whether one call costs enough to be worth shipping to a worker process."""
-    return bool(getattr(checker, "EXPENSIVE", False))
+    """Whether one call costs enough to be worth shipping to a worker process.
+
+    Strictly ``True``: a checker that happens to carry a truthy attribute of some other shape
+    has not declared anything, and defaulting it to "fork me" would be the wrong way round.
+    """
+    return getattr(checker, "EXPENSIVE", False) is True
 
 
 class _RulesThenAutoconfChecker:
@@ -89,7 +93,12 @@ class _RulesThenAutoconfChecker:
                 positions.append(position)
             else:
                 results[position] = (ok, meta)
-        for position, verdict in zip(positions, self._autoconf.check_chunk(survivors)):
+        verdicts = self._autoconf.check_chunk(survivors)
+        if len(verdicts) != len(survivors):  # pragma: no cover - the backend asserts this itself
+            raise RuntimeError(
+                f"AutoConf returned {len(verdicts)} verdicts for {len(survivors)} rule-valid candidates"
+            )
+        for position, verdict in zip(positions, verdicts):
             results[position] = verdict
         return results
 

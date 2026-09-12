@@ -456,21 +456,38 @@ class TestPoolAndGather:
     def test_map_chunks_of_nothing_is_nothing(self):
         assert map_chunks(_double_all, [], 1, stage="feasibility") == []
 
-    def test_a_dead_worker_is_an_actionable_error_not_a_different_answer(self, monkeypatch):
-        # A half-finished parallel run must not degrade into a partial result: the caller is told
-        # to re-run sequentially, and the broken pool is torn down so the next call rebuilds it.
+    def test_a_dead_worker_is_recovered_in_process_not_turned_into_a_different_answer(self, monkeypatch):
+        # A dead pool must not change the answer. Raising would not achieve that: both production
+        # callers wrap a row in `except Exception`, so the error would be laundered into "this
+        # predictor could not handle this job" and the run would finish with a plausible CSV that
+        # is not the answer. So the stage is finished in this process, which IS the sequential
+        # result, the dead pool is dropped, and nothing forks again in this process.
         dead = _DeadPool()
         monkeypatch.setattr(parallel, "_POOL", dead)
         monkeypatch.setattr(parallel, "_POOL_WORKERS", 2)
-        monkeypatch.setattr(parallel, "get_pool", lambda workers: dead)
+        monkeypatch.setattr(parallel, "_FORKING_DISABLED", False)
 
-        with pytest.raises(RuntimeError, match="worker process died during the feasibility stage") as excinfo:
-            map_chunks(_double_all, [[1, 2], [3, 4]], 2, stage="feasibility")
+        recovered = map_chunks(_double_all, [[1, 2], [3, 4]], 2, stage="feasibility")
 
-        assert "--workers 1" in str(excinfo.value)  # the remedy is in the message
-        assert isinstance(excinfo.value.__cause__, BrokenProcessPool)  # the real cause is kept
+        assert recovered == [2, 4, 6, 8]  # exactly what the sequential path returns
         assert dead.shutdown_called
         assert parallel._POOL is None and parallel._POOL_WORKERS == 0
+        assert parallel._FORKING_DISABLED is True  # no second pool after a death
+        assert parallel.get_pool(4) is None  # ... and get_pool honours that
+
+    def test_work_that_fails_in_a_worker_and_again_in_process_is_raised_with_its_own_type(self, monkeypatch):
+        # Recovery only covers a dead pool. If the work itself is broken it must surface, and with
+        # a type the per-row isolation layers can let through rather than absorb.
+        dead = _DeadPool()
+        monkeypatch.setattr(parallel, "_POOL", dead)
+        monkeypatch.setattr(parallel, "_POOL_WORKERS", 2)
+        monkeypatch.setattr(parallel, "_FORKING_DISABLED", False)
+
+        def _always_fails(payload):
+            raise ValueError("the work itself is broken")
+
+        with pytest.raises(parallel.WorkerPoolFailure, match="failed in a worker and again in-process"):
+            map_chunks(_always_fails, [[1, 2], [3, 4]], 2, stage="feasibility")
 
 
 # --------------------------------------------------------------------------- #
@@ -843,11 +860,25 @@ class TestStagedPipeline:
         # Clamped to the core count (pinned at 8 here).
         assert _pipeline(_config(workers=64)).workers == FAKE_CPU_COUNT
 
-    def test_from_config_keeps_the_predictor_config_for_the_workers(self):
+    def test_from_config_keeps_the_predictor_config_when_it_built_every_component(self):
         # Without this a worker has nothing to rebuild its checker from, and the stage silently
         # never forks however many workers were asked for.
-        pipeline = _pipeline(_config(workers=4))
+        pipeline = GridWorkflowPipeline.from_config(
+            config=_config(workers=4), selection_policy="performance", strategy_name="parallel-stages"
+        )
         assert pipeline.predictor_config == {"feasibility": "rules"}
+
+    @pytest.mark.parametrize(
+        "injected",
+        ["throughput_predictor", "power_predictor", "feasibility_checker"],
+    )
+    def test_an_injected_component_withholds_the_predictor_config_so_nothing_forks(self, injected):
+        # A worker can only rebuild what the config names. If the caller handed us a ready-made
+        # object, the fork would quietly run a DIFFERENT one -- so the whole pipeline stays in
+        # this process instead.
+        component = _ExpensiveRulesChecker() if injected == "feasibility_checker" else _LinearPredictor()
+        pipeline = _pipeline(_config(workers=4), **{injected: component})
+        assert pipeline.predictor_config is None
 
     def test_one_and_two_workers_return_identical_recommendations(self, workload, context, map_calls):
         # feasibility: rules needs no AutoConf install, and it is a cheap backend — so this also
@@ -860,15 +891,25 @@ class TestStagedPipeline:
         assert map_calls == [], "a cheap feasibility backend and a cheap predictor never fork"
 
     def test_a_forked_feasibility_stage_returns_the_sequential_recommendations(
-        self, workload, context, map_calls, no_pool
+        self, workload, context, map_calls, no_pool, monkeypatch
     ):
-        # Same run, but with the checker flagged expensive so the stage really chunks and gathers
-        # (through the real feasibility_worker, which rebuilds a rules checker from the config).
-        sequential = _pipeline(_config(workers=1)).recommend(workload, context)
+        # Same run, but with the rules backend flagged expensive so the stage really chunks and
+        # gathers (through the real feasibility_worker, which rebuilds a rules checker from the
+        # config). The flag goes on the CLASS, not on an injected instance: an injected component
+        # withholds the predictor config precisely so that nothing forks.
+        # Both sides build every component from the config (Kavier physics: cheap, deterministic,
+        # and identical in the parent and in a rebuilt worker), so the only difference is the fork.
+        def from_config(workers: int):
+            config = _config(workers=workers)
+            config["predictors"]["performance"] = "kavier"
+            return GridWorkflowPipeline.from_config(
+                config=config, selection_policy="performance", strategy_name="parallel-stages"
+            )
 
-        forked = _pipeline(_config(workers=4), feasibility_checker=_ExpensiveRulesChecker()).recommend(
-            workload, context
-        )
+        sequential = from_config(1).recommend(workload, context)
+        monkeypatch.setattr(RulesFeasibilityChecker, "EXPENSIVE", True)
+
+        forked = from_config(4).recommend(workload, context)
 
         assert _dump(forked) == _dump(sequential)
         assert len(map_calls) == 1 and map_calls[0]["stage"] == "feasibility"

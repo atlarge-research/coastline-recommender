@@ -46,6 +46,25 @@ def _autoconf_modules():
         return None
 
 
+def _settled(
+    results: "list[Optional[tuple[bool, dict[str, Any]]]]", workloads: "Sequence[WorkloadSpec]"
+) -> list[tuple[bool, dict[str, Any]]]:
+    """Assert every candidate got a verdict, and hand back the list in candidate order.
+
+    The chunk paths fill a list of placeholders, so a gap means a candidate was silently
+    dropped. Filtering the gaps out would shorten the list and misalign every verdict after it;
+    a wrapper that preserves length would pass a None through to the caller instead. Fail here,
+    where the position is still known, rather than downstream as a mystery.
+    """
+    missing = [index for index, result in enumerate(results) if result is None]
+    if missing or len(results) != len(workloads):
+        raise RuntimeError(
+            f"AutoConf decided {len(results) - len(missing)} of {len(workloads)} candidates "
+            f"(no verdict at positions {missing[:5]})"
+        )
+    return [result for result in results if result is not None]
+
+
 class AutoconfFeasibilityChecker:
     """Rule + AutoGluon validity check for a single candidate layout."""
 
@@ -131,7 +150,7 @@ class AutoconfFeasibilityChecker:
                 logger.debug("AutoConf rejected candidate (invalid JobConfig): %s", exc)
                 results[position] = (False, {"error": f"invalid_job_config: {exc}"})
         if not positions:
-            return [result for result in results if result is not None]  # type: ignore[misc]
+            return _settled(results, workloads)
 
         try:
             predictor = self._ensure_predictor()
@@ -139,12 +158,12 @@ class AutoconfFeasibilityChecker:
             logger.warning("AutoConf model unavailable (treating candidates as infeasible): %s", exc)
             for position in positions:
                 results[position] = (False, {"error": str(exc)})
-            return [result for result in results if result is not None]  # type: ignore[misc]
+            return _settled(results, workloads)
 
         if not self._can_batch():
             for position, config in zip(positions, configs):
                 results[position] = self._decide_one(config, predictor, get_model_prediction_and_metadata)
-            return [result for result in results if result is not None]  # type: ignore[misc]
+            return _settled(results, workloads)
 
         # Rule stage. ado's is_row_valid takes exactly one row, and building a one-row DataFrame
         # per candidate costs ~195 us -- once the classifier is batched, that dominates everything
@@ -186,22 +205,21 @@ class AutoconfFeasibilityChecker:
             frame = pd.DataFrame(batched_rows)
             try:
                 predictions = list(predictor.predict(frame).values)
-                errors_by_position: dict[int, Optional[str]] = {p: None for p in batched_positions}
             except Exception as exc:
                 # A batched failure says nothing about which row caused it, so fall back to the
                 # per-row path for this chunk: that is what attributes the error to one candidate.
                 logger.warning("AutoConf batched prediction failed, falling back to per-row: %s", exc)
                 for position, config in zip(positions, configs):
-                    if position in rule_errors and results[position] is None:
+                    if results[position] is None:
                         results[position] = self._decide_one(config, predictor, get_model_prediction_and_metadata)
-                return [result for result in results if result is not None]  # type: ignore[misc]
+                return _settled(results, workloads)
             for position, prediction in zip(batched_positions, predictions):
                 flag = int(prediction) if prediction else 0
                 results[position] = (
                     flag == 1,
                     {
                         "Rule-Based Classifier error": rule_errors[position],
-                        "Predictive Model Classifier error": errors_by_position[position],
+                        "Predictive Model Classifier error": None,
                     },
                 )
         return [result for result in results if result is not None]  # type: ignore[misc]

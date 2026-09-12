@@ -117,6 +117,10 @@ class GuardedFeasibilityChecker:
         backend_results = (
             backend_chunk(survivors) if backend_chunk is not None else [self._backend.is_feasible(w) for w in survivors]
         )
+        if len(backend_results) != len(survivors):  # pragma: no cover - backends assert this themselves
+            raise RuntimeError(
+                f"the feasibility backend returned {len(backend_results)} verdicts for {len(survivors)} candidates"
+            )
         for position, guard_metadata, (ok, backend_metadata) in zip(positions, guard_metas, backend_results):
             results[position] = (ok, {**guard_metadata, **backend_metadata})
         return results

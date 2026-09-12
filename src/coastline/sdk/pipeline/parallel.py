@@ -21,10 +21,10 @@ backends are not safe to co-load in one interpreter anyway.
 
 from __future__ import annotations
 
-import atexit
 import json
 import logging
 import os
+import threading
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from typing import Any, Callable, Optional, Sequence, TypeVar
@@ -93,30 +93,47 @@ def chunk(items: Sequence[T], n_chunks: int) -> list[list[T]]:
 #
 # Each worker re-pays the AutoGluon feasibility model load (~1.65 s) once. A pool created per
 # recommendation would re-pay it per job, which on a 400-row trace costs far more than the fork
-# saves — so the pool is a module-level singleton, torn down only on interpreter exit or on a
-# worker-count change.
+# saves — so the pool is a module-level singleton, replaced only when the worker count changes
+# and otherwise left to the interpreter to reap.
 # --------------------------------------------------------------------------------------------
+
+class WorkerPoolFailure(RuntimeError):
+    """A worker process died. Its own type so the per-row isolation layers can let it through.
+
+    ``batch_api.recommend`` and ``trace.recommend._recommend_row`` both wrap a row in
+    ``except Exception`` to stop one bad workload sinking a batch. A dead pool is not a bad
+    workload, and laundering it into "this predictor could not handle this job" would write a
+    plausible CSV that quietly is not the answer.
+    """
+
 
 _POOL: Optional[ProcessPoolExecutor] = None
 _POOL_WORKERS = 0
+# Guards the check-shutdown-create sequence below. The pool is a module global reached from
+# FastAPI's threadpool as well as from a plain CLI run, so two callers could otherwise each
+# create one, or one could tear down the pool the other is still feeding.
+_POOL_LOCK = threading.Lock()
+# Set when a pool dies: the stage that died is recovered inline, and nothing forks again in this
+# process. Re-creating a pool that has just died tends to buy the same death at more cost.
+_FORKING_DISABLED = False
 
 
 def get_pool(workers: int) -> Optional[ProcessPoolExecutor]:
     """The shared pool for ``workers`` processes, or None when running sequentially."""
     global _POOL, _POOL_WORKERS
-    if workers <= 1:
+    if workers <= 1 or _FORKING_DISABLED:
         return None
-    if _POOL is not None and _POOL_WORKERS == workers:
+    with _POOL_LOCK:
+        if _POOL is not None and _POOL_WORKERS == workers:
+            return _POOL
+        _shutdown_locked()
+        logger.info("starting a pool of %d worker processes for per-stage parallelism", workers)
+        _POOL = ProcessPoolExecutor(max_workers=workers)
+        _POOL_WORKERS = workers
         return _POOL
-    shutdown_pool()
-    logger.info("starting a pool of %d worker processes for per-stage parallelism", workers)
-    _POOL = ProcessPoolExecutor(max_workers=workers)
-    _POOL_WORKERS = workers
-    return _POOL
 
 
-def shutdown_pool() -> None:
-    """Tear the shared pool down (idempotent)."""
+def _shutdown_locked() -> None:
     global _POOL, _POOL_WORKERS
     if _POOL is not None:
         _POOL.shutdown(wait=False, cancel_futures=True)
@@ -124,7 +141,21 @@ def shutdown_pool() -> None:
     _POOL_WORKERS = 0
 
 
-atexit.register(shutdown_pool)
+def shutdown_pool() -> None:
+    """Tear the shared pool down (idempotent)."""
+    with _POOL_LOCK:
+        _shutdown_locked()
+
+
+def _retire_pool(dead: ProcessPoolExecutor) -> None:
+    """Drop a pool that died, without touching a replacement someone else may have installed."""
+    global _POOL, _POOL_WORKERS, _FORKING_DISABLED
+    with _POOL_LOCK:
+        _FORKING_DISABLED = True
+        if _POOL is dead:
+            _POOL = None
+            _POOL_WORKERS = 0
+    dead.shutdown(wait=False, cancel_futures=True)
 
 
 def map_chunks(
@@ -145,12 +176,24 @@ def map_chunks(
         return [item for payload in payloads for item in worker(payload)]
     try:
         chunk_results = list(pool.map(worker, payloads))
-    except BrokenProcessPool as exc:
-        shutdown_pool()
-        raise RuntimeError(
-            f"a worker process died during the {stage} stage; re-run with --workers 1 "
-            "(or runtime.parallel_workers: 1) to run sequentially"
-        ) from exc
+    except BrokenProcessPool:
+        # Recover by doing the work here. Raising instead would be honest but useless: both
+        # callers wrap a row in `except Exception`, so the failure would be laundered into
+        # "this predictor could not handle this job" and the run would finish with a plausible
+        # CSV that is not the answer. Running the same chunks in this process gives exactly the
+        # sequential result, which is the guarantee the fork exists to preserve.
+        _retire_pool(pool)
+        logger.warning(
+            "a worker process died during the %s stage; finishing this stage in-process and "
+            "running sequentially from here on (results are unaffected)",
+            stage,
+        )
+        try:
+            return [item for payload in payloads for item in worker(payload)]
+        except Exception as inline_exc:  # the work itself is broken, not just the pool
+            raise WorkerPoolFailure(
+                f"the {stage} stage failed in a worker and again in-process: {inline_exc}"
+            ) from inline_exc
     return [item for chunk_result in chunk_results for item in chunk_result]
 
 
@@ -262,7 +305,7 @@ def run_simulation(
     """
     from coastline.sdk.pipeline.workflow import simulate_chunk
 
-    expensive = bool(getattr(throughput_predictor, "EXPENSIVE", False))
+    expensive = getattr(throughput_predictor, "EXPENSIVE", False) is True
     n_chunks = (
         plan_chunks(len(workloads), workers, MIN_ITEMS_PER_ROW_STAGE) if (predictor_config and expensive) else 1
     )

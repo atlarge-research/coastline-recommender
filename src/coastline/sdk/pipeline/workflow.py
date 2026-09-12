@@ -169,6 +169,14 @@ class GridWorkflowPipeline:
     ) -> "GridWorkflowPipeline":
         strategy_cfg = config.get("strategy", {})
         alpha, beta = cls._resolve_weights(strategy_cfg, preset, alpha, beta)
+        # A caller may hand us a ready-made predictor or checker instead of naming one in the
+        # config. A worker process can only rebuild what the config describes, so an injected
+        # component would be replaced by a different object in the fork -- a silently different
+        # answer. Withholding the predictor config keeps every stage in this process, which is
+        # what identity requires.
+        injected = any(
+            component is not None for component in (throughput_predictor, power_predictor, feasibility_checker)
+        )
         throughput_predictor, power_predictor, feasibility_checker = cls._build_predictors(
             config.get("predictors", {}), throughput_predictor, power_predictor, feasibility_checker
         )
@@ -191,7 +199,7 @@ class GridWorkflowPipeline:
             workers=(
                 workers if workers is not None else (config.get(RUNTIME_SECTION) or {}).get(WORKERS_KEY, 1)
             ),
-            predictor_config=config.get("predictors", {}),
+            predictor_config=None if injected else config.get("predictors", {}),
         )
 
     def recommend(
