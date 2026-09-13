@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -16,6 +18,7 @@ from coastline.sdk.constants import (
 from coastline.sdk.models.context import SystemContext
 from coastline.sdk.models.recommendation import Recommendation
 from coastline.sdk.models.workload import WorkloadSpec
+from coastline.sdk.pipeline.parallel import RUNTIME_SECTION, WORKERS_KEY
 from coastline.sdk.recommend import _goals
 
 if TYPE_CHECKING:  # avoid importing the heavy policies package at module load
@@ -117,11 +120,14 @@ def build_config(
     top_k: int,
     max_slowdown: Optional[float] = None,
     feasibility: str = "autoconf",
+    workers: Optional[int] = None,
 ) -> tuple[dict, str, Optional[str]]:
     """Build strategy-config dict for PolicyFactory; max_slowdown maps to runtime_guard_k.
 
     ``feasibility`` selects the checker (``autoconf`` | ``rules`` | ``none``); the
     answers dict may override it via a ``feasibility`` key.
+    ``workers`` sets ``runtime.parallel_workers``, the per-stage worker count the pipeline
+    forks candidates across; None leaves the block out and the pipeline runs sequentially.
     """
     strategy_name, preset = GOALS[answers["goal_label"]]
     predictor = answers["predictor"]
@@ -141,13 +147,19 @@ def build_config(
         "grid": {
             # The chosen batch size plus its neighbours, so the ranked table
             # shows real trade-offs rather than a single row.
-            "batch_sizes": sorted(
-                {answers["batch_size"], max(1, answers["batch_size"] // 2), answers["batch_size"] * 2}
+            # An explicit batch grid (e.g. the trace's full per-device sweep) overrides the
+            # default neighbourhood around the seed batch size.
+            "batch_sizes": (
+                list(answers["batch_sizes"])
+                if answers.get("batch_sizes")
+                else sorted({answers["batch_size"], max(1, answers["batch_size"] // 2), answers["batch_size"] * 2})
             ),
             "total_gpus": [g for g in GPU_BUDGETS if g <= answers["max_gpus"]],
             "top_k": top_k,
         },
     }
+    if workers is not None:
+        config[RUNTIME_SECTION] = {WORKERS_KEY: int(workers)}
     return config, strategy_name, preset
 
 
@@ -205,6 +217,61 @@ def build_strategy(
     )
 
 
+class StrategyCache:
+    """Reuse one built strategy across many calls that share the SAME config.
+
+    :func:`build_strategy` constructs every predictor and the feasibility checker, so calling
+    it once per trace row re-pays those constructions. The config is NOT constant across rows
+    -- :func:`build_config` derives ``grid.batch_sizes`` from the row's own batch size unless
+    an explicit sweep is passed -- and the grid is baked into the pipeline at construction, so
+    this keys on the fully-formed config instead of assuming one strategy fits a whole trace.
+    An unserializable config builds uncached rather than risking a wrong hit.
+    """
+
+    def __init__(self, capacity: int = 128) -> None:
+        self._capacity = capacity
+        self._entries: "OrderedDict[str, BaseStrategy]" = OrderedDict()
+        self.builds = 0  # strategies actually constructed (observability + tests)
+        self.hits = 0
+
+    @staticmethod
+    def _key(
+        config: dict[str, Any],
+        strategy_name: str,
+        preset: Optional[str],
+        alpha: Optional[float],
+        beta: Optional[float],
+    ) -> Optional[str]:
+        try:
+            return json.dumps([config, strategy_name, preset, alpha, beta], sort_keys=True, default=repr)
+        except (TypeError, ValueError):
+            return None
+
+    def get(
+        self,
+        config: dict[str, Any],
+        strategy_name: str,
+        preset: Optional[str] = None,
+        alpha: Optional[float] = None,
+        beta: Optional[float] = None,
+    ) -> "BaseStrategy":
+        key = self._key(config, strategy_name, preset, alpha, beta)
+        if key is None:
+            self.builds += 1
+            return build_strategy(config, strategy_name, preset, alpha, beta)
+        cached = self._entries.get(key)
+        if cached is not None:
+            self.hits += 1
+            self._entries.move_to_end(key)
+            return cached
+        strategy = build_strategy(config, strategy_name, preset, alpha, beta)
+        self.builds += 1
+        self._entries[key] = strategy
+        if len(self._entries) > self._capacity:
+            self._entries.popitem(last=False)
+        return strategy
+
+
 def execute_strategy(
     strategy: "BaseStrategy",
     workload: WorkloadSpec,
@@ -241,9 +308,16 @@ def execute_strategy(
     return recs, meta
 
 
-def run_request(request: RecommendRequest) -> tuple[list[Recommendation], dict[str, Any]]:
-    """The single workflow: build the strategy, run it, return (recs, meta)."""
-    strategy = build_strategy(request.config, request.strategy_name, request.preset, request.alpha, request.beta)
+def run_request(
+    request: RecommendRequest, strategy_cache: Optional[StrategyCache] = None
+) -> tuple[list[Recommendation], dict[str, Any]]:
+    """The single workflow: build the strategy, run it, return (recs, meta).
+
+    ``strategy_cache`` lets a batch caller (a trace, a CSV) reuse one strategy across rows that
+    share a config. ``None`` builds per call, which is the historical behaviour.
+    """
+    args = (request.config, request.strategy_name, request.preset, request.alpha, request.beta)
+    strategy = build_strategy(*args) if strategy_cache is None else strategy_cache.get(*args)
     return execute_strategy(
         strategy,
         request.workload,
@@ -261,6 +335,8 @@ def run_pipeline(
     top_k: int,
     max_slowdown: Optional[float] = None,
     feasibility: str = "autoconf",
+    strategy_cache: Optional[StrategyCache] = None,
+    workers: Optional[int] = None,
 ) -> tuple[list[Recommendation], dict[str, Any]]:
     """Answers-driven entry (interactive REPL, no-TTY path, and ``batch_api``): derive a
     ``RecommendRequest`` from an ``answers`` dict and run it. Signature and return are
@@ -269,7 +345,7 @@ def run_pipeline(
     ``feasibility`` (``autoconf`` | ``rules`` | ``none``) picks the feasibility
     checker; an answers ``feasibility`` key takes precedence (see ``build_config``).
     """
-    config, strategy_name, preset = build_config(answers, top_k, max_slowdown, feasibility)
+    config, strategy_name, preset = build_config(answers, top_k, max_slowdown, feasibility, workers)
     total_tokens = int(answers["dataset_size"] * answers["epochs"] * answers["tokens_per_sample"])
     return run_request(
         RecommendRequest(
@@ -279,7 +355,8 @@ def run_pipeline(
             strategy_name=strategy_name,
             preset=preset,
             total_tokens=total_tokens,
-        )
+        ),
+        strategy_cache=strategy_cache,
     )
 
 

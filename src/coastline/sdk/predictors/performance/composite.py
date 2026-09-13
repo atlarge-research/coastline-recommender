@@ -18,6 +18,15 @@ class CacheThenSimulatePredictor(BasePredictor):
     portfolio model, …) — so a cache miss simulates with whatever the config chose.
     """
 
+    @property
+    def EXPENSIVE(self) -> bool:  # noqa: N802 -- mirrors the class-level flag on plain predictors
+        """Worth forking when the simulate leg is: a cache hit is a hash, a miss runs the model.
+
+        Keyed off the fallback rather than the cache, because a grid that misses is the case the
+        fork exists for; a grid that hits pays a dispatch it did not need, which is cheap.
+        """
+        return bool(getattr(self._fallback, "EXPENSIVE", False))
+
     def __init__(self, cache: BasePredictor, fallback: BasePredictor):
         self._cache = cache
         self._fallback = fallback

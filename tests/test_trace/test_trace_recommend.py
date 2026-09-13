@@ -11,6 +11,7 @@ Oracles used here:
 import pandas as pd
 import pytest
 
+from coastline.sdk.constants import DEFAULT_BATCH_SIZES
 from coastline.sdk.trace import recommend as trace_recommend
 from coastline.sdk.trace.recommend import (
     _METHOD_TO_PREDICTOR,
@@ -39,6 +40,96 @@ def _write_csv(tmp_path, rows, name="trace.csv"):
     return path
 
 
+# --------------------------------------------------------------------------- #
+# Per-device batch mode: patch per_device_train_batch_size, recompute metadata.batch_size.
+# --------------------------------------------------------------------------- #
+# _GOOD_ROW plus the per-device columns -> per-device mode. The input already satisfies the
+# invariant: metadata.batch_size 8 == per_device 1 x gpn 8 x nodes 1.
+_GOOD_ROW_PD = {
+    **_GOOD_ROW,
+    "per_device_train_batch_size": 1,
+    "metadata.orig_per_device_train_batch_size": 1,
+}
+
+
+def test_per_device_mode_writes_per_device_and_holds_batch_invariant(tmp_path):
+    """With a per-device batch column present, recommend-trace patches per_device_train_batch_size
+    (VV's target), keeps it through _tidy_columns, and recomputes metadata.batch_size so the
+    invariant holds: metadata.batch_size == per_device_train_batch_size x num_gpus_per_node x num_nodes.
+    """
+    out = tmp_path / "pd.csv"
+    df = recommend_trace(str(_write_csv(tmp_path, [_GOOD_ROW_PD])), str(out), method="kavier")
+
+    # the per-device column survives _tidy_columns (non-dotted; would otherwise be dropped)
+    assert "per_device_train_batch_size" in df.columns
+    row = df.iloc[0]
+    per_device = int(row["per_device_train_batch_size"])
+    total = int(row["metadata.batch_size"])
+    gpn = int(row["resources.num_gpus_per_node"])
+    nodes = int(row["resources.num_nodes"])
+    assert total == per_device * gpn * nodes  # the invariant
+    assert per_device in set(DEFAULT_BATCH_SIZES)
+    # the original per-device column is preserved untouched
+    assert int(row["metadata.orig_per_device_train_batch_size"]) == 1
+
+
+def test_per_device_mode_uses_the_full_batch_sweep(tmp_path, monkeypatch):
+    """Per-device mode sweeps the full DEFAULT_BATCH_SIZES grid; legacy mode keeps the batch-API
+    neighbourhood (no batch_sizes override)."""
+    captured: dict = {}
+
+    def _fake_recommend(workloads, **kw):
+        captured.clear()
+        captured.update(kw)
+        return pd.DataFrame(
+            [{"feasible": True, "number_of_nodes": 1, "gpus_per_node": 8, "batch_size": 4, "throughput_tok_s": 15000.0}]
+        )
+
+    monkeypatch.setattr(trace_recommend.coastline, "recommend", _fake_recommend)
+
+    recommend_trace(
+        str(_write_csv(tmp_path, [_GOOD_ROW_PD], name="pd.csv")), str(tmp_path / "pd_out.csv"), method="kavier"
+    )
+    assert list(captured.get("batch_sizes", [])) == list(DEFAULT_BATCH_SIZES)
+
+    recommend_trace(
+        str(_write_csv(tmp_path, [_GOOD_ROW], name="legacy.csv")), str(tmp_path / "legacy_out.csv"), method="kavier"
+    )
+    assert "batch_sizes" not in captured  # legacy mode: no explicit sweep
+
+
+def test_per_device_mode_missing_batch_keeps_row_unchanged(tmp_path, monkeypatch):
+    """If the engine returns no batch size in per-device mode, the row is kept UNCHANGED (its
+    original per-device value) rather than reinterpreting the total batch as per-device."""
+
+    def _fake_recommend(workloads, **kw):
+        return pd.DataFrame(
+            [
+                {
+                    "feasible": True,
+                    "number_of_nodes": 1,
+                    "gpus_per_node": 8,
+                    "batch_size": None,
+                    "throughput_tok_s": 15000.0,
+                }
+            ]
+        )
+
+    monkeypatch.setattr(trace_recommend.coastline, "recommend", _fake_recommend)
+    df = recommend_trace(str(_write_csv(tmp_path, [_GOOD_ROW_PD])), str(tmp_path / "out.csv"), method="kavier")
+    row = df.iloc[0]
+    assert pd.notna(row["metadata.recommendation_note"])  # kept unchanged, with a reason
+    assert int(row["per_device_train_batch_size"]) == 1  # original per-device preserved
+
+
+def test_legacy_mode_has_no_per_device_column(tmp_path):
+    """A trace WITHOUT any per-device column stays in legacy mode: metadata.batch_size is written
+    and no per_device_train_batch_size column is added."""
+    df = recommend_trace(str(_write_csv(tmp_path, [_GOOD_ROW])), str(tmp_path / "out.csv"), method="kavier")
+    assert "metadata.batch_size" in df.columns
+    assert "per_device_train_batch_size" not in df.columns
+
+
 def test_estimated_duration_scales_linearly_with_the_jobs_actual_work(tmp_path):
     """estimated_duration = job_total_tokens / recommended_throughput.
 
@@ -57,8 +148,8 @@ def test_estimated_duration_scales_linearly_with_the_jobs_actual_work(tmp_path):
 
     col = "metadata.estimated_duration_kavier"
     assert col in df.columns
-    one = df[df["metadata.uid"] == "one-hour"].iloc[0]
-    two = df[df["metadata.uid"] == "two-hour"].iloc[0]
+    one = df[df["metadata.uid"] == "KAVIER:one-hour"].iloc[0]
+    two = df[df["metadata.uid"] == "KAVIER:two-hour"].iloc[0]
 
     # Both feasible -> finite, positive durations.
     assert one[col] > 0 and pd.notna(one[col])
@@ -70,8 +161,8 @@ def test_estimated_duration_scales_linearly_with_the_jobs_actual_work(tmp_path):
     total = int(df["resources.num_gpus_per_node"].iloc[0]) * int(df["resources.num_nodes"].iloc[0])
     assert 1 <= total <= 8
 
-    # Unrelated column survives; round-trips to disk with the same row count.
-    assert df["metadata.uid"].iloc[0] == "one-hour"
+    # Recommended rows get the method-prefixed uid (traceable to the original); round-trips to disk.
+    assert df["metadata.uid"].iloc[0] == "KAVIER:one-hour"
     assert out.exists() and len(pd.read_csv(out)) == 2
 
 
@@ -151,8 +242,8 @@ def test_mixed_trace_recommends_good_row_and_preserves_the_unrecommendable_one(t
     df = recommend_trace(str(_write_csv(tmp_path, [good, bad])), str(out), method="kavier")
 
     assert len(df) == 2 and out.exists()
-    g = df[df["metadata.uid"] == "good"].iloc[0]
-    b = df[df["metadata.uid"] == "bad"].iloc[0]
+    g = df[df["metadata.uid"] == "KAVIER:good"].iloc[0]  # recommended -> method-prefixed uid
+    b = df[df["metadata.uid"] == "bad"].iloc[0]  # kept unchanged (unknown model) -> original uid
 
     col = "metadata.estimated_duration_kavier"
     assert g[col] > 0 and pd.notna(g[col])
@@ -178,7 +269,8 @@ def test_job_total_tokens_is_throughput_times_runtime():
         }
     )
     # By hand: 15000 tok/s sustained for 3600 s (one hour) = 54,000,000 tokens.
-    assert _job_total_tokens(row) == pytest.approx(54_000_000.0)
+    # tot_tokens_col=None triggers the legacy tps×runtime path.
+    assert _job_total_tokens(row, None) == pytest.approx(54_000_000.0)
 
 
 @pytest.mark.parametrize(
@@ -198,7 +290,7 @@ def test_job_total_tokens_returns_none_for_missing_or_nonpositive(tps, rt):
         fields["metadata.output.train_tokens_per_second"] = tps
     if rt is not None:
         fields["metadata.train_runtime"] = rt
-    assert _job_total_tokens(pd.Series(fields)) is None
+    assert _job_total_tokens(pd.Series(fields), None) is None
 
 
 # --------------------------------------------------------------------------- #
@@ -262,6 +354,53 @@ def test_enrich_resolves_predictor_and_computes_duration_from_recommended_throug
     assert captured["predictor"] == "somemodel"
 
 
+def test_setup_time_col_adds_overhead_to_estimated_duration(tmp_path, monkeypatch):
+    """When setup_time_col is provided the duration formula is:
+        estimated_duration = setup_time + extrapolated_num_tokens / throughput
+
+    Oracle (all numbers hand-computed):
+        extrapolated_num_tokens = 54,000,000  (from tot_tokens_col)
+        setup_time              = 120.0 s     (from setup_time_col)
+        recommended_throughput  = 15000 tok/s (fake recommender)
+        training_time           = 54,000,000 / 15000 = 3600 s
+        estimated_duration      = 120 + 3600 = 3720 s
+
+    Without setup_time_col the duration must be just 3600 s (regression guard).
+    """
+
+    def _fake_recommend(workloads, *, predictor, goal, max_gpus, top_k, feasibility, **_):
+        return pd.DataFrame(
+            [{"feasible": True, "number_of_nodes": 1, "gpus_per_node": 8, "batch_size": 8, "throughput_tok_s": 15000.0}]
+        )
+
+    monkeypatch.setattr(trace_recommend.coastline, "recommend", _fake_recommend)
+
+    row = {
+        **_GOOD_ROW,
+        "my_tot_tokens": 54_000_000,
+        "my_setup_time": 120.0,
+    }
+
+    # With setup_time_col: 120 + 54_000_000 / 15000 = 3720 s
+    df_with = recommend_trace(
+        str(_write_csv(tmp_path, [row])),
+        str(tmp_path / "with_setup.csv"),
+        method="kavier",
+        tot_tokens_col="my_tot_tokens",
+        setup_time_col="my_setup_time",
+    )
+    assert df_with["metadata.estimated_duration_kavier"].iloc[0] == pytest.approx(3720.0)
+
+    # Without setup_time_col: 54_000_000 / 15000 = 3600 s
+    df_without = recommend_trace(
+        str(_write_csv(tmp_path, [row])),
+        str(tmp_path / "without_setup.csv"),
+        method="kavier",
+        tot_tokens_col="my_tot_tokens",
+    )
+    assert df_without["metadata.estimated_duration_kavier"].iloc[0] == pytest.approx(3600.0)
+
+
 # --------------------------------------------------------------------------- #
 # main() / the coastline recommend-trace CLI (via monkeypatched argv)
 # --------------------------------------------------------------------------- #
@@ -290,10 +429,13 @@ def test_main_cli_enriches_trace_and_reports_the_derived_row_count(tmp_path, cap
 
     assert out.exists()
     enriched = pd.read_csv(out)
+    # throughput is always written; duration is written via legacy tps×runtime fallback
+    assert "metadata.estimated_throughput_kavier" in enriched.columns
     assert "metadata.estimated_duration_kavier" in enriched.columns
     assert len(enriched) == 1
-    # The single granite/A100 row is feasible, so exactly 1 duration is produced.
+    # The single granite/A100 row is feasible: 1 throughput and 1 duration produced.
     printed = capsys.readouterr().out
     assert str(out) in printed
     assert "1 rows" in printed
-    assert "1 with an estimated_duration_kavier" in printed
+    assert "1 with estimated_throughput" in printed
+    assert "1 with estimated_duration" in printed

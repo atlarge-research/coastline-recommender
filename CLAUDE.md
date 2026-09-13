@@ -42,7 +42,7 @@ One installable package, `src/coastline` (uv-native, `build-backend = "uv_build"
 
 | Layer | Role |
 |---|---|
-| `coastline.cli` | The single `coastline` dispatcher, three verbs: `recommend-job` (`--interactive` \| `--config` \| `--input/--output` CSV) / `recommend-trace` / `utils` (`tune` \| `trace-to-runs` \| `plot-trace`). Each verb is a thin adapter over the SDK. |
+| `coastline.cli` | The single `coastline` dispatcher, five verbs: `recommend-job` (`--interactive` \| `--config` \| `--input/--output` CSV) / `recommend-trace` / `simulate` (predict ONE declared config, no ranking) / `explain` (score breakdown of a ranking) / `utils` (`tune` \| `trace-to-runs` \| `plot-trace`). Each verb is a thin adapter over the SDK. |
 | `coastline.ui` | FastAPI dashboard + REST (`coastline-ui`) — wizard UI, background prediction worker + queue |
 | `coastline.sdk` | The engine, import-light: `recommend` (facade + batch) · `pipeline` · `predictors` · `policies` · `models` · `library` · `trace` · `io` |
 
@@ -85,13 +85,15 @@ FastAPI app (`ui/app.py`) serving the wizard UI + REST. Long predictions run thr
 - **All 10 bundled models live in one home; only the parametric ones ship in the wheel.** Artifacts are named plainly (`tabpfn.pkl`, `catboost.pkl`, …; the legacy `performance_<stem>_featv3.pkl` spelling still resolves). The single home is `src/coastline/sdk/predictors/performance/data_driven/portfolio/` — all 10 models (tabpfn + random_forest via Git LFS). The wheel ships the 5 parametric ones (catboost, xgboost, lightgbm, bayesian_ridge, deep_learning); the 5 heavy/instance-based ones (tabpfn, random_forest, gaussian_process, svr, knn) are `wheel-exclude`d in `pyproject.toml`. `models/custom/` holds user-tuned artifacts (`coastline utils tune` writes there; also where `dev/trainer` regenerates). Resolution precedence: `custom/` > flat `PORTFOLIO_DIR` > packaged `portfolio/`. The default Kavier physics path needs no pickles.
 - **Kavier is a real PyPI dependency** (`kavier>=0.5,<0.6`), not vendored. Coastline imports its public API — the top-level `kavier.training` verb plus `kavier.sdk.{library,io,training}` engines. For Kavier development use an editable sibling checkout: `uv pip install -e ../kavier`. The benchmark calibration tooling reads `../kavier/src/...` directly.
 - **Dev superproject layout.** Some tooling assumes coastline sits beside optional siblings: `../kavier` (source), `../ado` (ADO autoconf source for `dev/ado_plugin/`). None of this applies to wheel installs.
-- The `coastline` package's `__init__.py` reassigns its module class so `coastline(throughput_estim=...)` is callable and returns a configured `Coastline` — that's why `import coastline; coastline(...)` works.
+- The `coastline` package's `__init__.py` reassigns its module class so `coastline(predictor=...)` is callable and returns a configured `Coastline` — that's why `import coastline; coastline(...)` works.
 
 ## Entry points at a glance
 
 - `import coastline` — Python facade (`sdk/recommend/facade.py`): single workloads or batch DataFrames, in-process. `coastline.recommend(batch)` → DataFrame; `coastline(...).recommend(workload)` → `list[Recommendation]`.
 - `coastline recommend-job` — the one job verb, three modes: `--interactive` (guided REPL), `--config …` (one declared job → `recommendation.json`/stdout; artifact via `--output-dir`/`OUTPUT_DIR`), and `--config … --input workloads.csv --output recs.csv` (batch CSV→CSV, = `coastline.recommend_csv()`, config-declared safeguards).
 - `coastline recommend-trace` — add Coastline predictions to a fine-tuning trace CSV (`--visual` also renders the cluster timeline; [plot] extra).
+- `coastline simulate` — predict throughput/power/runtime/energy for ONE config you declare (`= sdk.recommend.simulate.simulate_one()`). No grid, no ranking, and deliberately no score: the policy scores are min-max normalised across the grid, so for a single config they collapse to 1.0. `--total-tokens` is required for runtime and energy (Kavier reports per-step time, not total runtime).
+- `coastline explain` — the score breakdown behind a ranking: candidates with `power_score`/`throughput_score`/`combined_score`, the α/β actually applied, and the runner-up gap. `min_gpu` drops only the `combined` column — the grid-normalised `p_score`/`t_score` columns still print — since its `combined_score` is a `1/total_gpus` ordering proxy.
 - `coastline utils` — `tune` (train a predictor, [ml]) / `trace-to-runs` (trace → flat measured-runs) / `plot-trace` (visualise a recommended trace, [plot]).
 - `coastline-ui` — the FastAPI dashboard.
 

@@ -49,9 +49,12 @@ COASTLINE-driven analogue of autoconf's `min_gpu_recommender`.
 
 `can_recommend`, `gpus` (per worker/node), `workers` (nodes), `total_gpus`,
 `recommended_batch_size`, `predicted_throughput`, `predicted_power_watts`,
-`predicted_runtime_seconds`, `tokens_per_watt`, `strategy`, and
-`feasibility_backend` (the backend actually used — `autoconf` or, if AutoConf was
-unavailable, `rules`).
+`tokens_per_watt`, `strategy`, and `feasibility_backend` (the backend actually
+used — `autoconf` or, if AutoConf was unavailable, `rules`).
+
+There is deliberately no predicted runtime: runtime is dataset-size dependent and
+these experiments take no dataset-size input (no samples, epochs, steps or total
+tokens), so there is nothing from which to compute one.
 
 ## How it uses AutoConf
 

@@ -84,6 +84,14 @@ class TabPFNPredictor(BasePredictor):
     re-scored per job and policy arm so most rows repeat. TabPFN forward pass dominates cost.
     """
 
+    #: Never fork this one, and not because it is cheap -- it is by far the most expensive model
+    #: in the portfolio. One uncached prediction costs ~495 s (a 166 MB artifact and an ~8-member
+    #: transformer ensemble on CPU), and the only thing that makes it usable at all is
+    #: ``_prediction_cache`` below: a repeated configuration comes back in ~1.4 ms, a ~360,000x
+    #: speedup. That cache is per process, so sharding a grid across workers would destroy every
+    #: hit and have each worker pay ~519 s to become ready. Keep it in one long-lived process.
+    EXPENSIVE = False
+
     _prediction_cache: dict = {}
 
     def __init__(self, model_path: Optional[Path] = None):

@@ -40,8 +40,15 @@ class KavierPredictor(BasePredictor):
     """Analytical throughput+power predictor using Kavier's physics simulator.
 
     Returns tokens/sec and per-GPU watts for calibrated (model, GPU) pairs, else None.
-    predicted_runtime_seconds is always None (Kavier yields per-step time, not job runtime).
+    predicted_runtime_seconds is always None here. Kavier *does* compute a total
+    ``train_runtime``, but only when it is given a job size (``total_tokens``, or
+    ``epochs`` x ``dataset_tokens``); the row this predictor builds supplies none,
+    so Kavier returns 0.0 and we report None rather than a fake runtime.
     """
+
+    #: Closed-form arithmetic at ~2.6 us per prediction -- a worker dispatch would cost far more
+    #: than the work, so this predictor always runs inline.
+    EXPENSIVE = False
 
     def __init__(self):
         if not KAVIER_AVAILABLE:
@@ -133,7 +140,9 @@ class KavierPredictor(BasePredictor):
                 number_of_nodes=workload.number_of_nodes or 1,
                 total_gpus=workload.total_gpus,
                 predicted_throughput=throughput,
-                predicted_runtime_seconds=None,  # Kavier gives per-step time, not total runtime
+                # Kavier returns a total runtime only when given a job size; the row
+                # above supplies none, so there is no runtime to report here.
+                predicted_runtime_seconds=None,
                 predicted_power=power,
                 metadata=metadata,
             )

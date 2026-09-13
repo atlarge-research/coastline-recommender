@@ -40,6 +40,8 @@ jobs:
           uv run --no-sync coastline --help
           uv run --no-sync coastline recommend-job --help
           uv run --no-sync coastline recommend-trace --help
+          uv run --no-sync coastline simulate --help
+          uv run --no-sync coastline explain --help
           uv run --no-sync coastline utils --help
           uv run --no-sync coastline utils plot-trace --help
           uv run --no-sync python -m coastline.cli --help
@@ -51,6 +53,12 @@ jobs:
         # trace-archive dataset (not available in CI); run them locally, each in its own invocation:
         # `uv run --all-extras pytest dev/trainer/tests` / `... dev/benchmark/tests`.
         run: uv run --no-sync pytest
+      - name: Run pytest (ado experiment plugin)
+        # The plugin is not in `testpaths`, so name its suite explicitly. It runs in the ROOT
+        # environment on purpose: ado-core is already here transitively via ado-autoconf, and a
+        # separate `--project dev/ado_plugin` resolution would look for coastline-recommender on
+        # PyPI (not published) without the root's pyarrow override.
+        run: uv run --no-sync pytest dev/ado_plugin/ado_coastline/test
       - name: Native-ML predictor tests (informational — featv3 pickles may need regen on 3.13)
         continue-on-error: true
         run: uv run --no-sync pytest -m ml_isolated -p no:cacheprovider

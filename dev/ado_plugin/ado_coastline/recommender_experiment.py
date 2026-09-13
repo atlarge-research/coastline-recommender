@@ -34,9 +34,20 @@ import os
 import traceback
 from typing import Any
 
-from orchestrator.modules.actuators.custom_experiments import custom_experiment
-from orchestrator.schema.domain import PropertyDomain, VariableTypeEnum
-from orchestrator.schema.property import ConstitutiveProperty
+# ado renamed its top-level package from ``orchestrator`` to ``ado`` in upstream commit
+# 5687809f ("refactor(core)!: change import package from orchestrator to ado", #1179) and
+# shipped no compatibility shim. Every symbol below survived the rename unchanged -- only
+# the package root moved -- so import the modern name first and keep the legacy one as a
+# fallback while the pinned ado submodule is still on a pre-rename revision. Delete the
+# ``except ImportError`` branch once that submodule advances past 5687809f.
+try:
+    from ado.modules.actuators.custom_experiments import custom_experiment
+    from ado.schema.domain import PropertyDomain, VariableTypeEnum
+    from ado.schema.property import ConstitutiveProperty
+except ImportError:  # legacy ado (pre-5687809f), where the package is ``orchestrator``
+    from orchestrator.modules.actuators.custom_experiments import custom_experiment
+    from orchestrator.schema.domain import PropertyDomain, VariableTypeEnum
+    from orchestrator.schema.property import ConstitutiveProperty
 
 from ado_coastline._bridge import CoastlineUnavailableError, import_facade
 
@@ -172,7 +183,13 @@ _OUTPUT_IDENTIFIERS = [
     "recommended_batch_size",
     "predicted_throughput",
     "predicted_power_watts",
-    "predicted_runtime_seconds",
+    # No `predicted_runtime_seconds` here, deliberately: runtime is dataset-size
+    # dependent (runtime = total tokens / throughput) and this experiment declares
+    # no dataset size at all -- no samples, epochs, steps or total tokens. Kavier
+    # can compute a runtime, but only when it is given a job size, so there is
+    # nothing to report and the field was always null. Do not re-add it without
+    # first adding a dataset-size input property (e.g. `total_tokens`) and
+    # threading it through `_run_recommendation`.
     "tokens_per_watt",
     "strategy",
     "feasibility_backend",
@@ -266,7 +283,7 @@ def _run_recommendation(
     if feasibility_model:
         workload["feasibility_model"] = feasibility_model
 
-    engine = Coastline(throughput_estim="kavier", energy="kavier_power", feasibility=backend)
+    engine = Coastline(predictor="kavier", energy="kavier_power", feasibility=backend)
     recommendations = engine.recommend(
         workload,
         context=context,
@@ -293,7 +310,6 @@ def _run_recommendation(
         "recommended_batch_size": meta.get("batch_size", batch_size),
         "predicted_throughput": throughput,
         "predicted_power_watts": power,
-        "predicted_runtime_seconds": top.predicted_runtime_seconds,
         "tokens_per_watt": meta.get("tokens_per_watt", (throughput / power if power > 0 else 0.0)),
         "strategy": strategy_label,
         "feasibility_backend": backend,

@@ -53,7 +53,7 @@ def context():
     )
 
 
-def _cand(*, total_gpus, throughput=100.0, power=100.0, throughput_score=0.0, power_score=0.0):
+def _cand(*, total_gpus, throughput=100.0, power=100.0, throughput_score=0.0, power_score=0.0, batch_size=0):
     """EvaluatedCandidate with a self-consistent (gpus_per_node, nodes) that multiplies to total_gpus."""
     return EvaluatedCandidate(
         gpus_per_node=total_gpus,
@@ -66,6 +66,7 @@ def _cand(*, total_gpus, throughput=100.0, power=100.0, throughput_score=0.0, po
         power_score=power_score,
         combined_score=0.0,
         feasibility_metadata={},
+        batch_size=batch_size,
     )
 
 
@@ -234,16 +235,18 @@ def test_preset_weights_match_documented_spec():
 @pytest.mark.parametrize(
     "gpus_per_node, number_of_nodes, expected",
     [
-        # batch_size=8; rule is batch_size % total_gpus == 0. Divisors of 8 → feasible.
-        (1, 1, True),  # total 1  | 8 % 1 == 0
-        (2, 1, True),  # total 2  | 8 % 2 == 0
-        (4, 1, True),  # total 4  | 8 % 4 == 0
-        (8, 1, True),  # total 8  | 8 % 8 == 0
-        (3, 1, False),  # total 3  | 8 % 3 == 2
-        (8, 2, False),  # total 16 | 8 % 16 == 8
+        # batch_size is PER-DEVICE: it need not divide the GPU count, so EVERY per-device batch
+        # is feasible (the old ``batch_size % total_gpus`` rule is gone). (3, 1) and (8, 2) would
+        # have been rejected by that rule; now they pass.
+        (1, 1, True),  # total 1
+        (2, 1, True),  # total 2
+        (4, 1, True),  # total 4
+        (8, 1, True),  # total 8
+        (3, 1, True),  # total 3  (old rule: 8 % 3 != 0 -> rejected)
+        (8, 2, True),  # total 16 (old rule: 8 % 16 != 0 -> rejected)
     ],
 )
-def test_rules_feasibility_divisibility(gpus_per_node, number_of_nodes, expected):
+def test_rules_feasibility_admits_any_per_device_batch(gpus_per_node, number_of_nodes, expected):
     w = WorkloadSpec(
         llm_model="mistral-7b-v0.1",
         fine_tuning_method="lora",
@@ -257,9 +260,9 @@ def test_rules_feasibility_divisibility(gpus_per_node, number_of_nodes, expected
     assert feasible is expected
 
 
-def test_rules_feasibility_drops_indivisible_config_in_pipeline(workload, context):
-    # Grid [1, 3] with batch_size=8: 8 % 1 == 0 (kept) but 8 % 3 == 2 (dropped by rules).
-    # A pipeline that ignored feasibility would emit two recs including the 3-GPU config.
+def test_rules_feasibility_keeps_all_per_device_configs_in_pipeline(workload, context):
+    # Grid [1, 3] with per-device batch 8: rules no longer drops on divisibility (batch is
+    # per-device), so BOTH GPU counts survive to the ranked output (was [1] under the old rule).
     pred = Prediction(
         gpus_per_node=1,
         number_of_nodes=1,
@@ -277,7 +280,7 @@ def test_rules_feasibility_drops_indivisible_config_in_pipeline(workload, contex
     )
     recs = pipeline.recommend(workload, context)
 
-    assert [r.total_gpus for r in recs] == [1]  # only the divisible 1-GPU config survives
+    assert len(recs) == 2  # both per-device configs (1 and 3 GPUs) are feasible now
 
 
 # -------------------------------------------------------------- Kavier integration
@@ -367,3 +370,85 @@ def test_kavier_unsupported_model_returns_error_prediction(context):
     assert pred.metadata["error"] == "unsupported_config"
 
     assert KavierPowerPredictor().predict(bogus, context) is None
+
+
+# --------------------------------------------------------------------------- tie-breaking
+#
+# The score decides the ranking; these decide what happens when it cannot. A candidate's position
+# must never depend on where the grid happened to enumerate it, so the tie-break has to be a TOTAL
+# order: highest predicted throughput, then fewest GPUs, then smallest batch.
+
+
+def _tied(**kwargs):
+    """A candidate the scorer cannot separate from its siblings: identical score components."""
+    return _cand(throughput_score=1.0, power_score=1.0, **kwargs)
+
+
+def test_a_tie_prefers_the_highest_predicted_throughput():
+    slow = _tied(total_gpus=4, throughput=100.0)
+    fast = _tied(total_gpus=4, throughput=400.0)
+
+    # Offered slowest-first, so insertion order cannot be what produces the answer.
+    ranked = rank_candidates([slow, fast], "balanced", alpha=0.5, beta=0.5, top_k=2)
+
+    assert [c.throughput for c in ranked] == [400.0, 100.0]
+
+
+def test_a_tie_on_throughput_prefers_the_fewest_gpus():
+    many = _tied(total_gpus=8, throughput=200.0)
+    few = _tied(total_gpus=2, throughput=200.0)
+
+    ranked = rank_candidates([many, few], "balanced", alpha=0.5, beta=0.5, top_k=2)
+
+    assert [c.total_gpus for c in ranked] == [2, 8]
+
+
+def test_a_tie_on_throughput_and_gpus_prefers_the_smallest_batch():
+    big = _tied(total_gpus=4, throughput=200.0, batch_size=64)
+    small = _tied(total_gpus=4, throughput=200.0, batch_size=8)
+
+    ranked = rank_candidates([big, small], "balanced", alpha=0.5, beta=0.5, top_k=2)
+
+    assert [c.batch_size for c in ranked] == [8, 64]
+
+
+def test_the_three_levels_apply_in_order():
+    # Throughput outranks GPU count, and GPU count outranks batch size: the winner here is the
+    # fastest even though it asks for the most GPUs and the biggest batch.
+    fastest_but_greedy = _tied(total_gpus=8, throughput=400.0, batch_size=64)
+    fewest_gpus = _tied(total_gpus=1, throughput=100.0, batch_size=8)
+    middle = _tied(total_gpus=2, throughput=200.0, batch_size=16)
+
+    ranked = rank_candidates([fewest_gpus, middle, fastest_but_greedy], "balanced", top_k=3)
+
+    assert [c.throughput for c in ranked] == [400.0, 200.0, 100.0]
+
+
+def test_the_tie_break_does_not_depend_on_the_order_the_grid_enumerated():
+    # The determinism property itself: every permutation of the same tied set ranks identically.
+    import itertools
+
+    def fresh():
+        return [
+            _tied(total_gpus=4, throughput=200.0, batch_size=8),
+            _tied(total_gpus=4, throughput=200.0, batch_size=32),
+            _tied(total_gpus=2, throughput=200.0, batch_size=32),
+            _tied(total_gpus=2, throughput=500.0, batch_size=64),
+        ]
+
+    expected = [(c.throughput, c.total_gpus, c.batch_size) for c in rank_candidates(fresh(), "balanced", top_k=4)]
+    for order in itertools.permutations(range(4)):
+        shuffled = [fresh()[i] for i in order]
+        got = [(c.throughput, c.total_gpus, c.batch_size) for c in rank_candidates(shuffled, "balanced", top_k=4)]
+        assert got == expected, order
+
+
+def test_min_gpu_keeps_its_own_primary_then_shares_the_tie_break():
+    # Fewest GPUs is min-GPU's whole point, so it still leads; the shared tie-break settles the rest.
+    a = _cand(total_gpus=2, throughput=200.0, batch_size=32)
+    b = _cand(total_gpus=2, throughput=200.0, batch_size=8)
+    c = _cand(total_gpus=1, throughput=50.0, batch_size=64)
+
+    ranked = rank_candidates([a, b, c], "min_gpu", top_k=3)
+
+    assert [(x.total_gpus, x.batch_size) for x in ranked] == [(1, 64), (2, 8), (2, 32)]

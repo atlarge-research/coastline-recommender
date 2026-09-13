@@ -30,6 +30,7 @@ class MultiObjectiveStrategy(BaseStrategy):
         *,
         config: Optional[dict] = None,
         pipeline: Optional[GridWorkflowPipeline] = None,
+        components_from_config: bool = False,
     ):
         self.throughput_predictor = throughput_predictor
         self.power_predictor = power_predictor
@@ -80,6 +81,7 @@ class MultiObjectiveStrategy(BaseStrategy):
                 beta=self.beta,
                 preset=self.preset,
                 normalization=normalization,
+                components_from_config=components_from_config,
             )
 
         logger.info(

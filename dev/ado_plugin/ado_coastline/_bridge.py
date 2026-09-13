@@ -35,13 +35,11 @@ class CoastlineUnavailableError(RuntimeError):
 
 
 def _looks_like_coastline_root(path: Path) -> bool:
-    """A directory is a COASTLINE checkout iff it holds the facade, the pipeline
-    package, and the shared models package."""
-    return (
-        (path / "coastline" / "facade.py").is_file()
-        and (path / "coastline_recommender").is_dir()
-        and (path / "common" / "coastline_common").is_dir()
-    )
+    """A directory is a COASTLINE checkout iff its ``src/`` layout holds the
+    ``coastline`` package and the SDK's recommend facade."""
+    return (path / "src" / "coastline" / "__init__.py").is_file() and (
+        path / "src" / "coastline" / "sdk" / "recommend" / "facade.py"
+    ).is_file()
 
 
 def find_coastline_root() -> Path | None:
@@ -84,13 +82,12 @@ def _inject_sibling_checkout() -> None:
     if root is None:
         return
 
-    # coastline + coastline_recommender live at <root>; coastline_common under <root>/common.
-    # Append (not insert-at-0): we only need these as a *fallback* when nothing is installed,
-    # and the checkout root also holds generically named dirs (api/, models/, config/,
-    # examples/, ...) that must not shadow installed packages of the same name.
-    for path in (str(root), str(root / "common")):
-        if path not in sys.path:
-            sys.path.append(path)
+    # The importable ``coastline`` package lives at <root>/src (uv src-layout).
+    # Append (not insert-at-0): we only need this as a *fallback* when nothing is
+    # installed, and it must never shadow an installed distribution of the same name.
+    src = str(root / "src")
+    if src not in sys.path:
+        sys.path.append(src)
 
     # kavier is coastline's physics engine. When coastline is pip-installed kavier comes
     # in as a dependency; in the umbrella dev layout it is a sibling ``kavier/src`` checkout.

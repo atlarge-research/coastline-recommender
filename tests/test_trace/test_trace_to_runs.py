@@ -54,6 +54,22 @@ def test_trace_is_renamed_to_the_flat_schema(tmp_path):
     assert list(pd.read_csv(out).columns) == [*_FLAT_REQUIRED, "is_valid"]
 
 
+def test_flat_batch_size_prefers_per_device_with_total_fallback(tmp_path):
+    """When the trace has per_device_train_batch_size, the flat batch_size (per-device by the
+    calibration convention) comes from it — not the total metadata.batch_size — falling back to
+    the total metadata.batch_size per-row where the per-device value is missing.
+    """
+    rows = [
+        # per-device 1 present while the total is 8 -> flat batch_size must be the per-device 1
+        {**_TRACE_ROW, "metadata.batch_size": 8, "per_device_train_batch_size": 1},
+        # per-device missing (NaN) -> fall back to the total metadata.batch_size (4)
+        {**_TRACE_ROW, "metadata.batch_size": 4, "per_device_train_batch_size": None},
+    ]
+    df = trace_to_runs(str(_write_csv(tmp_path, rows)))
+    assert int(df.iloc[0]["batch_size"]) == 1  # per-device wins over the total 8
+    assert int(df.iloc[1]["batch_size"]) == 4  # per-device NaN -> total 4
+
+
 def test_is_valid_is_derived_from_positive_targets(tmp_path):
     """is_valid = (dataset_tokens_per_second > 0) AND (train_runtime > 0)."""
     good = {**_TRACE_ROW, "metadata.uid": "good"}

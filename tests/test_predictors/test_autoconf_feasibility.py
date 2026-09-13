@@ -180,15 +180,16 @@ def test_autoconf_none_metadata_normalized_to_empty_dict(monkeypatch):
 
 
 def test_autoconf_maps_workload_fields_into_job_config(monkeypatch):
-    """The workload -> JobConfig field mapping must be correct, including the
-    derived total_gpus (gpus_per_node x number_of_nodes) feeding number_gpus.
+    """The workload -> JobConfig field mapping must be correct: the derived total_gpus
+    (gpus_per_node x number_of_nodes) feeds number_gpus, AND the per-device batch is converted
+    to AutoConf's TOTAL/effective batch at the boundary (AutoConf's batch_size is not per-device).
 
-    Oracle: hand-derived layout — 4 GPUs/node x 2 nodes = 8 total GPUs — plus
-    the verbatim pass-through of the remaining fields.
+    Oracle: hand-derived layout — 4 GPUs/node x 2 nodes = 8 total GPUs — and effective batch =
+    per_device 16 x 8 GPUs = 128; the remaining fields pass through verbatim.
     """
     predict_calls: list = []
     monkeypatch.setattr(af, "_autoconf_modules", lambda: _make_mods(1, {}, predict_calls=predict_calls))
-    wl = _workload(batch_size=16, gpus_per_node=4, number_of_nodes=2)  # total = 4*2 = 8
+    wl = _workload(batch_size=16, gpus_per_node=4, number_of_nodes=2)  # per-device 16, total = 4*2 = 8
     AutoconfFeasibilityChecker().is_feasible(wl)
 
     assert len(predict_calls) == 1
@@ -198,7 +199,7 @@ def test_autoconf_maps_workload_fields_into_job_config(monkeypatch):
         "method": "full",
         "gpu_model": _GPU,
         "tokens_per_sample": 512,
-        "batch_size": 16,
+        "batch_size": 128,  # per-device 16 -> effective 16 x 8 GPUs (AutoConf batch_size is TOTAL)
         "number_gpus": 8,  # 4 GPUs/node x 2 nodes
     }
 
@@ -294,43 +295,40 @@ def test_autoconf_exception_during_prediction_is_caught(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# RulesFeasibilityChecker — divisibility / GPU-count rule.
+# RulesFeasibilityChecker — per-device sanity guards (no divisibility rule).
 # --------------------------------------------------------------------------- #
-def test_rules_feasible_when_batch_divisible_by_total_gpus():
-    # 8 GPUs (8/node x 1 node); 8 % 8 == 0 -> divisible -> feasible, no error dict.
+def test_rules_feasible_for_valid_per_device_workload():
+    # Any valid per-device workload is feasible (no divisibility rule); no error dict.
     feasible, meta = RulesFeasibilityChecker().is_feasible(_workload(batch_size=8, gpus_per_node=8, number_of_nodes=1))
     assert feasible is True
     assert meta == {}
 
 
-def test_rules_infeasible_when_batch_not_divisible():
-    # 8 GPUs; 7 % 8 == 7 != 0 -> not evenly divisible -> infeasible with reason.
+def test_rules_feasible_when_batch_not_divisible_by_gpus():
+    # batch_size is PER-DEVICE: a per-device batch of 7 on 8 GPUs is feasible (the old
+    # ``7 % 8 != 0`` divisibility rejection is gone).
     feasible, meta = RulesFeasibilityChecker().is_feasible(_workload(batch_size=7, gpus_per_node=8, number_of_nodes=1))
-    assert feasible is False
-    assert "evenly divisible" in meta["error"]
+    assert feasible is True
+    assert meta == {}
 
 
-def test_rules_divisibility_uses_total_gpus_across_nodes():
-    """total_gpus = gpus_per_node x number_of_nodes; batch=8 is divisible by
-    4 GPUs on 1 node (8 % 4 == 0) but NOT by 4x4=16 GPUs across 4 nodes
-    (8 % 16 == 8). Same batch, opposite verdicts pin that the rule uses the
-    cross-node total, not gpus_per_node alone.
+def test_rules_per_device_batch_feasible_regardless_of_gpu_count():
+    """batch_size is PER-DEVICE, so it need not divide the GPU count: a per-device batch of 8
+    is feasible on 4 GPUs (1 node) AND on 16 GPUs (4 nodes) — the latter would have been
+    rejected by the old ``8 % 16`` divisibility rule.
     """
     one_node = RulesFeasibilityChecker().is_feasible(_workload(batch_size=8, gpus_per_node=4, number_of_nodes=1))
     four_nodes = RulesFeasibilityChecker().is_feasible(_workload(batch_size=8, gpus_per_node=4, number_of_nodes=4))
     assert one_node[0] is True
-    assert four_nodes[0] is False
+    assert four_nodes[0] is True
 
 
 # --------------------------------------------------------------------------- #
 # NoOpFeasibilityChecker — accept everything.
 # --------------------------------------------------------------------------- #
-def test_noop_accepts_even_non_divisible_config():
-    """The no-op checker ignores the divisibility rule the Rules checker would
-    reject: batch=7 on 8 GPUs (7 % 8 != 0) is accepted anyway. Oracle is the
-    contrast with test_rules_infeasible_when_batch_not_divisible on the same
-    inputs — same workload, opposite verdict proves NoOp bypasses the rule.
-    """
+def test_noop_accepts_any_config():
+    """The no-op checker accepts every workload unconditionally (used for tests or when
+    feasibility is disabled)."""
     feasible, meta = NoOpFeasibilityChecker().is_feasible(_workload(batch_size=7, gpus_per_node=8, number_of_nodes=1))
     assert feasible is True
     assert meta == {}

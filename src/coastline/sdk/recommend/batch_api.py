@@ -132,6 +132,9 @@ def _answers_for(
     if answers.get("predictor") is not None:
         # Fail a typo'd predictor visibly per row rather than silently defaulting in the engine.
         normalize_predictor(answers["predictor"])
+    if kwargs.get("batch_sizes"):
+        # An explicit batch grid (a list) — bypasses the per-column int-coercion above.
+        answers["batch_sizes"] = list(kwargs["batch_sizes"])
 
     slowdown = _pick(row, "max_slowdown")
     if slowdown is None:
@@ -176,6 +179,9 @@ def recommend(
     epochs: Optional[int] = None,
     feasibility: str = "autoconf",
     lookup: Optional[str] = None,
+    batch_sizes: Optional[list[int]] = None,
+    strategy_cache: Optional[engine.StrategyCache] = None,
+    workers: Optional[int] = None,
 ) -> pd.DataFrame:
     """Recommend GPU/node configurations for a batch — returns a ``pandas.DataFrame`` of the input
     rows plus the chosen config + predictions (one row per ranked pick).
@@ -187,6 +193,11 @@ def recommend(
     ``rules`` for the divisibility-only path that needs no AutoConf install.
     ``lookup`` points the ``cache``/``intelligent`` predictors at a measured-runs CSV
     (or ``"default"`` for the small bundled lookup DB); other predictors ignore it.
+    ``strategy_cache`` lets a caller that loops over many batches (e.g. a trace, one row per
+    call) reuse one strategy across the calls that share a config; ``None`` builds per call.
+    ``workers`` forks each pipeline stage's candidates across that many processes; ``None``
+    (the default) runs sequentially, so a library call never moves a caller's work into
+    subprocesses unasked.
     """
     rows = _normalise(batch)
     base = engine.defaults(engine.resolve_options())
@@ -198,6 +209,7 @@ def recommend(
         "dataset_size": dataset_size,
         "epochs": epochs,
         "lookup": lookup,
+        "batch_sizes": batch_sizes,
     }
 
     out_rows: list[dict[str, Any]] = []
@@ -214,7 +226,14 @@ def recommend(
         # failed row with the reason, never crashing the rest of the batch.
         try:
             answers, slowdown = _answers_for(row, kwargs, base)
-            recs, meta = engine.run_pipeline(answers, top_k=top_k, max_slowdown=slowdown, feasibility=feasibility)
+            recs, meta = engine.run_pipeline(
+                answers,
+                top_k=top_k,
+                max_slowdown=slowdown,
+                feasibility=feasibility,
+                strategy_cache=strategy_cache,
+                workers=workers,
+            )
         except Exception as exc:  # noqa: BLE001 — isolate any per-row error
             out_rows.append(_failed_row(row, str(exc)[:200] or type(exc).__name__))
             continue

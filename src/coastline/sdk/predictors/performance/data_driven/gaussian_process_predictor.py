@@ -27,6 +27,9 @@ _MODEL_PATH = performance_trained_model_path("gaussian_process")
 class GaussianProcessPredictor(BasePredictor):
     """Gaussian Process predictor for dataset_tokens_per_second (with uncertainty)."""
 
+    #: A Gaussian-process posterior: ~1.6 ms per prediction.
+    EXPENSIVE = True
+
     def __init__(self, model_path: Optional[Path] = None):
         self._model_path = model_path or _MODEL_PATH
         self._model = None

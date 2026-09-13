@@ -6,6 +6,10 @@ One verb, three mutually-exclusive input modes (all route into the same engine):
 * ``--config CFG`` [``--output-dir DIR``] one declared job → ``recommendation.json`` / stdout (was ``coastline run``)
 * ``--input CSV --output CSV --config CFG`` a batch of jobs, CSV → CSV (was ``coastline recommend``)
 
+With no flags at all the verb runs the second mode against the default config
+(:func:`~coastline.sdk.io.run_config.default_experiment_path`), which declares its own workload —
+bare ``coastline recommend-job`` is the default recommendation, not a usage error.
+
 ``recommend-trace`` is the sibling verb for a whole fine-tuning trace (the ``ibm_trace`` format);
 this verb speaks the canonical Coastline workload CSV.
 """
@@ -22,7 +26,8 @@ def _build_parser() -> FriendlyParser:
     p = FriendlyParser(
         prog="coastline recommend-job",
         description="Recommend GPU/node configurations for one job: --interactive (guided REPL), "
-        "--config (one declared job), or --input/--output (a batch CSV of jobs).",
+        "--config (one declared job), or --input/--output (a batch CSV of jobs). "
+        "With no flags, the declared job of the default config.",
         example="coastline recommend-job --config config.yaml --input workloads.csv --output recs.csv",
     )
     p.add_argument("--interactive", action="store_true", help="Guided keyboard-driven REPL over the recommender.")
@@ -71,21 +76,27 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         recommend_csv(ns.config, ns.input, ns.output, cluster_gpus=ns.cluster_gpus)
         return
 
-    if ns.config:
-        # Single declared-job mode (was `coastline run`); --input here is an optional JSON override.
-        from coastline.cli.run import main as run_main
+    if ns.input and not ns.config:
+        # --input is only ever a modifier: a JSON workload override in single mode, the source CSV
+        # in batch mode. Either way it needs the config that carries the policy — never the default.
+        parser.error(
+            "--input needs --config: a JSON job overriding the config workload (single mode), "
+            "or --output too for a batch CSV -> CSV"
+        )
 
-        run_argv = ["--config", ns.config]
-        if ns.input:
-            run_argv += ["--input", ns.input]
-        if ns.output_dir:
-            run_argv += ["--output-dir", ns.output_dir]
-        if ns.cluster_gpus is not None:
-            run_argv += ["--cluster-gpus", str(ns.cluster_gpus)]
-        run_main(run_argv)
-        return
+    # Single declared-job mode (was `coastline run`); --input here is an optional JSON override.
+    # No --config: run.py defaults it to `default_experiment_path()`, whose `workload:` block is
+    # the declared job — so bare `coastline recommend-job` is the default run, not an error.
+    from coastline.cli.run import main as run_main
 
-    parser.error("choose a mode: --interactive, --config <file>, or --input <csv> --output <csv> --config <file>")
+    run_argv = ["--config", ns.config] if ns.config else []
+    if ns.input:
+        run_argv += ["--input", ns.input]
+    if ns.output_dir:
+        run_argv += ["--output-dir", ns.output_dir]
+    if ns.cluster_gpus is not None:
+        run_argv += ["--cluster-gpus", str(ns.cluster_gpus)]
+    run_main(run_argv)
 
 
 if __name__ == "__main__":

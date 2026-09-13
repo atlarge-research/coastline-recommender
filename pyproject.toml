@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "coastline-recommender"
-version = "0.2.1"
+version = "0.2.2"
 description = "Context-aware GPU/datacenter configuration recommender for LLM fine-tuning"
 readme = "README.md"
 license = "MIT"
@@ -167,7 +167,9 @@ ignore = []
 testpaths = ["tests"]
 # The dev trainer/benchmark suites import the `trainer`/`benchmark` packages by name;
 # they resolve with dev/ on the path (only used when those suites are run explicitly).
-pythonpath = ["dev"]
+# dev/ado_plugin is the ado plugin's own package root, so `ado_coastline` imports from the
+# root env without a second resolution; its suite is only collected when named explicitly.
+pythonpath = ["dev", "dev/ado_plugin"]
 # Native-ML predictor tests co-load libomp-bundling backends that can crash in one
 # interpreter, so they carry the `ml_isolated` marker and are deselected by default;
 # run them in their own process: `uv run pytest -m ml_isolated -p no:cacheprovider`.

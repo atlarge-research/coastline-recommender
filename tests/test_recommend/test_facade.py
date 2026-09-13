@@ -291,21 +291,16 @@ def test_max_gpus_negative_raises_clear_value_error():
 # --------------------------------------------------------------------------- #
 
 
-def test_rules_feasibility_admits_only_batch_divisible_configs(monkeypatch):
-    """``Coastline(feasibility="rules")`` drives the divisibility-only checker end to
-    end. Oracle: the rules checker admits a config iff batch_size % total_gpus == 0.
-    With batch_sizes=[8] and budget [1,2,4,8], the divisor set of 8 is {1,2,4,8}, so
-    EXACTLY those GPU counts must appear (and 3/5/6/7 would be rejected if present).
-    A checker that ignored divisibility would let a non-divisor through and fail the
-    modulo assertion."""
+def test_rules_feasibility_admits_all_per_device_configs(monkeypatch):
+    """``Coastline(feasibility="rules")`` drives the rules checker end to end. batch_size is
+    PER-DEVICE, so the checker no longer filters on divisibility — EVERY GPU count in the budget
+    is admitted, including 3, which the old ``8 % 3`` rule would have rejected."""
     monkeypatch.setenv("COASTLINE_ALLOW_RULES_FALLBACK", "1")
     rec = Coastline("kavier", feasibility="rules")
     assert rec.feasibility == "rules"
-    out = rec.recommend(_workload(), total_gpus=[1, 2, 4, 8], batch_sizes=[8], top_k=99)
+    out = rec.recommend(_workload(), total_gpus=[1, 2, 3, 4, 8], batch_sizes=[8], top_k=99)
     assert out, "rules feasibility should still yield recommendations"
     assert all(isinstance(r, Recommendation) for r in out)
     admitted = {r.total_gpus for r in out}
-    # By hand: 8 is divisible by exactly 1, 2, 4, 8 among the budget -> all admitted.
-    assert admitted == {1, 2, 4, 8}
-    for r in out:
-        assert 8 % r.total_gpus == 0
+    # Per-device batch 8 is feasible on every budget entry — including the non-divisor 3.
+    assert admitted == {1, 2, 3, 4, 8}

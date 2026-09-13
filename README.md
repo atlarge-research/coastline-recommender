@@ -36,13 +36,17 @@ print(results[0])                                      # best-ranked Recommendat
 df = coastline.recommend(batch_df, predictor="kavier", goal="balanced", max_gpus=8)  # batch → DataFrame
 ```
 
-One `coastline` command (three subcommands) plus the dashboard:
+One `coastline` command (five subcommands) plus the dashboard:
 
 ```bash
 coastline recommend-job --interactive                                               # guided REPL
 coastline recommend-job --config config/coastline_functionality/experiment.yaml        # one job → recommendation.json
 coastline recommend-job --config config.yaml --input workloads.csv --output recs.csv # batch CSV → CSV
 coastline recommend-trace --input trace.csv --output enriched.csv --visual           # annotate + plot a trace
+coastline simulate --model mistral-7b-v0.1 --method lora --gpu-model NVIDIA-A100-SXM4-80GB \
+    --tokens 1024 --batch-size 16 --gpus-per-node 4                                 # predict ONE config
+coastline explain --model mistral-7b-v0.1 --method lora --gpu-model NVIDIA-A100-SXM4-80GB \
+    --tokens 1024 --batch-size 16 --preset balanced                                 # why that config won
 coastline utils tune --data runs.csv --model tabpfn                                  # tune | trace-to-runs | plot-trace
 coastline-ui                                                                        # FastAPI dashboard :8000
 ```
