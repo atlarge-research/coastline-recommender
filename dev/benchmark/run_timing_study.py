@@ -44,10 +44,11 @@ def _time_once(name: str, ml: dict) -> dict:
     elif name == "TabPFN":
         r = evaluate_tabpfn_batch(ml)
     else:
-        import importlib
+        # _ML_MODELS maps a display name to a predictor key; build the predictor the same way
+        # run_benchmark.py does, so the timing measures the path the benchmark actually uses.
+        from coastline.sdk.policies import PolicyFactory
 
-        module, cls = _ML_MODELS[name]
-        predictor = getattr(importlib.import_module(module), cls)()
+        predictor = PolicyFactory.throughput_predictor({"performance": _ML_MODELS[name]})
         r = evaluate_ml_predictor(predictor, ml)
     t, n = float(r["predict_time_s"]), int(r["n"])
     ms = ms_per_100_predictions(t, n)
