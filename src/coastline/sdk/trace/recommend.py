@@ -149,7 +149,7 @@ def _infeasible_note(max_gpus: int, feasibility: str) -> str:
     cause = (
         "every config would run out of GPU memory (autoconf OOM check)"
         if feasibility == FeasibilityMode.AUTOCONF
-        else "no feasible config within the GPU budget (rules checker)"
+        else "no config passes the divisibility rules"
     )
     return f"infeasible within {max_gpus} GPUs: {cause}"
 
