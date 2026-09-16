@@ -117,6 +117,12 @@ Issues = "https://github.com/atlarge-research/coastline-recommender/issues"
 # for kavier, so override autogluon's stale cap to let the lock resolve.
 override-dependencies = ["pyarrow>=23.0.1"]
 
+# The `kavier>=0.5,<0.6` range above resolves to the PyPI wheel 0.5.0.2, which predates the
+# submodule by 14 commits (policy renames, MFU/goodput). The thesis capsule must replicate against
+# the code the results were produced with, so pin the frozen snapshot by tag.
+[tool.uv.sources]
+kavier = { git = "https://github.com/atlarge-research/Kavier.git", tag = "v0.5.1-thesis" }
+
 # ------------------------------------------------------------------
 #  Build backend
 # ------------------------------------------------------------------
