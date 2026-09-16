@@ -1,0 +1,46 @@
+cff-version: 1.2.0
+message: >-
+  If you use Coastline in academic work, please cite the MSc thesis
+  (preferred-citation below). Cite this file when you need to refer to a
+  specific released version of the software itself.
+title: COASTLINE
+abstract: >-
+  Coastline is a context-aware recommender for GPU and datacenter
+  configurations for LLM fine-tuning: given a workload it grid-searches
+  configurations, filters infeasible ones, predicts throughput and power, and
+  ranks the survivors on a performance-energy score.
+type: software
+version: 0.2.2
+date-released: "2026-09-16"
+license: MIT
+repository-code: "https://github.com/atlarge-research/coastline-recommender"
+url: "https://github.com/atlarge-research/coastline-recommender"
+authors:
+  - given-names: Radu
+    family-names: Nicolae
+    affiliation: Vrije Universiteit Amsterdam
+  - name: AtLarge Research
+    email: info@atlarge-research.com
+keywords:
+  - llm
+  - fine-tuning
+  - gpu
+  - datacenter
+  - recommender
+  - throughput
+  - energy-efficiency
+  - carbon
+  - sustainability
+  - mlops
+
+preferred-citation:
+  type: thesis
+  title: "Infrastructure recommenders for large-scale fine-tuning workloads"
+  authors:
+    - given-names: Radu
+      family-names: Nicolae
+      affiliation: Vrije Universiteit Amsterdam
+  institution:
+    name: Vrije Universiteit Amsterdam
+  thesis-type: "MSc thesis"
+  year: 2026

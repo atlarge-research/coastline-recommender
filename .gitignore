@@ -4,6 +4,10 @@ __pycache__/
 .DS_Store
 .ruff_cache/
 .pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
 .ipynb_checkpoints/
 *.egg-info/
 build/

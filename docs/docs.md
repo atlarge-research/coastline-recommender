@@ -112,5 +112,3 @@ coastline-ui
 ```
 
 See the [dashboard guide](...).
-
-

@@ -4,7 +4,7 @@ Coastline is the first scientific instrument for context-, policy-, and objectiv
 fine-tuning workloads.
 
 !!! note
-    The documentation is currently under construction. 
+    The documentation is currently under construction.
 
 ## Features
 
@@ -20,8 +20,8 @@ fine-tuning workloads.
 7. Integrated with [IBM ado](https://research.ibm.com/blog/ado-accelerated-discovery-orchestrator-experiments) as a plugin experiment, via the [programmatic interface](6_specifications.md).
 
 !!! tip
-    Coastline is an open-source project and we encourage you to explore our [GitHub repository](https://github.com/atlarge-research/coastline-recommender). 
-    We welcome contributions, feedback, and suggestions from the community. 
+    Coastline is an open-source project and we encourage you to explore our [GitHub repository](https://github.com/atlarge-research/coastline-recommender).
+    We welcome contributions, feedback, and suggestions from the community.
     If you encounter any issues or have ideas for improvements, please feel free to open an issue or submit a pull request.
 
 ## Installation

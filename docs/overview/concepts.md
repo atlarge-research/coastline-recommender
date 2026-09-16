@@ -7,15 +7,15 @@ On this page we define and explain every keyword above.
 
 ## Recommendation
 
-Coastline receives an input entity to be improved. 
-Recommendation is the process of improving the entity to better align with the established objectives. 
+Coastline receives an input entity to be improved.
+Recommendation is the process of improving the entity to better align with the established objectives.
 The output of this recommendation is a set of improved entities.
 
 !!! example
     One can provide to Coastline the goal of minimizing the runtime of an LLM workload and a cluster configuration on which the given workload should be executed.
     Coastline will recommend the best GPU configuration to use for the received input.
 
-## Recommendation policy 
+## Recommendation policy
 
 Recommendation policies instruct Coastline's pipeline to structure recommendations in such a way that best represents a given [objective](#objective-awareness).
 
@@ -45,7 +45,7 @@ You can understand context-awareness as the set of hardware/logical components t
 
 ## Objective-awareness
 
-The objective is the goal for which Coastline makes recommendations. 
+The objective is the goal for which Coastline makes recommendations.
 In a datacenter environment, a (service-level) objective influences a decisions (e.g., up-scale infrastructure, change configuration); for Coastline, the objectives influence the configuration recommendation.
 
 !!! example
@@ -64,10 +64,9 @@ A fine-tuning job contains specifications about the LLM to be tuned, about the G
 
 ## Workload
 
-A workload is a set of [fine-tuning jobs](#fine-tuning-job) to be patched with Coastline recommendations. 
+A workload is a set of [fine-tuning jobs](#fine-tuning-job) to be patched with Coastline recommendations.
 A workload can contain one or more jobs.
 
-!!! example 
-    A workload can be a set of 10 fine-tuning jobs for different LLMs, each. 
+!!! example
+    A workload can be a set of 10 fine-tuning jobs for different LLMs, each.
     Or, a workload can be 1 fine-tuning job.
-
