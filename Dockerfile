@@ -45,10 +45,14 @@ WORKDIR /build
 #    the project itself out of this layer so it arrives as the wheel below, not as a source tree.
 #    EXTRAS keeps its documented "[ml]" / "[ml,plot]" spelling and is translated to `--extra` flags.
 COPY pyproject.toml uv.lock README.md LICENSE ./
+#    kavier is pinned to a git tag in uv.lock (the thesis freeze), so uv needs a git binary to
+#    fetch it; git is installed for this one layer and purged again so the runtime image stays lean.
 RUN set -eu; \
+    apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*; \
     extras=''; \
     for e in $(printf '%s' "${EXTRAS}" | tr -d '[]' | tr ',' ' '); do extras="${extras} --extra ${e}"; done; \
-    uv sync --locked --no-dev --no-install-project --python /usr/local/bin/python3.13 ${extras}
+    uv sync --locked --no-dev --no-install-project --python /usr/local/bin/python3.13 ${extras}; \
+    apt-get purge -y git && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
 # 2. The project itself, as the built wheel only. `--no-deps`: the dependency set is exactly what
 #    the lock said — nothing may be re-resolved from PyPI at this point.
