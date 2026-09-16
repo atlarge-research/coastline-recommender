@@ -1,6 +1,6 @@
 # Getting started
 
-In this section, you will learn how to install Coastline and make your first recommendation. 
+In this section, you will learn how to install Coastline and make your first recommendation.
 In this section you will find step-by-step guidelines for using Coastline as a:
 
 1. [Programmatic tool](#1-using-coastline-as-a-programmatic-tool) — install Coastline, make your first recommendation, choose an objective.
@@ -66,13 +66,13 @@ The output is:
 gpus_per_node=2 number_of_nodes=1 total_gpus=2 strategy='multi_objective_balanced' predicted_throughput=7710.76 predicted_runtime_seconds=None metadata={'predicted_power_watts': 223.04, 'combined_score': 0.72, 'rank': 1, 'selection_policy': 'balanced', 'tokens_per_watt': 34.57, 'throughput_score': 0.59, 'power_score': 0.85, 'feasibility': {'Rule-Based Classifier error': '', 'Predictive Model Classifier error': None}, 'batch_size': 64, 'workflow': 'grid_feasibility_simulate_policy', 'preset': 'balanced', 'alpha': 0.5, 'beta': 0.5}
 ```
 
-Read the recommendation as: 
+Read the recommendation as:
 ```
-run the job on 2 GPUs 
-on one node 
+run the job on 2 GPUs
+on one node
 with per-device batch size 64.
-This configuration is estimated to have a 
-throughput of 7,711  tokens/s 
+This configuration is estimated to have a
+throughput of 7,711  tokens/s
 and a power draw of 223 W.
 ```
 

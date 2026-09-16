@@ -83,8 +83,12 @@ uv run --all-extras pytest dev/trainer/tests          # trainer suite (own invoc
 uv run --all-extras pytest dev/benchmark/tests        # benchmark suite (own invocation)
 uv run --all-extras pytest -m ml_isolated -p no:cacheprovider   # native-ML tests (own process)
 uv run ruff check . && uv run mypy
+uv run --all-extras pytest --cov                      # …with a coverage report (CI adds --cov-report=xml for Codecov)
 uv run --group docs mkdocs serve                      # serve the docs at http://127.0.0.1:8000
 ```
+
+Run `uv run pre-commit install` once per clone and the ruff gates (plus whitespace hygiene) run on
+every commit; CI runs the same hooks with `uv run pre-commit run --all-files`.
 
 ## External dependencies (not vendored)
 

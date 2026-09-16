@@ -1,0 +1,28 @@
+# Local pre-commit gates. These are the CI lint gates, moved to the moment the mistake is made:
+# `.github/workflows/ci.yml` runs `pre-commit run --all-files`, so this file and CI cannot drift.
+#
+# Install once per clone:  uv run pre-commit install
+# Run over everything:     uv run pre-commit run --all-files
+#
+# The ruff rev is pinned to the SAME version as `ruff==0.15.15` in pyproject's dev group (and in
+# uv.lock). Bump both together, or a hook will disagree with CI about what "formatted" means.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.15
+    hooks:
+      # Lint, and fix what is mechanically fixable (import order, etc.). Anything left is a real
+      # finding: the hook fails and prints it.
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      # Whitespace hygiene, restricted to text we actually author. The bundled sample trace is a
+      # packaged data fixture that tests read back column-for-column, so it is left untouched; the
+      # serialized model pickles are binary and the hooks skip them on their own.
+      - id: end-of-file-fixer
+        exclude: ^src/coastline/sdk/.*/data/.*$
+      - id: trailing-whitespace
+        exclude: ^src/coastline/sdk/.*/data/.*$

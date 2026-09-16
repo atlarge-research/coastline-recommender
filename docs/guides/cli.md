@@ -472,11 +472,11 @@ coastline utils plot-trace \
 
     ```python
     {
-        'jobs': 5, 
-        'skipped': 0, 
-        'cluster_gpus': 16, 
-        'makespan_h': 3.0, 
-        'peak_gpus': 16, 
+        'jobs': 5,
+        'skipped': 0,
+        'cluster_gpus': 16,
+        'makespan_h': 3.0,
+        'peak_gpus': 16,
         'peak_queue': 4
     }
     ```

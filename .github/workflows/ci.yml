@@ -20,6 +20,17 @@ jobs:
         run: uv run ruff check .
       - name: Ruff (format check)
         run: uv run ruff format --check .
+      # Hook environments are cloned from GitHub on first use; cache them per config file.
+      - name: Cache pre-commit hook environments
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ runner.os }}-${{ hashFiles('.pre-commit-config.yaml') }}
+      # The same hooks contributors get locally (`uv run pre-commit install`), so the config cannot
+      # rot: ruff --fix and ruff-format re-check what the two steps above check, and the whitespace
+      # hooks are what CI adds on top.
+      - name: Pre-commit (all files)
+        run: uv run pre-commit run --all-files --show-diff-on-failure
       - name: Mypy (strict — gated packages)
         run: uv run mypy
 

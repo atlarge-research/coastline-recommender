@@ -91,6 +91,7 @@ dev = [
     "types-tqdm",
     "types-cachetools",
     "httpx2>=2.0.0",   # FastAPI/starlette TestClient HTTP backend (test-only)
+    "pre-commit>=4.6.2",   # local git hooks; CI runs the same hooks (.pre-commit-config.yaml)
 ]
 # Documentation site (MkDocs Material). Synced on demand: `uv sync --group docs`.
 docs = [
