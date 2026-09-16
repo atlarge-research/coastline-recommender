@@ -1,5 +1,10 @@
 # Coastline
 
+[![CI](https://github.com/atlarge-research/coastline-recommender/actions/workflows/ci.yml/badge.svg)](https://github.com/atlarge-research/coastline-recommender/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/atlarge-research/coastline-recommender/branch/main/graph/badge.svg)](https://codecov.io/gh/atlarge-research/coastline-recommender)
+[![PyPI](https://img.shields.io/pypi/v/coastline-recommender.svg)](https://pypi.org/project/coastline-recommender/)
+[![MIT License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
 Context-aware recommender for **GPU / datacenter configurations** for LLM fine-tuning: given a
 workload it grid-searches configs, filters infeasible ones, predicts **throughput + power**, and
 ranks them on a performance↔energy score. Throughput comes from **Kavier** (analytical physics) or

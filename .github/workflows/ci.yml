@@ -25,15 +25,28 @@ jobs:
 
   # 2. Tests (uv). The full suite needs the ml + autoconf extras (they resolve on 3.13); once synced
   #    with --all-extras, every `uv run` uses --no-sync so it does not drop the extras.
+  #    Coastline is POSIX-first (the interactive REPL drives the terminal via termios), and macOS is
+  #    the other half of that promise — it is what the authors develop on, so CI keeps it working.
   test:
     needs: lint
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write  # tokenless (OIDC) Codecov upload — see the upload step below
+    strategy:
+      fail-fast: false   # one platform's failure must not hide the other's
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with:
           enable-cache: true
       - name: Sync (dev + all runtime extras)
+        # --all-extras on BOTH runners: every [ml] backend (torch, tabpfn, catboost, xgboost,
+        # lightgbm) and the autogluon tree ado-autoconf pulls resolve and import on macOS arm64
+        # from this same lock — verified locally — and the macOS wheels are far lighter than the
+        # CUDA-carrying Linux ones, so a reduced macOS extras set would buy nothing.
         run: uv sync --python 3.13 --all-extras
       - name: CLI smoke (entry points resolve)
         run: |
@@ -52,7 +65,7 @@ jobs:
         # CI validates the shipped package. The dev trainer/benchmark tests require the external
         # trace-archive dataset (not available in CI); run them locally, each in its own invocation:
         # `uv run --all-extras pytest dev/trainer/tests` / `... dev/benchmark/tests`.
-        run: uv run --no-sync pytest
+        run: uv run --no-sync pytest --cov=coastline --cov-report=xml
       - name: Run pytest (ado experiment plugin)
         # The plugin is not in `testpaths`, so name its suite explicitly. It runs in the ROOT
         # environment on purpose: ado-core is already here transitively via ado-autoconf, and a
@@ -60,8 +73,22 @@ jobs:
         # PyPI (not published) without the root's pyarrow override.
         run: uv run --no-sync pytest dev/ado_plugin/ado_coastline/test
       - name: Native-ML predictor tests (informational — featv3 pickles may need regen on 3.13)
+        # Linux only: this leg is already informational (continue-on-error), and the libomp-bundling
+        # backends it co-loads are the reason the marker exists — one platform's signal is enough.
+        if: matrix.os == 'ubuntu-latest'
         continue-on-error: true
         run: uv run --no-sync pytest -m ml_isolated -p no:cacheprovider
+
+      # Tokenless upload via OIDC (needs this job's `id-token: write` above), so no CODECOV_TOKEN
+      # secret is required for pushes from this repo. Coverage is a signal, not a gate: a Codecov
+      # outage or a fork PR (no OIDC) must never fail an otherwise-green run.
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          use_oidc: true
+          files: coverage.xml
+          flags: ${{ matrix.os }}
+          fail_ci_if_error: false
 
   # 1. Build the wheel and prove it ships whole: install into a fresh venv (no repo on the
   #    path) and smoke every console script + packaged data.

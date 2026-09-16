@@ -37,6 +37,11 @@ jobs:
   # 1-4. Reuse the full CI suite (lint + mypy + tests + wheel-smoke + docker-build + docs) as the gate.
   gates:
     needs: guard
+    # A called workflow can never hold more than the caller grants it, and ci.yml's test job asks
+    # for `id-token: write` (tokenless Codecov upload). Raise the ceiling here or the gate errors.
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/ci.yml
 
   # Build the wheel + sdist ONCE; PyPI and the GitHub release consume this exact artifact.

@@ -178,6 +178,15 @@ markers = [
     "ml_isolated: native-ML predictor tests; run in their own pytest process",
 ]
 
+# Coverage is measured over the shipped package only (the dev/ trainer + benchmark trees and the
+# tests themselves are not part of the distribution). `uv run pytest --cov` needs no arguments
+# locally; CI adds `--cov-report=xml` for the Codecov upload.
+[tool.coverage.run]
+source = ["coastline"]
+
+[tool.coverage.report]
+show_missing = true
+
 [tool.mypy]
 python_version = "3.13"
 strict = true
