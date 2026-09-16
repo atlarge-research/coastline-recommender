@@ -31,8 +31,9 @@ classifiers = [
     # The interactive `coastline recommend-job --interactive` REPL drives the terminal via termios/tty,
     # so the distribution is POSIX-first; the one-shot subcommands run anywhere.
     "Operating System :: POSIX",
+    # 3.13 only — `requires-python = ">=3.13,<3.14"`. Add a classifier when the cap moves, not before:
+    # a 3.14 classifier on a distribution pip refuses to install on 3.14 is just a wrong index entry.
     "Programming Language :: Python :: 3.13",
-    "Programming Language :: Python :: 3.14",
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
