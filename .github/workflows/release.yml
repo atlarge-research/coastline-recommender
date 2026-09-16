@@ -6,9 +6,13 @@ name: Release
 #     -> PyPI (OIDC) + Docker Hub (cli & ui) in parallel -> GitHub release.
 # The version lives ONLY in pyproject.toml; __version__ is read from installed metadata, and the docs
 # and Dockerfile carry no hardcoded version — so a single bump propagates everywhere.
+# Plain semver tags ONLY. GitHub filter patterns are full-ref matches, `[0-9]` is a character class
+# and `+` means "one or more of the preceding element" (filter pattern cheat sheet), so `v0.2.3`
+# starts a release while suffixed freeze/marker tags (`v0.2.2-thesis`, `v0.2.3rc1`) and
+# four-component tags (`v0.2.2.1`) leave the trailing characters unmatched and never trigger it.
 on:
   push:
-    tags: ["v*.*.*"]
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
 
 permissions:
   contents: read
@@ -33,6 +37,11 @@ jobs:
   # 1-4. Reuse the full CI suite (lint + mypy + tests + wheel-smoke + docker-build + docs) as the gate.
   gates:
     needs: guard
+    # A called workflow can never hold more than the caller grants it, and ci.yml's test job asks
+    # for `id-token: write` (tokenless Codecov upload). Raise the ceiling here or the gate errors.
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/ci.yml
 
   # Build the wheel + sdist ONCE; PyPI and the GitHub release consume this exact artifact.
@@ -55,13 +64,18 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     permissions:
-      id-token: write
+      id-token: write  # mints the Trusted-Publishing OIDC token AND signs the attestations
     steps:
       - uses: actions/download-artifact@v4
         with:
           name: dist
           path: dist
+      # PEP 740 attestations: each sdist/wheel is signed with the workflow's Sigstore identity and
+      # uploaded alongside it, so PyPI can prove this exact artifact came from this tag in this repo.
+      # Only works on Trusted-Publishing flows, and needs no permission beyond `id-token: write`.
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          attestations: true
 
   # 5. Build + push the cli and ui images to Docker Hub — ONLY if configured. Set the secrets
   #    DOCKERHUB_USERNAME + DOCKERHUB_TOKEN and the repo variable DOCKERHUB_NAMESPACE; if that

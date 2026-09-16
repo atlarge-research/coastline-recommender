@@ -1,0 +1,34 @@
+# Weekly dependency updates. Kept deliberately small: two ecosystems, grouped into one PR each, so
+# a maintained-but-low-traffic research package gets security and version drift surfaced without a
+# PR queue nobody reads.
+version: 2
+updates:
+  # Pinned action SHAs/tags in .github/workflows/. Dependabot scans .github/workflows from "/".
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci"
+
+  # Python dependencies resolved from pyproject.toml + uv.lock (the `uv` ecosystem understands the
+  # lockfile and PEP 735 dependency groups, so dev-only bumps stay separated from runtime ones).
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      # Runtime pins move on their own PR — they change what users install.
+      production-dependencies:
+        dependency-type: "production"
+        patterns: ["*"]
+      # ruff/mypy/pytest churn weekly and is not worth one PR each.
+      development-dependencies:
+        dependency-type: "development"
+        patterns: ["*"]
+    commit-message:
+      prefix: "deps"
+      prefix-development: "chore"

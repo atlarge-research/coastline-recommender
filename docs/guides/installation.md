@@ -54,7 +54,7 @@ coastline
 
 # Output:
 # usage: coastline <command> [options]
-# 
+#
 # commands:
 #   recommend        Batch-recommend GPU/node configs for a CSV of workloads (CSV in -> CSV out).
 #   run              Run one config-file experiment; write a recommendation.json run artifact.
@@ -62,7 +62,7 @@ coastline
 #   plot-trace       Plot a recommended trace: cluster timeline, GPUs in use + jobs queued ([plot] extra).
 #   interactive      Guided keyboard-driven REPL over the recommender.
 #   tune             Tune a data-driven predictor (tabpfn) on your own measured-runs CSV ([ml] extra).
-# 
+#
 # Run `coastline <command> --help` for command-specific options.
 ```
 
@@ -116,4 +116,3 @@ costline-ui
 ```
 
 You can learn more about the UI capabilities by reading the [command-line guide]().
-

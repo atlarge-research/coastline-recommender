@@ -1,0 +1,36 @@
+{
+  "upload_type": "software",
+  "title": "COASTLINE: A Context-Aware Recommender for GPU and Datacenter Configurations for LLM Fine-Tuning",
+  "description": "Coastline is a context-aware recommender for GPU and datacenter configurations for LLM fine-tuning: given a workload it grid-searches configurations, filters infeasible ones, predicts throughput and power, and ranks the survivors on a performance-energy score. Throughput comes from Kavier (analytical physics) or a data-driven model; energy from Kavier-power; feasibility from IBM AutoConf.",
+  "version": "0.2.2",
+  "license": "MIT",
+  "access_right": "open",
+  "creators": [
+    {
+      "name": "Nicolae, Radu",
+      "affiliation": "Vrije Universiteit Amsterdam"
+    },
+    {
+      "name": "AtLarge Research"
+    }
+  ],
+  "keywords": [
+    "llm",
+    "fine-tuning",
+    "gpu",
+    "datacenter",
+    "recommender",
+    "throughput",
+    "energy-efficiency",
+    "carbon",
+    "sustainability",
+    "mlops"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/atlarge-research/coastline-recommender",
+      "relation": "isSupplementTo",
+      "scheme": "url"
+    }
+  ]
+}

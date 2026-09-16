@@ -1,5 +1,10 @@
 # Coastline
 
+[![CI](https://github.com/atlarge-research/coastline-recommender/actions/workflows/ci.yml/badge.svg)](https://github.com/atlarge-research/coastline-recommender/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/atlarge-research/coastline-recommender/branch/main/graph/badge.svg)](https://codecov.io/gh/atlarge-research/coastline-recommender)
+[![PyPI](https://img.shields.io/pypi/v/coastline-recommender.svg)](https://pypi.org/project/coastline-recommender/)
+[![MIT License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
 Context-aware recommender for **GPU / datacenter configurations** for LLM fine-tuning: given a
 workload it grid-searches configs, filters infeasible ones, predicts **throughput + power**, and
 ranks them on a performance↔energy score. Throughput comes from **Kavier** (analytical physics) or
@@ -78,8 +83,12 @@ uv run --all-extras pytest dev/trainer/tests          # trainer suite (own invoc
 uv run --all-extras pytest dev/benchmark/tests        # benchmark suite (own invocation)
 uv run --all-extras pytest -m ml_isolated -p no:cacheprovider   # native-ML tests (own process)
 uv run ruff check . && uv run mypy
+uv run --all-extras pytest --cov                      # …with a coverage report (CI adds --cov-report=xml for Codecov)
 uv run --group docs mkdocs serve                      # serve the docs at http://127.0.0.1:8000
 ```
+
+Run `uv run pre-commit install` once per clone and the ruff gates (plus whitespace hygiene) run on
+every commit; CI runs the same hooks with `uv run pre-commit run --all-files`.
 
 ## External dependencies (not vendored)
 
