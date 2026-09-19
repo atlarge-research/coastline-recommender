@@ -132,7 +132,8 @@ The `predictors:` block selects one [simulation model](5_simulation_models.md) p
 | `performance` | String | no | `intelligent` (default), `kavier`, `cache`, or a trained model name (`tabpfn`, `catboost`, ...). |
 | `fallback` | String | no | For `intelligent`: the model a cache miss simulates with — `kavier` (default), or any trained model name. |
 | `energy` | String | no | `kavier_power` (default). |
-| `feasibility` | String | no | `autoconf` (default, OOM-aware; see the [feasibility checker](6_feasibility_checker.md)) or `rules` (divisibility only). |
+| `feasibility` | String | no | `autoconf` (default: the structural guards, then the OOM-aware AutoConf classifier; see the [feasibility checker](6_feasibility_checker.md)) or `rules` (the structural guards alone — a positive GPU count and a per-device batch of at least 1 — with no memory model and no OOM check). |
+| `empirical_oom_guard` | Bool | no | Layer the [empirical OOM guard](6_feasibility_checker.md#the-empirical-oom-guard) — a budget of 60,224 tokens per device, fitted to the OOMs observed in Coastline's calibration campaigns — over the selected feasibility backend; `false` by default, and the budget only ever turns a feasible configuration infeasible. |
 | `lookup` | String | no | Measured-runs DB for `cache`/`intelligent`: a CSV path, or `default` for the bundled `run_database.csv`. |
 | `lookup_throughput_col` | String | no | Column a cache hit reads as throughput (default `dataset_tokens_per_second`). |
 | `lookup_runtime_col` | String | no | Column a cache hit reads as duration (default `train_runtime`). |

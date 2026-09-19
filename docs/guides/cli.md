@@ -164,7 +164,7 @@ coastline recommend-job \
     predictors:
       performance: kavier      # analytical engine; alt: tabpfn/catboost/... (needs the [ml] extra)
       energy: kavier_power
-      feasibility: rules       # divisibility-only; keeps this example cheap.
+      feasibility: rules       # structural guards only; keeps this example cheap.
                                # Production default is `autoconf` (OOM-aware; ships in the core install).
 
     grid:                      # search space swept per workload row
@@ -237,7 +237,7 @@ The `coastline simulate` command predicts throughput, power, runtime, and energy
 
 Use it when you already know the configuration and want the numbers behind it: [`coastline recommend-job`](#recommend-a-job) searches the grid for the configuration instead, and [`coastline explain`](#explain) shows how the search ranked the configuration.
 
-The command needs no config file. The workload flags are `--model`, `--method`, `--gpu-model`, `--tokens`, and `--batch-size` (per device); the layout flags are `--gpus-per-node` and `--nodes` (both default: 1). The `--predictor` flag selects the simulation model (default: `kavier`) and `--feasibility` the feasibility checker (default: `autoconf`; `rules` checks divisibility only and needs no AutoConf). The `--total-tokens` flag declares the dataset size and is required for runtime and energy: the analytical engine reports per-step time, not total runtime, so the command omits both fields and prints a note when `--total-tokens` is absent. The `--json` flag emits the raw result instead of the text report.
+The command needs no config file. The workload flags are `--model`, `--method`, `--gpu-model`, `--tokens`, and `--batch-size` (per device); the layout flags are `--gpus-per-node` and `--nodes` (both default: 1). The `--predictor` flag selects the simulation model (default: `kavier`) and `--feasibility` the feasibility checker (default: `autoconf`; `rules` applies the structural guards alone — a positive GPU count and a per-device batch of at least 1 — and needs no AutoConf). The `--total-tokens` flag declares the dataset size and is required for runtime and energy: the analytical engine reports per-step time, not total runtime, so the command omits both fields and prints a note when `--total-tokens` is absent. The `--json` flag emits the raw result instead of the text report.
 
 The command deliberately reports no score. A [recommendation policy](../4_recommendation_policies.md) score is min–max normalised across the configuration grid, so for a single configuration the score carries no information.
 

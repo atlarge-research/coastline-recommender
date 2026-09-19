@@ -17,6 +17,7 @@ import pytest
 
 import coastline
 from coastline import Coastline
+from coastline.sdk.constants import EMPIRICAL_OOM_TOKEN_BUDGET
 from coastline.sdk.models.recommendation import Recommendation
 
 # Preset -> (alpha=power weight, beta=throughput weight), the canonical spec the
@@ -304,3 +305,28 @@ def test_rules_feasibility_admits_all_per_device_configs(monkeypatch):
     admitted = {r.total_gpus for r in out}
     # Per-device batch 8 is feasible on every budget entry — including the non-divisor 3.
     assert admitted == {1, 2, 3, 4, 8}
+
+
+def test_empirical_oom_guard_vetoes_over_budget_per_device_loads(monkeypatch):
+    """``Coastline(feasibility="rules", empirical_oom_guard=True)`` layers the empirical
+    per-device token ceiling on top of the rules checker. The ceiling is PER DEVICE, so an
+    over-budget ``batch_size x tokens_per_sample`` is vetoed at EVERY GPU count — no layout
+    can rescue it — while the same load passes with the guard off, and a below-budget load
+    passes with it on. The oracle is the constant itself, not a pinned number."""
+    monkeypatch.setenv("COASTLINE_ALLOW_RULES_FALLBACK", "1")
+    over, under = 32 * 2048, 32 * 1024
+    assert over > EMPIRICAL_OOM_TOKEN_BUDGET > under, "test workloads must straddle the budget"
+    over_wl = {**_workload(), "tokens_per_sample": 2048, "batch_size": 32}
+    under_wl = {**_workload(), "tokens_per_sample": 1024, "batch_size": 32}
+    budgets = [1, 2, 4, 8]
+
+    unguarded = Coastline("kavier", feasibility="rules")
+    assert unguarded.empirical_oom_guard is False
+    assert unguarded.recommend(over_wl, total_gpus=budgets, batch_sizes=[32], top_k=99)
+
+    guarded = Coastline("kavier", feasibility="rules", empirical_oom_guard=True)
+    assert guarded.empirical_oom_guard is True
+    with pytest.raises(RuntimeError, match="no feasible"):
+        guarded.recommend(over_wl, total_gpus=budgets, batch_sizes=[32], top_k=99)
+    out = guarded.recommend(under_wl, total_gpus=budgets, batch_sizes=[32], top_k=99)
+    assert {r.total_gpus for r in out} == set(budgets)

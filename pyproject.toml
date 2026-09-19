@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "coastline-recommender"
-version = "0.2.2"
+version = "0.2.3"
 description = "Context-aware GPU/datacenter configuration recommender for LLM fine-tuning"
 readme = "README.md"
 license = "MIT"
@@ -13,7 +13,7 @@ authors = [
     { name = "Radu Nicolae" },
     { name = "AtLarge Research", email = "info@atlarge-research.com" },
 ]
-requires-python = ">=3.13,<3.14"
+requires-python = ">=3.11,<3.14"
 keywords = [
     "llm",
     "fine-tuning",
@@ -31,8 +31,11 @@ classifiers = [
     # The interactive `coastline recommend-job --interactive` REPL drives the terminal via termios/tty,
     # so the distribution is POSIX-first; the one-shot subcommands run anywhere.
     "Operating System :: POSIX",
-    # 3.13 only — `requires-python = ">=3.13,<3.14"`. Add a classifier when the cap moves, not before:
+    # `requires-python = ">=3.11,<3.14"`. Add a classifier when the cap moves, not before:
     # a 3.14 classifier on a distribution pip refuses to install on 3.14 is just a wrong index entry.
+    # The <3.14 cap comes from ado-autoconf -> autogluon 1.5, which caps pyarrow<21.
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
@@ -54,7 +57,7 @@ dependencies = [
     # Kavier — the physics throughput/power engine (first-class dependency, on PyPI).
     # 0.5 exposes the engines under kavier.sdk.* (library / io / training) plus the top-level
     # kavier.inference / kavier.training verbs — which is what coastline imports.
-    "kavier>=0.5,<0.6",
+    "kavier>=0.5.2,<0.6",
     # AutoConf OOM-feasibility safeguard (open-source `ado`, on public PyPI) — ships by
     # default so the stock `feasibility: autoconf` check works out of the box.
     "ado-autoconf>=1.7,<2",
@@ -110,20 +113,13 @@ Homepage = "https://github.com/atlarge-research/coastline-recommender"
 Repository = "https://github.com/atlarge-research/coastline-recommender"
 Issues = "https://github.com/atlarge-research/coastline-recommender/issues"
 
-# ------------------------------------------------------------------
-#  uv resolver
-# ------------------------------------------------------------------
-[tool.uv]
-# kavier requires pyarrow>=23.0.1 (Arrow-IPC security GHSA); autogluon — pulled by
-# ado-autoconf (a core dependency) — caps pyarrow<21. The install runs pyarrow>=23
-# for kavier, so override autogluon's stale cap to let the lock resolve.
-override-dependencies = ["pyarrow>=23.0.1"]
-
-# The `kavier>=0.5,<0.6` range above resolves to the PyPI wheel 0.5.0.2, which predates the
-# submodule by 14 commits (policy renames, MFU/goodput). The thesis capsule must replicate against
-# the code the results were produced with, so pin the frozen snapshot by tag.
-[tool.uv.sources]
-kavier = { git = "https://github.com/atlarge-research/Kavier.git", tag = "v0.5.1-thesis" }
+# No [tool.uv] resolver overrides and no [tool.uv.sources].
+#
+# Both previously existed and both were removed in 0.2.3: neither propagates into the published
+# wheel, so they made a local `uv sync` resolve something no consumer could ever get. The Kavier
+# git pin is superseded by `kavier>=0.5.2,<0.6` against the real PyPI release, and the
+# `pyarrow>=23.0.1` override by Kavier's own relaxed `pyarrow>=15` floor. The reproducibility
+# capsule pins its own frozen Kavier independently and is unaffected.
 
 # ------------------------------------------------------------------
 #  Build backend
@@ -158,7 +154,7 @@ source-exclude = ["**/__pycache__/**", "**/*.pyc"]
 # ------------------------------------------------------------------
 [tool.ruff]
 line-length = 120
-target-version = "py313"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
@@ -175,9 +171,7 @@ ignore = []
 testpaths = ["tests"]
 # The dev trainer/benchmark suites import the `trainer`/`benchmark` packages by name;
 # they resolve with dev/ on the path (only used when those suites are run explicitly).
-# dev/ado_plugin is the ado plugin's own package root, so `ado_coastline` imports from the
-# root env without a second resolution; its suite is only collected when named explicitly.
-pythonpath = ["dev", "dev/ado_plugin"]
+pythonpath = ["dev"]
 # Native-ML predictor tests co-load libomp-bundling backends that can crash in one
 # interpreter, so they carry the `ml_isolated` marker and are deselected by default;
 # run them in their own process: `uv run pytest -m ml_isolated -p no:cacheprovider`.
@@ -196,7 +190,7 @@ source = ["coastline"]
 show_missing = true
 
 [tool.mypy]
-python_version = "3.13"
+python_version = "3.11"
 strict = true
 mypy_path = "src"
 plugins = ["pydantic.mypy"]

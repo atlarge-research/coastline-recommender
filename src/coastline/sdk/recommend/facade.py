@@ -77,10 +77,21 @@ class Coastline:
         *,
         energy: str = EnergyBackend.KAVIER_POWER.value,
         feasibility: str = FeasibilityMode.AUTOCONF.value,
+        empirical_oom_guard: bool = False,
     ) -> None:
+        """Configure the recommender's predictor backends.
+
+        ``empirical_oom_guard`` layers the empirical per-device token ceiling
+        (``EMPIRICAL_OOM_TOKEN_BUDGET``, fitted to observed OOMs) on top of whichever
+        ``feasibility`` backend is selected. It is off by default because it only ever
+        turns feasible into infeasible; it exists so a caller without AutoConf — e.g. one
+        on the structural-guards-only ``rules`` backend — can still refuse the per-device
+        loads that were seen to OOM.
+        """
         self.predictor = normalize_predictor(predictor)
         self.energy = energy
         self.feasibility = feasibility
+        self.empirical_oom_guard = empirical_oom_guard
 
     def recommend(
         self,
@@ -119,6 +130,7 @@ class Coastline:
                 "performance": self.predictor,
                 "energy": self.energy,
                 "feasibility": self.feasibility,
+                "empirical_oom_guard": self.empirical_oom_guard,
             },
             "grid": {
                 # No explicit grid -> search the full menu; generate_candidates clips it to max_gpus.

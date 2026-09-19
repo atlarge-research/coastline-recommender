@@ -44,7 +44,7 @@ In this documentation you will find:
 2. [Setting up an experiment](3_experiment.md) — the config folder, file by file.
 3. [Recommendation policies](4_recommendation_policies.md) — min-GPU and multi-objective.
 4. [Simulation models](5_simulation_models.md) — the performance, energy, and feasibility predictors.
-5. [Feasibility checker](6_feasibility_checker.md) — IBM AutoConf.
+5. [Feasibility checker](6_feasibility_checker.md) — IBM AutoConf, the structural `rules` guards, and the opt-in empirical OOM guard.
 6. [Specifications](6_specifications.md) — the CLI, configuration, and SDK reference.
 7. [Terminology](7_terminology.md) — one canonical term per thing.
 

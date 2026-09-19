@@ -58,7 +58,7 @@ def _write_trace(tmp_path, rows) -> str:
 
 
 def _rules_throughput() -> float:
-    """Throughput kavier assigns to the fixture workload on the divisibility-only
+    """Throughput kavier assigns to the fixture workload on the structural-guards-only
     (rules) path — fetched via a SEPARATE recommend() call so it is an independent
     oracle for recommend_trace's estimated_duration = total_tokens / throughput."""
     import coastline
@@ -137,7 +137,7 @@ def test_recommend_trace_estimated_duration_scales_linearly_with_runtime(tmp_pat
 def test_recommend_trace_autoconf_default_does_not_fall_back_to_rules(tmp_path):
     """The default feasibility='autoconf' runs the real OOM check, which caps a
     full fine-tune of a 7B model on a single 80GB A100 to a SMALLER batch than the
-    divisibility-only ('rules') path admits. Different batch -> different throughput
+    structural-guards-only ('rules') path admits. Different batch -> different throughput
     -> a DIFFERENT (here: larger, more conservative) estimated_duration.
 
     Oracle/contract: est_autoconf must be positive AND must differ from est_rules.
@@ -166,7 +166,7 @@ def test_recommend_trace_autoconf_default_does_not_fall_back_to_rules(tmp_path):
 
 def test_recommend_feasibility_rules_works_without_autoconf(monkeypatch):
     """``coastline.recommend(..., feasibility='rules')`` succeeds with no AutoConf
-    install and no COASTLINE_ALLOW_RULES_FALLBACK — the divisibility-only path must
+    install and no COASTLINE_ALLOW_RULES_FALLBACK — the structural-guards-only path must
     not refuse. Beyond the no-refusal contract, cross-check the derived metrics
     against their definitions (a form independent of the engine's internals):
       tokens_per_watt = throughput / power_per_gpu

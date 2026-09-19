@@ -60,7 +60,13 @@ def is_expensive(checker: FeasibilityChecker) -> bool:
 
 
 class _RulesThenAutoconfChecker:
-    """Divisibility rules first, then AutoConf OOM classifier. Rules guard configs the classifier never trained on."""
+    """Structural sanity guards first, then the AutoConf OOM classifier.
+
+    The guards are the two checks in :class:`RulesFeasibilityChecker` — a positive GPU count and
+    a per-device batch of at least 1 — so they carry no memory model of their own; they only keep
+    non-jobs the classifier was never trained on from reaching it. The empirical per-device token
+    budget is a separate, opt-in layer (see :func:`_wrap_with_empirical_guard`).
+    """
 
     def __init__(self, model_version: str):
         self._rules = RulesFeasibilityChecker()
@@ -68,7 +74,7 @@ class _RulesThenAutoconfChecker:
 
     @property
     def EXPENSIVE(self) -> bool:  # noqa: N802 — mirrors the class-level flag on plain checkers
-        """Worth forking exactly when the AutoConf leg is: the rules leg is a modulo."""
+        """Worth forking exactly when the AutoConf leg is: the guard leg is two integer comparisons."""
         return bool(getattr(self._autoconf, "EXPENSIVE", False))
 
     def is_feasible(self, workload: WorkloadSpec) -> tuple[bool, dict[str, Any]]:
@@ -136,7 +142,9 @@ def create_feasibility_checker(predictor_config: dict) -> FeasibilityChecker:
             "feasibility=autoconf requested but the AutoConf model cannot be loaded "
             "(needs Python >= 3.10 and the ado autoconf package: "
             "pip install 'coastline-recommender[autoconf]'). "
-            "Set COASTLINE_ALLOW_RULES_FALLBACK=1 to knowingly degrade to divisibility-only rules."
+            "Set COASTLINE_ALLOW_RULES_FALLBACK=1 to knowingly degrade to the rules backend: "
+            "structural sanity guards only (positive GPU count, per-device batch >= 1), "
+            "no memory model and no OOM check."
         )
 
     if mode == FeasibilityMode.RULES:

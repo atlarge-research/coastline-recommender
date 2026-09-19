@@ -12,7 +12,7 @@ from coastline.sdk.recommend import engine
 
 
 def _kavier_answers() -> dict:
-    """Analytical-engine answers (no ML unpickle), divisibility-only feasibility so the
+    """Analytical-engine answers (no ML unpickle), structural-guards-only feasibility so the
     test is hermetic and needs no AutoConf install."""
     answers = engine.defaults(engine.resolve_options())
     answers["predictor"] = "kavier"

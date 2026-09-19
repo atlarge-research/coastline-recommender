@@ -54,7 +54,7 @@ def _build_parser() -> FriendlyParser:
         "--feasibility",
         default="autoconf",
         help="Feasibility checker: autoconf (default, real OOM check via AutoConf) "
-        "| rules (divisibility-only, works without AutoConf) | none.",
+        "| rules (structural sanity guards only, no OOM check; works without AutoConf) | none.",
     )
     return p
 

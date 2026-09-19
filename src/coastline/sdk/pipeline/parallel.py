@@ -17,8 +17,9 @@ Two properties are load-bearing:
   grid insertion order, so any reordering would silently change which config wins.
 * **Worth it.** A stage forks only when its per-candidate work dominates the cost of shipping the
   candidate to a worker. The AutoConf feasibility classifier (~3.3 ms/candidate) qualifies; the
-  divisibility ``rules`` backend and the analytical Kavier predictor (~2.6 us) do not — for those
-  the dispatch would cost more than the work, so they always run inline.
+  ``rules`` backend (two integer comparisons — structural sanity guards, no memory model) and the
+  analytical Kavier predictor (~2.6 us) do not — for those the dispatch would cost more than the
+  work, so they always run inline.
 
 Processes, not threads: the GIL makes threads useless for the native predictors, and the ML
 backends are not safe to co-load in one interpreter anyway.

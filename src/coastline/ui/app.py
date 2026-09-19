@@ -146,7 +146,8 @@ class BatchRecommendRequest(BaseModel):
     max_gpus: Optional[int] = Field(default=None, gt=0)
     max_slowdown: Optional[float] = Field(default=None, gt=0)
     # Feasibility checker (autoconf | rules | none), mirroring the single /api/recommend
-    # path and the python API. 'rules' is the divisibility-only path that needs no AutoConf.
+    # path and the python API. 'rules' is structural sanity guards only (positive GPU count,
+    # per-device batch >= 1) — no memory model, no OOM check — and needs no AutoConf.
     feasibility: str = "autoconf"
 
 

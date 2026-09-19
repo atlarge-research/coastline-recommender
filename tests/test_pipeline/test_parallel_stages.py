@@ -734,7 +734,7 @@ class TestRunFeasibility:
         verdicts = run_feasibility(checker, {"feasibility": "rules"}, candidates, workers=4)
 
         assert verdicts == [checker.is_feasible(c) for c in candidates]
-        assert map_calls == [], "the rules backend is one modulo; forking it would cost more than the work"
+        assert map_calls == [], "the rules backend is two integer comparisons; forking it would cost more than the work"
         assert no_pool == []
 
     def test_no_predictor_config_means_no_fork(self, context, map_calls, no_pool):

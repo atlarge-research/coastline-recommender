@@ -87,8 +87,9 @@ def test_one_output_row_per_input_row_with_input_echoed(tmp_path):
 # min_gpu selection contract (hand-derived).
 # --------------------------------------------------------------------------- #
 def test_min_gpu_selects_single_gpu_when_runtime_guard_disabled(tmp_path):
-    # Grid total_gpus = [1,2,4,8], batch_size 16. Divisibility rule: feasible iff
-    # 16 % total_gpus == 0 -> ALL of {1,2,4,8} feasible. With the runtime guard off,
+    # Grid total_gpus = [1,2,4,8], batch_size 16. Rules backend = structural guards
+    # only (per-device batch 16 >= 1, every total_gpus >= 1) -> ALL of {1,2,4,8}
+    # feasible. With the runtime guard off,
     # min_gpu ranks by (total_gpus asc) so it MUST pick the smallest: 1 GPU.
     # A 1-GPU layout on <=8 GPUs/node => gpus_per_node=1, number_of_nodes=1.
     _, rows = _run_batch(

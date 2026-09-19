@@ -149,7 +149,7 @@ def _infeasible_note(max_gpus: int, feasibility: str) -> str:
     cause = (
         "every config would run out of GPU memory (autoconf OOM check)"
         if feasibility == FeasibilityMode.AUTOCONF
-        else "no config passes the divisibility rules"
+        else "no config passes the structural feasibility guards"
     )
     return f"infeasible within {max_gpus} GPUs: {cause}"
 
@@ -344,7 +344,8 @@ def recommend_trace(
     ``feasibility="autoconf"`` (default) runs the real AutoConf OOM check — it
     fail-closes if AutoConf (the ``coastline[autoconf]`` extra) is
     not installed (use ``COASTLINE_ALLOW_RULES_FALLBACK=1`` to suppress).  Pass
-    ``feasibility="rules"`` to use the divisibility-only path (no OOM check,
+    ``feasibility="rules"`` to use the structural-guards-only path (a positive GPU
+    count and a per-device batch of at least 1; no memory model and no OOM check, so it
     works on any install).
 
     ``lookup`` points the ``cache``/``intelligent`` methods at a measured-runs CSV

@@ -21,7 +21,7 @@ predictors:
   performance: "intelligent"   # exact cache hit else the `fallback` model; alt: kavier, cache, or an ML model name
   fallback: "kavier"           # model used on a cache miss (kavier | catboost | xgboost | ...); intelligent only
   energy: "kavier_power"
-  feasibility: "autoconf"      # OOM-aware; alt: rules (divisibility-only)
+  feasibility: "autoconf"      # OOM-aware; alt: rules (structural guards only, no OOM check)
   # lookup: "default"                                 # cache DB CSV: a path, or "default" for the bundled run DB
   # lookup_throughput_col: "dataset_tokens_per_second"  # which column a cache hit reads as throughput
   # lookup_runtime_col: "train_runtime"                 # which column a cache hit reads as duration

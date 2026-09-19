@@ -57,7 +57,7 @@ coastline-ui                                                                    
 ```
 
 Run the full API tour with `uv run python docs/usage.py` (reproduced in the
-[getting-started guide](docs/getting-started.md)); see `config/` for sample configs.
+[getting-started guide](docs/guides/getting-started.md)); see `config/` for sample configs.
 
 ## Structure
 
@@ -70,9 +70,9 @@ One installable package under `src/coastline`:
 | `coastline.sdk` | the engine: `recommend · pipeline · predictors · policies · models · library · trace · io` |
 
 The `sdk` is import-light: `import coastline` pulls no heavy backend until a predictor needs it.
-Dev-only tooling (`benchmark/`, the ML `trainer/`, the `ado_plugin/`) lives under `dev/` and is
-excluded from the wheel; trained model pickles under `models/` are never shipped (regenerate via the
-trainer). See [Architecture](docs/architecture.md).
+Dev-only tooling (`benchmark/`, the ML `trainer/`) lives under `dev/` and is excluded from the
+wheel; trained model pickles under `models/` are never shipped (regenerate via the trainer). The
+ado experiment plugin lives in IBM's `ado` repository, under `plugins/custom_experiments/coastline`.
 
 ## Develop
 
@@ -92,7 +92,7 @@ every commit; CI runs the same hooks with `uv run pre-commit run --all-files`.
 
 ## External dependencies (not vendored)
 
-- **Kavier** — analytical throughput/power engine; PyPI dependency (`kavier>=0.5,<0.6`).
+- **Kavier** — analytical throughput/power engine; PyPI dependency (`kavier>=0.5.2,<0.6`).
 - **AutoConf** — OOM-feasibility safeguard (`ado-autoconf`); ships by default in the core install.
 
 ## License

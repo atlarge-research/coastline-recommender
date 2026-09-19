@@ -10,9 +10,9 @@ The module exposes three feasibility checkers, each with the same
   ``autogluon`` package plus ADO artifacts; when those are missing it must
   degrade gracefully (``(False, {"error": "autoconf_unavailable"})``) rather
   than raise.
-* ``RulesFeasibilityChecker`` — pure-Python divisibility rule
-  (``batch_size`` must be evenly divisible by ``total_gpus``, ``total_gpus``
-  must be >= 1). No external dependency.
+* ``RulesFeasibilityChecker`` — pure-Python structural sanity guards
+  (``total_gpus`` must be >= 1, per-device ``batch_size`` must be >= 1; no
+  divisibility test, no memory model, no OOM check). No external dependency.
 * ``NoOpFeasibilityChecker`` — accepts everything.
 
 Because the real AutoGluon model + ADO artifacts are not guaranteed to be

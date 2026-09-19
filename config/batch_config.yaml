@@ -14,7 +14,7 @@ strategy:
 predictors:
   performance: kavier      # analytical engine; alt: tabpfn/catboost/... (needs the [ml] extra)
   energy: kavier_power
-  feasibility: rules       # divisibility-only; keeps this example cheap.
+  feasibility: rules       # structural guards only; keeps this example cheap.
                            # Production default is `autoconf` (OOM-aware; ships in the core install).
 
 grid:                      # search space swept per workload row

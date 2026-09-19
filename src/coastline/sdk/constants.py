@@ -15,7 +15,7 @@ class FeasibilityMode(str, Enum):
     """How a candidate configuration's feasibility is checked."""
 
     AUTOCONF = "autoconf"  # OOM-aware AutoConf model (default)
-    RULES = "rules"  # divisibility rules only
+    RULES = "rules"  # structural sanity guards only; no memory model (see EMPIRICAL_OOM_TOKEN_BUDGET)
     NONE = "none"  # no feasibility check
 
 

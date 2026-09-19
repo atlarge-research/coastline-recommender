@@ -190,7 +190,8 @@ def recommend(
     use the same vocabulary as ``Coastline.recommend``. Per-row columns override kwargs. One bad row
     yields ``feasible=False`` without failing the rest. ``max_slowdown`` keeps only configs within k×
     of the fastest. ``feasibility`` picks the OOM checker (``autoconf`` | ``rules`` | ``none``); use
-    ``rules`` for the divisibility-only path that needs no AutoConf install.
+    ``rules`` for the structural-guards-only path (a positive GPU count and a per-device batch of
+    at least 1; no memory model, no OOM check) that needs no AutoConf install.
     ``lookup`` points the ``cache``/``intelligent`` predictors at a measured-runs CSV
     (or ``"default"`` for the small bundled lookup DB); other predictors ignore it.
     ``strategy_cache`` lets a caller that loops over many batches (e.g. a trace, one row per
