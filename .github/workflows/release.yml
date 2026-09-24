@@ -25,6 +25,7 @@ jobs:
   # 8. The tag must equal pyproject's version — the single source of truth.
   guard:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - name: Tag must equal pyproject.toml version
@@ -48,6 +49,7 @@ jobs:
   build:
     needs: gates
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -63,6 +65,7 @@ jobs:
   pypi:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       id-token: write  # mints the Trusted-Publishing OIDC token AND signs the attestations
     steps:
@@ -84,6 +87,7 @@ jobs:
     needs: gates
     if: ${{ vars.DOCKERHUB_NAMESPACE != '' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       matrix:
         target: [cli, ui]
@@ -116,6 +120,7 @@ jobs:
     needs: [pypi, docker]
     if: ${{ !cancelled() && needs.pypi.result == 'success' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
