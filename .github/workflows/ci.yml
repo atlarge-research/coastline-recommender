@@ -1,14 +1,19 @@
 name: CI
 
+# Pull requests only: a plain push (any branch or tag) runs nothing. Release tags still pass the
+# full suite through release.yml's gate; workflow_dispatch runs it by hand on any branch.
 on:
-  push:
   pull_request:
+  workflow_dispatch:
   workflow_call:   # reused by release.yml as the pre-publish gate
 
+# Every job is capped at 10 min (normal runs take under 6). GitHub's default is 360: on 2026-09-16 a
+# hung macOS test job (in Kavier) ran the full 6 h.
 jobs:
   # 3. Lint (ruff) + strict mypy on the gated packages.
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -36,21 +41,23 @@ jobs:
 
   # 2. Tests (uv). The full suite needs the ml + autoconf extras; once synced with --all-extras,
   #    every `uv run` uses --no-sync so it does not drop the extras.
-  #    Coastline is POSIX-first (the interactive REPL drives the terminal via termios), and macOS is
-  #    the other half of that promise — it is what the authors develop on, so CI keeps it working.
+  #    Linux only. Coastline is POSIX-first (the interactive REPL drives the terminal via termios);
+  #    macOS is covered by local development — it is what the authors work on — not by CI, where
+  #    its minutes cost ~10x.
   #    The interpreter dimension is exactly what the package advertises — `requires-python =
   #    ">=3.11,<3.14"` and the trove classifiers — so every advertised interpreter is proven, not
   #    assumed. uv fetches each one; no setup-python step is needed.
   test:
     needs: lint
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
     permissions:
       contents: read
       id-token: write  # tokenless (OIDC) Codecov upload — see the upload step below
     strategy:
       fail-fast: false   # one leg's failure must not hide any other leg's
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
         python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
@@ -58,10 +65,8 @@ jobs:
         with:
           enable-cache: true
       - name: Sync (dev + all runtime extras)
-        # --all-extras on BOTH runners: every [ml] backend (torch, tabpfn, catboost, xgboost,
-        # lightgbm) and the autogluon tree ado-autoconf pulls resolve and import on macOS arm64
-        # from this same lock — verified locally — and the macOS wheels are far lighter than the
-        # CUDA-carrying Linux ones, so a reduced macOS extras set would buy nothing.
+        # --all-extras: every [ml] backend (torch, tabpfn, catboost, xgboost, lightgbm) and the
+        # autogluon tree ado-autoconf pulls.
         run: uv sync --python ${{ matrix.python-version }} --all-extras
       - name: CLI smoke (entry points resolve)
         run: |
@@ -108,6 +113,7 @@ jobs:
   wheel-smoke:
     needs: lint
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -132,6 +138,7 @@ jobs:
   docker-build:
     needs: lint
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       matrix:
         target: [cli, ui]
@@ -150,6 +157,7 @@ jobs:
   docs:
     needs: lint
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
