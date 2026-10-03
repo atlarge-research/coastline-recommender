@@ -70,7 +70,7 @@ Hollmann et al., "Accurate predictions on small data with a tabular foundation m
 (2025), [doi:10.1038/s41586-024-08328-6](https://doi.org/10.1038/s41586-024-08328-6).
 The weights are licensed under the Prior Labs License v1.2; a copy is in
 [LICENSE-TabPFN.txt](https://github.com/atlarge-research/coastline-recommender/blob/main/LICENSE-TabPFN.txt). The
-model file is stored with Git LFS and left out of the PyPI wheel; clone the repository with Git LFS to use it.
+model file is in the repository and its Zenodo archive, and left out of the PyPI wheel.
 
 ## Citation
 

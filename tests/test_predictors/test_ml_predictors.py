@@ -8,8 +8,7 @@ The tests check only what does not depend on the model weights:
     model, and a non-negative Gaussian-process std that appears only when requested.
 
 Predictors are built per test with ``_build_named_ml_predictor``. The six sklearn-portfolio
-models share one class and keep distinct names. random_forest is stored in Git LFS, so its cases
-are skipped in a checkout that holds the pointer file (see ``lfs_model`` in conftest.py).
+models share one class and keep distinct names.
 """
 
 import math
@@ -41,14 +40,10 @@ _MODELS = [
     ("gaussian_process", "kernel"),
 ]
 _IDS = [m[0] for m in _MODELS]
-# Model files stored in Git LFS (.gitattributes).
-_LFS_MODELS = {"random_forest"}
 
 
 def _case(name: str, *values: str):
-    """One parametrize case, skipped where the model file is an LFS pointer."""
-    marks = [pytest.mark.lfs_model(name)] if name in _LFS_MODELS else []
-    return pytest.param(name, *values, marks=marks, id=name)
+    return pytest.param(name, *values, id=name)
 
 
 _OUT_OF_LIBRARY = WorkloadSpec(

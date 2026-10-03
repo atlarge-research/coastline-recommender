@@ -124,7 +124,7 @@ wheel-exclude = [
     "**/portfolio/knn.pkl",
     "**/portfolio/custom/**",
 ]
-# The sdist leaves out the Git LFS pickles, which a checkout without LFS holds only as pointer files.
+# The sdist leaves out the two large pickles, as the wheel does.
 source-exclude = [
     "**/__pycache__/**",
     "**/*.pyc",
