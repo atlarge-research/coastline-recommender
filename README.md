@@ -5,6 +5,7 @@ A context-aware recommender system for fine-tuning LLMs.
 [![MIT License](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/atlarge-research/coastline-recommender/blob/main/LICENSE)
 [![Documentation](https://img.shields.io/badge/docs-site-green.svg)](https://atlarge-research.github.io/coastline-recommender/)
 [![PyPI](https://img.shields.io/pypi/v/coastline-recommender.svg)](https://pypi.org/project/coastline-recommender/)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23119267.svg)](https://doi.org/10.5281/zenodo.23119267)
 
 Coastline makes context-, objective-, and policy-aware infrastructure recommendations for LLM fine-tuning
 workloads. It accounts for infrastructure constraints, workload demands, and user objectives, and recommends

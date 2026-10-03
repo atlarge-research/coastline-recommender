@@ -12,6 +12,7 @@ abstract: >-
   recommends best-fit configurations as part of an LLM fine-tuning ecosystem.
 type: software
 version: 0.2.3
+doi: 10.5281/zenodo.23119267
 date-released: "2026-10-03"
 license: MIT
 repository-code: "https://github.com/atlarge-research/coastline-recommender"
