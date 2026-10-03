@@ -1,36 +1,53 @@
 {
   "upload_type": "software",
-  "title": "COASTLINE: A Context-Aware Recommender for GPU and Datacenter Configurations for LLM Fine-Tuning",
-  "description": "Coastline is a context-aware recommender for GPU and datacenter configurations for LLM fine-tuning: given a workload it grid-searches configurations, filters infeasible ones, predicts throughput and power, and ranks the survivors on a performance-energy score. Throughput comes from Kavier (analytical physics) or a data-driven model; energy from Kavier-power; feasibility from IBM AutoConf.",
-  "version": "0.2.2",
+  "title": "Coastline: Exploring the impact of multi-objective, context-aware recommenders on performance and sustainability of datacenters under LLM fine-tuning workloads",
+  "description": "LLM fine-tuning workloads are complex and, until now, unpredictable, making it difficult to estimate computational demands. Coastline is a context-aware recommender system for fine-tuning LLMs. It accounts for infrastructure constraints, workload demands, and user objectives, and recommends best-fit configurations as part of an LLM fine-tuning ecosystem.",
+  "version": "0.2.3",
   "license": "MIT",
   "access_right": "open",
   "creators": [
     {
       "name": "Nicolae, Radu",
-      "affiliation": "Vrije Universiteit Amsterdam"
+      "affiliation": "Vrije Universiteit Amsterdam",
+      "orcid": "0009-0007-0318-9266"
     },
     {
-      "name": "AtLarge Research"
+      "name": "Lotito, Daniele",
+      "affiliation": "IBM Research",
+      "orcid": "0000-0003-0320-0043"
+    },
+    {
+      "name": "Iosup, Alexandru",
+      "affiliation": "Vrije Universiteit Amsterdam",
+      "orcid": "0000-0001-8030-9398"
+    }
+  ],
+  "contributors": [
+    {
+      "name": "AtLarge Research",
+      "type": "ResearchGroup"
     }
   ],
   "keywords": [
-    "llm",
+    "LLM",
     "fine-tuning",
-    "gpu",
-    "datacenter",
     "recommender",
-    "throughput",
-    "energy-efficiency",
-    "carbon",
+    "GPU",
+    "datacenter",
+    "performance",
     "sustainability",
-    "mlops"
+    "energy"
   ],
   "related_identifiers": [
     {
-      "identifier": "https://github.com/atlarge-research/coastline-recommender",
-      "relation": "isSupplementTo",
+      "identifier": "https://atlarge-research.github.io/coastline-recommender/",
+      "relation": "isDocumentedBy",
       "scheme": "url"
+    },
+    {
+      "identifier": "10.5281/zenodo.23110996",
+      "relation": "requires",
+      "scheme": "doi"
     }
   ]
 }

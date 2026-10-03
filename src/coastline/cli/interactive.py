@@ -1,4 +1,4 @@
-"""COASTLINE interactive CLI — guided REPL over the GPU-configuration recommender."""
+"""Interactive CLI: a guided REPL over the GPU-configuration recommender."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from coastline.cli._repl.prompts import Abort, Choice, fuzzy_select, menu, numbe
 from coastline.cli._repl.theme import ACCENT, banner, console
 from coastline.sdk.recommend import engine
 
-app = typer.Typer(add_completion=False, help="Interactive COASTLINE recommender — guided GPU-configuration advisor.")
+app = typer.Typer(add_completion=False, help="Interactive COASTLINE recommender - guided GPU-configuration advisor.")
 
 
 def _index(values: list, target: Any) -> int:
@@ -44,7 +44,7 @@ def _spec_hint_gpu(name: str) -> str:
 
 
 def _recommend_inputs(seed: Optional[dict[str, Any]] = None) -> dict[str, Any]:
-    """Guided prompt flow → a plain answers dict (re-seeded by 'tweak')."""
+    """Prompt for the workload and return the answers; ``seed`` pre-fills them for 'tweak'."""
     s = seed or {}
     opts = engine.resolve_options()
     d = engine.defaults(opts)
@@ -105,7 +105,7 @@ def _recommend_inputs(seed: Optional[dict[str, Any]] = None) -> dict[str, Any]:
             default=_index(top_keys, top_default),
         )
     )
-    if predictor == "ml":  # "trained ML model · you pick" → open a second list
+    if predictor == "ml":  # the trained-ML entry opens a second list
         ml_keys = [k for k, _ in engine.ML_MODELS]
         predictor = str(
             menu(
@@ -129,14 +129,14 @@ def _recommend_inputs(seed: Optional[dict[str, Any]] = None) -> dict[str, Any]:
 
 
 def _run_and_show(answers: dict[str, Any], top_k: int) -> tuple[list, dict[str, Any]]:
-    with render.spinner("Predicting throughput & energy, ranking configurations…"):
+    with render.spinner("Predicting throughput & energy, ranking configurations..."):
         recs, meta = engine.run_pipeline(answers, top_k)
     console.print()
     console.print(render.workload_panel(answers))
     if not recs:
         console.print(
             Panel(
-                "No feasible configuration in the search space — raise 'Max GPUs' or lower the batch size.",
+                "No feasible configuration in the search space - raise 'Max GPUs' or lower the batch size.",
                 title="[bold yellow]no recommendations[/]",
                 border_style="yellow",
                 padding=(1, 2),
@@ -149,7 +149,7 @@ def _run_and_show(answers: dict[str, Any], top_k: int) -> tuple[list, dict[str, 
     console.print(render.recommendation_panel(recs[0], meta))
     console.print(f"[dim]  why: {engine.recommendation_rationale(recs, meta)}[/]")
     console.print(
-        f"[dim]  {len(recs)} options ranked in {meta['elapsed_s']:.2f}s · energy = full run on your dataset[/]\n"
+        f"[dim]  {len(recs)} options ranked in {meta['elapsed_s']:.2f}s, energy = full run on your dataset[/]\n"
     )
     return recs, meta
 
@@ -160,9 +160,9 @@ def _save_to(rec: Any, path: Path, rationale: Optional[str] = None) -> None:
 
         path.parent.mkdir(parents=True, exist_ok=True)
         save_recommendation_to_json(rec, path, rationale=rationale)
-        console.print(f"[green]  ✓ saved[/] [cyan]{path}[/]")
-    except Exception as exc:  # noqa: BLE001 — surface any IO/serializer error gracefully
-        console.print(f"[red]  ✗ could not save: {exc}[/]")
+        console.print(f"[green]  saved[/] [cyan]{path}[/]")
+    except Exception as exc:  # noqa: BLE001 - report any IO or serializer error
+        console.print(f"[red]  could not save: {exc}[/]")
 
 
 def _save_top(recs: list, rationale: Optional[str] = None) -> None:
@@ -177,23 +177,21 @@ def _save_top(recs: list, rationale: Optional[str] = None) -> None:
 
 
 def _followups(answers: dict[str, Any], recs: list, meta: dict[str, Any], top_k: int) -> str:
-    """Loop after a run. Returns 'new' (fresh workload) or 'quit'."""
+    """Loop after a run. Returns 'new' (fresh workload) or 'quit'. Esc raises Abort, which takes
+    the REPL back to the start as at any other prompt."""
     while True:
-        try:
-            action = str(
-                menu(
-                    "Next",
-                    [
-                        Choice("objective", "Change objective & re-rank", "balanced / runtime / energy / fewest"),
-                        Choice("tweak", "Tweak inputs & re-run", "edit the workload"),
-                        Choice("save", "Save top recommendation", "write JSON"),
-                        Choice("new", "New workload", ""),
-                        Choice("quit", "Quit", ""),
-                    ],
-                )
+        action = str(
+            menu(
+                "Next",
+                [
+                    Choice("objective", "Change objective & re-rank", "balanced / runtime / energy / fewest"),
+                    Choice("tweak", "Tweak inputs & re-run", "edit the workload"),
+                    Choice("save", "Save top recommendation", "write JSON"),
+                    Choice("new", "New workload", ""),
+                    Choice("quit", "Quit", ""),
+                ],
             )
-        except Abort:
-            return "quit"
+        )
         if action in ("new", "quit"):
             return action
         if action == "tweak":
@@ -221,17 +219,17 @@ def _repl(top_k: int) -> None:
             recs, meta = _run_and_show(answers, top_k)
             action = _followups(answers, recs, meta, top_k)
         except Abort:
-            console.print("[dim]  cancelled — back to start[/]")
+            console.print("[dim]  cancelled - back to start[/]")
             seed = None
             continue
-        except Exception as exc:  # noqa: BLE001 — never let one bad run kill the REPL
-            console.print(f"[red]  ✗ {exc}[/]")
+        except Exception as exc:  # noqa: BLE001 - one failed run does not end the REPL
+            console.print(f"[red]  {exc}[/]")
             seed = None
             continue
         if action == "quit":
             break
-        seed = None  # "new" → fresh workload
-    console.print("\n[cyan]  thanks for using Coastline 👋[/]\n")
+        seed = None  # "new": start from a fresh workload
+    console.print("\n[cyan]  thanks for using Coastline[/]\n")
 
 
 def _run_noninteractive(top_k: int, save: Optional[Path]) -> None:
@@ -256,6 +254,9 @@ def main(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show engine INFO/WARNING logs."),
 ) -> None:
     """Guided, interactive GPU-configuration recommender for LLM fine-tuning."""
+    # The engine logs are quiet for this command only: the previous logging state comes back
+    # when it ends, so a caller in the same process keeps its own logging.
+    previous_disable = logging.root.manager.disable
     if not verbose:
         logging.disable(logging.WARNING)
     # Raw-key prompts need a real terminal; fall back to a one-shot defaults run
@@ -272,12 +273,14 @@ def main(
         else:
             _run_noninteractive(top_k, save)
     except (KeyboardInterrupt, Abort):
-        console.print("\n[cyan]  bye 👋[/]\n")
+        console.print("\n[cyan]  bye[/]\n")
         raise typer.Exit(code=0)
+    finally:
+        logging.disable(previous_disable)
 
 
 def run(argv: Optional[Sequence[str]] = None) -> None:
-    """Entry point for ``coastline recommend-job --interactive`` (dispatched from the unified CLI)."""
+    """Entry point for ``coastline recommend-job --interactive``."""
     app(args=list(argv) if argv is not None else [], prog_name="coastline recommend-job --interactive")
 
 

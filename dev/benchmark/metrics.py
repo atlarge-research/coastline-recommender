@@ -1,4 +1,4 @@
-"""Unified accuracy metrics for the benchmark suite: MdAPE/MAPE/within-X and throughput↔latency conversion."""
+"""Accuracy metrics for the benchmark suite (MdAPE, MAPE, within-X) and the throughput-to-latency conversion."""
 
 import numpy as np
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
@@ -30,8 +30,8 @@ def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
 
     pct_errors = np.abs(y_p - y_t) / y_t * 100
 
-    # R2 is undefined when SS_tot = 0 (constant y_true over >=2 samples); sklearn
-    # returns a misleading 0.0/1.0 there, so report NaN. (<2 samples: already NaN.)
+    # R2 is undefined when y_true is constant (SS_tot = 0). sklearn returns 0.0 or 1.0 there,
+    # so report NaN. With fewer than 2 samples sklearn already returns NaN.
     if len(y_t) >= 2 and np.all(y_t == y_t[0]):
         r2 = float("nan")
     else:
@@ -66,7 +66,7 @@ def throughput_to_latency(
 
 
 def ms_per_100_predictions(predict_time_s: float, n: int) -> float:
-    """Wall time (ms) to complete 100 predictions, from ``n`` measured runs."""
+    """Wall time (ms) per 100 predictions, given that ``n`` predictions took ``predict_time_s`` seconds."""
     if n <= 0 or predict_time_s is None:
         return float("nan")
     return float(predict_time_s) / float(n) * 100.0 * 1000.0

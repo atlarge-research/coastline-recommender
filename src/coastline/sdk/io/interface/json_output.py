@@ -13,7 +13,7 @@ def recommendation_payload(
     include_metadata: bool = True,
     rationale: Optional[str] = None,
 ) -> dict[str, Any]:
-    """The JSON-serialisable dict for one recommendation (shared by file + stdout output)."""
+    """The JSON-serializable dict for one recommendation (for file and stdout output)."""
     data = {
         "timestamp": datetime.now().isoformat(),
         "configuration": {
@@ -29,7 +29,7 @@ def recommendation_payload(
     if rationale:
         data["rationale"] = rationale
 
-    # Gate on presence, not truthiness: a legitimately-measured 0.0 W is still a value to emit.
+    # Compare with None, so a measured 0.0 W is still written.
     if recommendation.metadata.get("predicted_power_watts") is not None:
         data["energy"] = {
             "power_watts": recommendation.metadata["predicted_power_watts"],
@@ -38,9 +38,8 @@ def recommendation_payload(
 
     if include_metadata:
         data["metadata"] = recommendation.metadata
-    # Presentation layer: round float noise (watts, throughput, scores) to 2
-    # decimals for the emitted JSON. round_floats_for_display copies, so the
-    # source Recommendation's metadata is left untouched at full precision.
+    # Round floats (watts, throughput, scores) to 2 decimals for output. round_floats_for_display
+    # copies, so the Recommendation's metadata keeps full precision.
     rounded: dict[str, Any] = round_floats_for_display(data)
     return rounded
 

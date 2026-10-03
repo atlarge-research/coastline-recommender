@@ -1,14 +1,11 @@
-"""Tests for the importable `coastline` facade (the supervisor's sketch):
+"""Tests for the importable ``coastline`` facade:
 
     import coastline
     rec = coastline(predictor="Kavier")   # or "tabpfn"
     results = rec(workload, total_gpus=[1, 2, 4, 8])
 
-Kavier throughput/power is an analytical black box: these tests assert the facade
-CONTRACT (normalization, canonicalization, top-k truncation, ranking-prefix
-stability, preset/weight steering, input validation) with independent oracles, and
-only INVARIANTS (monotonicity, budget membership, equivalence of input forms) over
-the engine's numbers — never a pinned magic throughput value.
+Covers name normalization, model id canonicalization, top-k truncation, preset and weight
+steering, and input validation. Kavier's numbers are checked only through invariants.
 """
 
 import math
@@ -17,12 +14,11 @@ import pytest
 
 import coastline
 from coastline import Coastline
+from coastline.sdk.constants import EMPIRICAL_OOM_TOKEN_BUDGET
 from coastline.sdk.models.recommendation import Recommendation
 
-# Preset -> (alpha=power weight, beta=throughput weight), the canonical spec the
-# selection layer indexes on (coastline.sdk.pipeline.selection.PRESET_WEIGHTS).
-# Re-stated here as an INDEPENDENT reference so a silent edit to the weights table
-# is caught rather than mirrored.
+# Preset to (alpha = power weight, beta = throughput weight), copied from
+# coastline.sdk.pipeline.selection.PRESET_WEIGHTS so that a change to that table fails here.
 SPEC_PRESET_WEIGHTS = {"energy": (0.8, 0.2), "balanced": (0.5, 0.5), "performance": (0.2, 0.8)}
 
 
@@ -37,60 +33,48 @@ def _workload():
 
 
 def test_predictor_is_normalized():
-    # Oracle: normalization is pure case-folding (strip+lower), independent of any
-    # lookup table. "Kavier"/"TabPFN" differ from their keys only in letter case, so
-    # a correct normalizer must return the all-lowercase spelling; a normalizer that
-    # did nothing (or upper-cased) would leave "Kavier" != "kavier" and fail.
+    # Normalization is strip + lower, so "Kavier" and "TabPFN" become their lowercase keys.
     assert Coastline(predictor="Kavier").predictor == "kavier"
     assert Coastline(predictor="TabPFN").predictor == "tabpfn"
-    assert Coastline(predictor="tabpfn").predictor == "tabpfn"  # idempotent on lowercase
+    assert Coastline(predictor="tabpfn").predictor == "tabpfn"  # lowercase is kept
 
 
 def test_module_is_callable_returns_configured_instance():
-    # Contract: the module object itself is callable (PEP 562 _CallableModule) and
-    # forwards predictor into a real Coastline. Oracle: the returned object is
-    # a Coastline whose estimator is the normalized spelling of what we passed — a
-    # plain module (non-callable) would raise TypeError here.
+    # The module itself is callable (see _CallableModule) and returns a Coastline built with
+    # the normalized predictor name.
     rec = coastline(predictor="Kavier")
     assert isinstance(rec, Coastline)
     assert rec.predictor == "kavier"
 
 
 def test_recommend_truncates_to_stable_ranked_prefix():
-    """top_k must return the first k of the FULL ranking, not an arbitrary/pre-sort
-    subset. Oracle: the top-2 result must equal the first two entries of the top-5
-    result (same configs, same order) — a stable ranking followed by an
-    ``ordered[:k]`` slice. A bug that truncated before sorting, or reshuffled per
-    call, would break this prefix identity."""
+    """top_k=2 returns the first two entries of the top_k=5 result, in the same order."""
     rec = Coastline("kavier")
     budget = [1, 2, 4, 8]
     top2 = rec.recommend(_workload(), total_gpus=budget, top_k=2)
     top5 = rec.recommend(_workload(), total_gpus=budget, top_k=5)
 
-    assert len(top2) == 2 and len(top5) == 5  # top_k respected exactly
+    assert len(top2) == 2 and len(top5) == 5
 
     def key(r):
         return (r.total_gpus, r.metadata["batch_size"])
 
-    assert [key(r) for r in top2] == [key(r) for r in top5[:2]]  # prefix identity
+    assert [key(r) for r in top2] == [key(r) for r in top5[:2]]
 
     for r in top5:
         assert isinstance(r, Recommendation)
-        # Every pick is a real config drawn from the requested GPU budget...
+        # Every pick comes from the requested GPU budget
         assert r.total_gpus in budget
-        # ...and Kavier throughput for a SUPPORTED workload is finite and positive.
+        # and has a finite, positive throughput.
         assert r.predicted_throughput is not None and math.isfinite(r.predicted_throughput)
         assert r.predicted_throughput > 0
 
 
 def test_total_throughput_increases_with_gpu_count():
-    """Scaling invariant for the Kavier engine: with batch and workload fixed, total
-    (aggregate) throughput must strictly increase as GPUs are added — 2 GPUs out-
-    produce 1, 4 out-produce 2, etc. No magic value pinned; only the ordering. A
-    predictor that ignored GPU count (constant output) would flatten this and fail."""
+    """With the workload and batch fixed, Kavier's total throughput rises with every added GPU."""
     rec = Coastline("kavier")
-    # top_k large so every feasible config is returned; fixed batch so only the GPU
-    # axis varies. batch_sizes=[8] divides all of 1/2/4/8 -> all feasible.
+    # A large top_k returns every feasible config, and one batch size leaves only the GPU
+    # count varying.
     recs = rec.recommend(_workload(), total_gpus=[1, 2, 4, 8], batch_sizes=[8], top_k=99)
     by_gpu = {r.total_gpus: r.predicted_throughput for r in recs}
     assert set(by_gpu) == {1, 2, 4, 8}, "every GPU count in the budget should be feasible at batch 8"
@@ -100,10 +84,7 @@ def test_total_throughput_increases_with_gpu_count():
 
 
 def test_call_alias_reproduces_recommend_exactly():
-    """``rec(...)`` is documented as an alias of ``rec.recommend(...)``. Oracle: with
-    identical args both paths must return the SAME ranked configs and the SAME engine
-    numbers (deterministic), proving __call__ dispatches to recommend and does not
-    re-parameterize anything."""
+    """``rec(...)`` returns the same ranked configs and throughputs as ``rec.recommend(...)``."""
     rec = Coastline("kavier")
     args = dict(total_gpus=[1, 2, 4], top_k=3)
     via_call = rec(_workload(), **args)
@@ -111,15 +92,11 @@ def test_call_alias_reproduces_recommend_exactly():
     assert len(via_call) == len(via_method) == 3
     for a, b in zip(via_call, via_method):
         assert (a.total_gpus, a.metadata["batch_size"]) == (b.total_gpus, b.metadata["batch_size"])
-        assert a.predicted_throughput == b.predicted_throughput  # identical engine output
+        assert a.predicted_throughput == b.predicted_throughput
 
 
 def test_dict_and_workloadspec_inputs_are_equivalent():
-    """A dict workload and the equivalent WorkloadSpec must be coerced to the same
-    spec and therefore yield the IDENTICAL prediction. Oracle: same top config AND
-    the exact same throughput number (not merely 'both positive'). Budget [2] forces
-    total_gpus=2, so the load-bearing check is the throughput equality — a divergence
-    in the dict vs spec code path would surface as different floats."""
+    """A dict and the equivalent WorkloadSpec give the same throughput on a fixed 2-GPU budget."""
     from coastline.sdk.models.workload import WorkloadSpec
 
     rec = Coastline("kavier")
@@ -130,44 +107,35 @@ def test_dict_and_workloadspec_inputs_are_equivalent():
 
 
 def test_huggingface_model_id_is_canonicalized_and_recommends(monkeypatch):
-    """Regression (BLOCKER 1): a real HuggingFace id like ``mistralai/Mistral-7B-v0.1``
-    must be canonicalized to the short key Kavier indexes on (``mistral-7b-v0.1``) and
-    return a recommendation — NOT raise ``RuntimeError: no feasible candidates``. Pinned
-    to ``feasibility="rules"`` so it is deterministic and needs no AutoConf install.
+    """A HuggingFace id such as ``mistralai/Mistral-7B-v0.1`` becomes Kavier's key
+    ``mistral-7b-v0.1`` and gives the same pick and throughput as the short id.
 
-    Oracle: canonicalization means the HF id and the already-short id are the SAME
-    workload, so they must produce the identical top pick AND identical throughput.
+    Uses ``feasibility="rules"``, so no AutoConf install is needed.
     """
     monkeypatch.setenv("COASTLINE_ALLOW_RULES_FALLBACK", "1")
     rec = Coastline("kavier", feasibility="rules")
     hf = {**_workload(), "llm_model": "mistralai/Mistral-7B-v0.1"}
     out = rec(hf, total_gpus=[1, 2, 4], batch_sizes=[8], top_k=1)
-    assert out, "HF model id should yield a recommendation, not RuntimeError"
+    assert out, "HF model id should yield a recommendation"
     assert out[0].predicted_throughput and out[0].predicted_throughput > 0
-    # The canonical short key must produce the SAME pick and SAME number as the HF id.
+    # The short id gives the same pick and throughput.
     short = rec({**_workload(), "llm_model": "mistral-7b-v0.1"}, total_gpus=[1, 2, 4], batch_sizes=[8], top_k=1)
     assert short and out[0].total_gpus == short[0].total_gpus
     assert out[0].predicted_throughput == short[0].predicted_throughput
 
 
 def test_workloadspec_canonicalizes_huggingface_model_id():
-    """The WorkloadSpec field validator drops the org prefix + lowercases, and is
-    idempotent on the already-short form. Oracle: the transform is
-    ``split('/')[-1].lower()`` applied by hand to a known id."""
+    """WorkloadSpec drops the org prefix and lowercases the model id, and leaves a short id unchanged."""
     from coastline.sdk.models.workload import WorkloadSpec, canonical_model_name
 
-    # By hand: "mistralai/Mistral-7B-v0.1" -> drop "mistralai/" -> lowercase -> "mistral-7b-v0.1".
     assert canonical_model_name("mistralai/Mistral-7B-v0.1") == "mistral-7b-v0.1"
-    assert canonical_model_name("mistral-7b-v0.1") == "mistral-7b-v0.1"  # idempotent
+    assert canonical_model_name("mistral-7b-v0.1") == "mistral-7b-v0.1"  # already short
     assert WorkloadSpec(**{**_workload(), "llm_model": "mistralai/Mistral-7B-v0.1"}).llm_model == "mistral-7b-v0.1"
 
 
 def test_csv_path_reads_field_name_columns(tmp_path):
-    # The CSV reader accepts the ONE canonical vocabulary: the WorkloadSpec field
-    # names (llm_model/fine_tuning_method/gpu_model/tokens_per_sample/batch_size), with
-    # no synonyms. Oracle: each written cell maps to its named WorkloadSpec field
-    # verbatim (with the two numeric columns coerced to int). A broken reader would
-    # drop or mis-route a column, changing one of these known values.
+    # The CSV columns are the WorkloadSpec field names. Each cell lands in its field, and the
+    # two numeric columns become int.
     from coastline.sdk.recommend.facade import _coerce_workload
 
     csv = tmp_path / "workload.csv"
@@ -184,24 +152,19 @@ def test_csv_path_reads_field_name_columns(tmp_path):
 
 
 def test_default_context_max_nodes_uses_ceil_not_floor():
-    # Regression: the facade derived max_nodes with `max_gpus // 8` (floor), so a 12-GPU
-    # budget allowed only 1 node (8 GPUs) and silently dropped the 9-12 GPU configs that
-    # need a 2nd node. ceil makes the whole budget explorable (matches grid.py's layout).
-    # Oracle by hand at 8 GPUs/node: ceil(8/8)=1, ceil(12/8)=2, ceil(16/8)=2, ceil(20/8)=3;
-    # the floor bug would give 1, 1, 2, 2 respectively.
+    # max_nodes = ceil(max_gpus / 8). Floor division would give a 12-GPU budget one node and
+    # drop the 9 to 12 GPU configs.
     from coastline.sdk.models.workload import WorkloadSpec
     from coastline.sdk.recommend.facade import _default_context
 
     wl = WorkloadSpec(**_workload())
-    assert _default_context(wl, 8).constraints.max_nodes == 1  # exact multiple: floor==ceil
-    assert _default_context(wl, 12).constraints.max_nodes == 2  # floor gave 1 -> dropped 9-12
-    assert _default_context(wl, 16).constraints.max_nodes == 2  # exact multiple: floor==ceil
-    assert _default_context(wl, 20).constraints.max_nodes == 3  # floor gave 2 -> dropped 17-20
+    assert _default_context(wl, 8).constraints.max_nodes == 1  # exact multiple
+    assert _default_context(wl, 12).constraints.max_nodes == 2  # floor would give 1
+    assert _default_context(wl, 16).constraints.max_nodes == 2  # exact multiple
+    assert _default_context(wl, 20).constraints.max_nodes == 3  # floor would give 2
 
 
-# --------------------------------------------------------------------------- #
-# Preset / alpha-beta steering: energy vs performance pick different configs
-# --------------------------------------------------------------------------- #
+# Presets and alpha/beta: energy and performance pick different configs
 
 
 def _top_total_gpus(recs):
@@ -209,11 +172,10 @@ def _top_total_gpus(recs):
 
 
 def test_energy_preset_favors_fewer_gpus_than_performance_preset():
-    """Direction invariant: because power_cost = per-GPU watts x GPU count, the
-    energy preset (power weight 0.8) is pulled toward FEWER GPUs while the
-    performance preset (throughput weight 0.8) is pulled toward MORE. So the energy
-    pick must use <= the GPUs of the performance pick, and on this budget the two
-    presets must not collapse to the same config (the weights genuinely steer)."""
+    """The energy preset picks fewer GPUs than the performance preset.
+
+    power_cost = per-GPU watts x GPU count, so a power weight of 0.8 favours fewer GPUs.
+    """
     rec = Coastline("kavier")
     budget = [1, 2, 4, 8]
     energy = rec.recommend(_workload(), total_gpus=budget, preset="energy", top_k=1)
@@ -221,19 +183,14 @@ def test_energy_preset_favors_fewer_gpus_than_performance_preset():
     assert energy and performance
     assert _top_total_gpus(energy) <= _top_total_gpus(performance)
     assert _top_total_gpus(energy) != _top_total_gpus(performance)
-    # Independent oracle on the steering weights: each pick records the preset's
-    # canonical (alpha, beta) from SPEC_PRESET_WEIGHTS, proving the named preset was
-    # actually applied rather than silently defaulting to balanced (0.5, 0.5).
+    # Each pick records its preset's (alpha, beta), so the named preset was applied.
     assert (energy[0].metadata["alpha"], energy[0].metadata["beta"]) == SPEC_PRESET_WEIGHTS["energy"]
     assert (performance[0].metadata["alpha"], performance[0].metadata["beta"]) == SPEC_PRESET_WEIGHTS["performance"]
 
 
 def test_explicit_alpha_beta_override_preset_and_reproduce_extremes():
-    """Explicit alpha/beta override the preset and reproduce the preset extremes:
-    alpha-heavy (power) -> the energy-like pick; beta-heavy (throughput) -> the
-    perf-like pick. Oracle: same direction invariant as the named presets, PLUS the
-    recorded weights equal the (already-normalized-to-1) inputs and preset='custom',
-    confirming explicit weights win over the default 'balanced' preset."""
+    """Given alpha and beta override the preset: alpha=0.8 picks like the energy preset,
+    beta=0.8 like the performance preset, and the preset is recorded as 'custom'."""
     rec = Coastline("kavier")
     budget = [1, 2, 4, 8]
     energy_like = rec.recommend(_workload(), total_gpus=budget, alpha=0.8, beta=0.2, top_k=1)
@@ -241,21 +198,18 @@ def test_explicit_alpha_beta_override_preset_and_reproduce_extremes():
     assert energy_like and perf_like
     assert _top_total_gpus(energy_like) <= _top_total_gpus(perf_like)
     assert _top_total_gpus(energy_like) != _top_total_gpus(perf_like)
-    # 0.8/0.2 already sums to 1, so normalization leaves them unchanged; preset dropped.
+    # 0.8 + 0.2 = 1, so normalization leaves the weights unchanged.
     assert (energy_like[0].metadata["alpha"], energy_like[0].metadata["beta"]) == (0.8, 0.2)
     assert energy_like[0].metadata["preset"] == "custom"
     assert (perf_like[0].metadata["alpha"], perf_like[0].metadata["beta"]) == (0.2, 0.8)
 
 
-# --------------------------------------------------------------------------- #
-# Input validation: empty CSV -> ValueError, bad type -> TypeError
-# --------------------------------------------------------------------------- #
+# Input validation: an empty CSV raises ValueError, a wrong type TypeError
 
 
 def test_empty_csv_raises_value_error(tmp_path):
     csv = tmp_path / "empty.csv"
-    # Header only, no data rows -> pandas reads an empty frame -> facade must reject
-    # it with a ValueError rather than IndexError on row 0 / returning [].
+    # A header with no data rows.
     csv.write_text("llm_model,fine_tuning_method,gpu_model,tokens_per_sample,batch_size\n")
     rec = Coastline("kavier")
     with pytest.raises(ValueError):
@@ -264,37 +218,33 @@ def test_empty_csv_raises_value_error(tmp_path):
 
 def test_unsupported_workload_type_raises_type_error():
     rec = Coastline("kavier")
-    # An int is neither a WorkloadSpec, dict, nor CSV path -> TypeError (contract),
-    # distinct from the ValueError raised for a well-typed-but-empty CSV above.
+    # An int is neither a WorkloadSpec, a dict nor a CSV path.
     with pytest.raises(TypeError):
         rec.recommend(12345)
 
 
 def test_max_gpus_zero_raises_clear_value_error():
-    """max_gpus=0 must raise a clear ValueError with the documented message, NOT a raw
-    pydantic ValidationError leaking from deep in the context builder."""
+    """max_gpus=0 raises a ValueError that says max_gpus must be >= 1."""
     rec = Coastline("kavier")
     with pytest.raises(ValueError, match="max_gpus must be >= 1"):
         rec.recommend(_workload(), max_gpus=0)
 
 
 def test_max_gpus_negative_raises_clear_value_error():
-    """max_gpus < 0 is equally invalid; confirm the same guard fires (boundary is
-    < 1, so -1 and 0 are both rejected while 1 would pass)."""
+    """A negative max_gpus raises the same error."""
     rec = Coastline("kavier")
     with pytest.raises(ValueError, match="max_gpus must be >= 1"):
         rec.recommend(_workload(), max_gpus=-1)
 
 
-# --------------------------------------------------------------------------- #
 # feasibility='rules' constructor path (under COASTLINE_ALLOW_RULES_FALLBACK=1)
-# --------------------------------------------------------------------------- #
 
 
 def test_rules_feasibility_admits_all_per_device_configs(monkeypatch):
-    """``Coastline(feasibility="rules")`` drives the rules checker end to end. batch_size is
-    PER-DEVICE, so the checker no longer filters on divisibility — EVERY GPU count in the budget
-    is admitted, including 3, which the old ``8 % 3`` rule would have rejected."""
+    """``Coastline(feasibility="rules")`` admits every GPU count in the budget, 3 included.
+
+    batch_size is per device, so it need not divide the GPU count.
+    """
     monkeypatch.setenv("COASTLINE_ALLOW_RULES_FALLBACK", "1")
     rec = Coastline("kavier", feasibility="rules")
     assert rec.feasibility == "rules"
@@ -302,5 +252,29 @@ def test_rules_feasibility_admits_all_per_device_configs(monkeypatch):
     assert out, "rules feasibility should still yield recommendations"
     assert all(isinstance(r, Recommendation) for r in out)
     admitted = {r.total_gpus for r in out}
-    # Per-device batch 8 is feasible on every budget entry — including the non-divisor 3.
     assert admitted == {1, 2, 3, 4, 8}
+
+
+def test_empirical_oom_guard_vetoes_over_budget_per_device_loads(monkeypatch):
+    """``empirical_oom_guard=True`` adds the per-device token limit to the rules checker.
+
+    A ``batch_size x tokens_per_sample`` above EMPIRICAL_OOM_TOKEN_BUDGET is rejected at every GPU
+    count and accepted with the guard off; a load below the limit passes with the guard on.
+    """
+    monkeypatch.setenv("COASTLINE_ALLOW_RULES_FALLBACK", "1")
+    over, under = 32 * 2048, 32 * 1024
+    assert over > EMPIRICAL_OOM_TOKEN_BUDGET > under, "test workloads must straddle the budget"
+    over_wl = {**_workload(), "tokens_per_sample": 2048, "batch_size": 32}
+    under_wl = {**_workload(), "tokens_per_sample": 1024, "batch_size": 32}
+    budgets = [1, 2, 4, 8]
+
+    unguarded = Coastline("kavier", feasibility="rules")
+    assert unguarded.empirical_oom_guard is False
+    assert unguarded.recommend(over_wl, total_gpus=budgets, batch_sizes=[32], top_k=99)
+
+    guarded = Coastline("kavier", feasibility="rules", empirical_oom_guard=True)
+    assert guarded.empirical_oom_guard is True
+    with pytest.raises(RuntimeError, match="no feasible"):
+        guarded.recommend(over_wl, total_gpus=budgets, batch_sizes=[32], top_k=99)
+    out = guarded.recommend(under_wl, total_gpus=budgets, batch_sizes=[32], top_k=99)
+    assert {r.total_gpus for r in out} == set(budgets)

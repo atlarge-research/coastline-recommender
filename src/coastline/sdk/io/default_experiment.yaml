@@ -1,8 +1,7 @@
-# The built-in recommendation-policy default — the ONE source every surface (CLI, facade/API,
-# UI) falls back to when no config file is found. Ships inside the wheel. The user-facing,
-# editable copy is config/coastline_functionality/experiment.yaml (which may also declare a
-# `workload:` block for `recommend-job --config` single-job mode); this bundled fallback is
-# policy-only. Keep the two in sync.
+# Built-in recommendation policy, used by the CLI, the Python API and the UI when no config file
+# is found. It ships in the wheel. The editable copy is config/coastline_functionality/experiment.yaml,
+# which may also hold a `workload:` block for `recommend-job --config`; this file has the policy
+# only. Keep the two in sync.
 strategy:
   name: "multi_objective"
   preset: "balanced"
@@ -17,8 +16,7 @@ grid:
   total_gpus: [1, 2, 4, 8, 16, 32]
   top_k: 5
 
-# How the tool itself runs (the machine it runs ON, not the cluster it reasons about --
-# that lives in infrastructure.yaml). Each pipeline stage forks its candidates across this
-# many processes and joins before the next stage starts; 1 runs everything sequentially.
+# Settings for the machine Coastline runs on (the cluster is described in infrastructure.yaml).
+# Each pipeline stage splits its candidates across this many processes; 1 runs in one process.
 runtime:
   parallel_workers: 4

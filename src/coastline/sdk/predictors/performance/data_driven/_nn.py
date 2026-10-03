@@ -1,8 +1,8 @@
 """Neural-net architecture for the deep-learning performance predictor.
 
-Lives in the shipped package (not the dev trainer) so inference can rebuild the trained net
-without the training code on the path. ``torch`` is imported at module top, so — like the
-predictor that uses it — this module loads only when the deep-learning predictor is selected.
+It lives in the installed package so inference can rebuild the trained net without the
+training code. The module imports ``torch``, so it is loaded only when the deep-learning
+predictor is selected.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import torch.nn as nn
 
 
 class ResidualBlock(nn.Module):
-    """Pre-activation residual block: BN → SiLU → Linear → BN → SiLU → Linear, plus a skip."""
+    """Pre-activation residual block: BatchNorm, SiLU, Dropout and Linear, twice, plus a skip."""
 
     def __init__(self, dim, dropout_rate):
         super().__init__()
@@ -33,8 +33,8 @@ class ResidualBlock(nn.Module):
 
 class EmbeddingNN(nn.Module):
     """Embedding net with SiLU activations, residual blocks, optional training-time Gaussian
-    noise, and separate throughput/runtime heads (outputs columns [throughput, runtime] in log
-    space). The layer names/order define the checkpoint's state_dict keys — keep them stable."""
+    noise, and separate throughput and runtime heads; outputs columns [throughput, runtime] in
+    log space. Layer names and order set the checkpoint's state_dict keys, so keep them stable."""
 
     def __init__(self, embedding_dims, num_numerical_features, hidden_dims, dropout_rate, noise_std=0.0):
         super().__init__()
@@ -56,7 +56,7 @@ class EmbeddingNN(nn.Module):
         ]
         prev_dim = hidden_dims[0]
         for hidden_dim in hidden_dims[1:]:
-            if hidden_dim == prev_dim:  # matching dims → residual skip
+            if hidden_dim == prev_dim:  # equal widths: residual block
                 layers.append(ResidualBlock(hidden_dim, dropout_rate))
             else:
                 layers.extend(

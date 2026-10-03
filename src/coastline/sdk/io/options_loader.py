@@ -1,7 +1,7 @@
-"""Single source of truth for the available configuration options.
+"""Available configuration options.
 
-Loads the selectable models, GPUs, methods, sequence lengths and batch sizes
-from the curated dataset (falling back to a hardcoded set if it is missing).
+Loads the selectable models, GPUs, methods, sequence lengths and batch sizes from the curated
+dataset, or a fixed fallback set when the dataset is missing.
 """
 
 import os

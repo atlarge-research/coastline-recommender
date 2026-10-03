@@ -1,14 +1,15 @@
-"""Unified recommendation workflow: grid search -> feasibility -> simulate -> policy select."""
+"""Recommendation workflow: grid search, feasibility check, simulation, policy selection."""
 
 from __future__ import annotations
 
 import logging
 import math
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from coastline.sdk.constants import Preset
+from coastline.sdk.exceptions import NoPredictionError
 from coastline.sdk.models.context import SystemContext
-from coastline.sdk.models.recommendation import Recommendation
+from coastline.sdk.models.recommendation import Prediction, Recommendation
 from coastline.sdk.models.workload import WorkloadSpec
 from coastline.sdk.pipeline.feasibility import FeasibilityChecker, create_feasibility_checker
 from coastline.sdk.pipeline.grid import GridConfig, generate_candidates, grid_config_from_dict
@@ -28,8 +29,24 @@ from coastline.sdk.pipeline.selection import (
     rank_candidates,
 )
 from coastline.sdk.predictors.base import BasePredictor
+from coastline.sdk.predictors.performance.retrieval.cache_predictor import MEASURED_POWER_KEY
 
 logger = logging.getLogger(__name__)
+
+
+def check_runtime_guard_k(value: Union[float, str, None]) -> Optional[float]:
+    """The runtime guard factor as a float, or None when the guard is off.
+
+    The guard keeps configs at most k times slower than the fastest feasible one, so k must be
+    finite and at least 1. Below 1 no config qualifies, and an infinite k sets no bound; both
+    raise ValueError.
+    """
+    if value is None:
+        return None
+    k = float(value)
+    if not math.isfinite(k) or k < 1:
+        raise ValueError(f"max_slowdown (runtime_guard_k) must be a finite number >= 1, got {value!r}")
+    return k
 
 
 def simulate_one(
@@ -40,30 +57,46 @@ def simulate_one(
 ) -> Optional[tuple[float, float, Optional[float]]]:
     """(throughput, power, runtime) for one feasible candidate, or None if it drops out.
 
-    A candidate drops out when a predictor declines it, or when either number is non-finite or
-    non-positive: one infinity would poison the min-max normalisation the ranking depends on.
+    A candidate drops out when it gets no throughput or no power, or when either number is
+    non-finite or not positive: one infinity would break the min-max normalization used for
+    ranking. The power is the power predictor's, or for a cache hit without one, the power
+    measured in the matched run.
     """
     throughput_pred = throughput_predictor.predict(variant, context)
     if throughput_pred is None:
         return None
     throughput = throughput_pred.predicted_throughput or 0.0
-    # Reject NaN, +inf, -inf, and <=0; a bare x>0 admits +inf which then poisons min-max normalization.
+    # Reject NaN, +inf, -inf and <= 0; a plain x > 0 check would let +inf through.
     if not math.isfinite(throughput) or throughput <= 0:
         return None
 
-    # Reuse the power Kavier already returned with throughput (one engine call, not
-    # two); other predictors fall through to a dedicated call.
+    # Kavier returns power with the throughput, so reuse it; other predictors need a separate
+    # power call.
+    power: Optional[float]
     if getattr(power_predictor, "WRAPS_THROUGHPUT_ENGINE", False) and throughput_pred.predicted_power:
         power = throughput_pred.predicted_power
     else:
         power_pred = power_predictor.predict(variant, context)
-        if power_pred is None:
-            return None
-        power = power_pred.predicted_power or 0.0
+        power = power_pred.predicted_power if power_pred is not None else None
+    # When the power predictor has no usable power (Kavier has none for a model outside its
+    # catalog), a cache hit uses the power measured in its run.
+    if not _usable(power):
+        power = measured_power(throughput_pred)
     # Same NaN/+inf/-inf/<=0 guard as throughput.
-    if not math.isfinite(power) or power <= 0:
+    if power is None or not _usable(power):
         return None
     return throughput, power, throughput_pred.predicted_runtime_seconds
+
+
+def _usable(value: Optional[float]) -> bool:
+    """Whether a predicted throughput or power keeps its candidate: finite and above zero."""
+    return value is not None and math.isfinite(value) and value > 0
+
+
+def measured_power(prediction: Prediction) -> Optional[float]:
+    """The per-GPU power measured in the run a cache hit matched, or None."""
+    value = (prediction.metadata or {}).get(MEASURED_POWER_KEY)
+    return float(value) if value is not None and _usable(float(value)) else None
 
 
 def simulate_chunk(
@@ -77,7 +110,7 @@ def simulate_chunk(
 
 
 class GridWorkflowPipeline:
-    """Shared grid → feasibility → simulate → policy pipeline."""
+    """Grid, feasibility, simulation and policy selection, shared by all strategies."""
 
     def __init__(
         self,
@@ -106,12 +139,12 @@ class GridWorkflowPipeline:
         self.beta = beta
         self.preset = preset
         self.normalization = normalization
-        # Optional runtime guardrail: cap how slow a recommended config may be
-        # relative to the fastest feasible one (None = off; see recommend()).
-        self.runtime_guard_k = runtime_guard_k
-        # Per-stage parallelism over candidates. 1 = sequential (the library default). The
-        # predictor config is what a worker process rebuilds its checker from: the built checker
-        # itself holds a loaded AutoGluon model and cannot be pickled.
+        # Optional cap on how much slower than the fastest feasible config a recommendation may
+        # be (None = off; see recommend()).
+        self.runtime_guard_k = check_runtime_guard_k(runtime_guard_k)
+        # Worker processes per stage; 1 runs in this process (the library default). Workers
+        # rebuild the checker from predictor_config, since a loaded AutoGluon model cannot be
+        # pickled.
         self.workers = resolve_workers(workers)
         self.predictor_config = predictor_config
 
@@ -119,7 +152,7 @@ class GridWorkflowPipeline:
     def _resolve_weights(
         strategy_cfg: dict, preset: Optional[str], alpha: Optional[float], beta: Optional[float]
     ) -> tuple[float, float]:
-        """Normalized (alpha, beta): explicit args win, else the preset, else the config, else balanced."""
+        """Normalized (alpha, beta): from the arguments, else the preset, else the config, else balanced."""
         if alpha is None or beta is None:
             if preset and preset in PRESET_WEIGHTS:
                 a, b = PRESET_WEIGHTS[preset]
@@ -170,16 +203,12 @@ class GridWorkflowPipeline:
     ) -> "GridWorkflowPipeline":
         strategy_cfg = config.get("strategy", {})
         alpha, beta = cls._resolve_weights(strategy_cfg, preset, alpha, beta)
-        # A caller may hand us a ready-made predictor or checker instead of naming one in the
-        # config. A worker process can only rebuild what the config describes, so such a component
-        # would be replaced by a different object in the fork -- a silently different answer.
-        # Withholding the predictor config keeps every stage in this process, which is what
-        # identity requires.
+        # A caller may pass a ready-made predictor or checker instead of naming one in the
+        # config. Workers rebuild components from the config and would get different objects,
+        # so then predictor_config is withheld and every stage runs in this process.
         #
-        # ``components_from_config`` is how PolicyFactory says "I built these from the very
-        # predictors block you are holding". It builds them itself (and passes them on to the
-        # strategy, which exposes them), so without this every real path would look injected and
-        # nothing would ever fork.
+        # PolicyFactory sets ``components_from_config`` when it built the components from this
+        # same predictors block; without it, its pipelines would never fork.
         injected = not components_from_config and any(
             component is not None for component in (throughput_predictor, power_predictor, feasibility_checker)
         )
@@ -212,7 +241,7 @@ class GridWorkflowPipeline:
         context: SystemContext,
     ) -> List[Recommendation]:
         logger.info(
-            "Workflow (%s): %s — grid → feasibility → simulate → %s",
+            "Workflow (%s): %s - grid -> feasibility -> simulate -> %s",
             self.strategy_name,
             workload.llm_model,
             self.selection_policy,
@@ -221,15 +250,15 @@ class GridWorkflowPipeline:
         candidates = generate_candidates(workload, context, self.grid_config)
         evaluated: List[EvaluatedCandidate] = []
 
-        # Stage barrier: every candidate is judged for feasibility before any is simulated. With
-        # workers > 1 and an expensive checker the judging is split across processes; the verdict
-        # list comes back in candidate order, which is what keeps the tie-break below stable.
+        # Check every candidate before simulating any. With workers > 1 and an expensive checker
+        # this is split across processes; verdicts come back in candidate order, which keeps the
+        # tie-break below stable.
         verdicts = run_feasibility(self.feasibility_checker, self.predictor_config, candidates, self.workers)
 
         survivors = [(variant, feas_meta) for variant, (feasible, feas_meta) in zip(candidates, verdicts) if feasible]
 
-        # Second stage barrier: simulate every survivor, then build the ranking input. Forked only
-        # when the predictor is a data-driven model (ms per call); Kavier and the cache run inline.
+        # Simulate every feasible candidate. Forked only for data-driven predictors (milliseconds
+        # per call); Kavier and the cache run in this process.
         predictions = run_simulation(
             self.throughput_predictor,
             self.power_predictor,
@@ -260,14 +289,18 @@ class GridWorkflowPipeline:
             )
 
         if not evaluated:
+            if survivors:
+                # Candidates passed the feasibility check, so a predictor failed; name it and
+                # its reason.
+                raise NoPredictionError(self._no_prediction_message(survivors[0][0], context, len(survivors)))
             raise RuntimeError(
                 f"Workflow ({self.strategy_name}): no feasible candidates found "
                 f"in grid of {len(candidates)} configurations. "
-                f"Check feasibility settings and predictor availability."
+                f"Check the feasibility settings and the search grid."
             )
 
-        # Optional SLO guard: keep configs within k× of the fastest feasible (runtime <= k× fastest).
-        # Off by default; applied before normalization; falls back to the full set rather than emptying it.
+        # Optional runtime guard: keep configs whose runtime is at most k times the fastest
+        # feasible one. Off by default and applied before normalization.
         if self.runtime_guard_k is not None and math.isfinite(self.runtime_guard_k) and self.runtime_guard_k > 0:
             threshold = max(c.throughput for c in evaluated) / self.runtime_guard_k
             guarded = [c for c in evaluated if c.throughput >= threshold]
@@ -281,10 +314,8 @@ class GridWorkflowPipeline:
                     )
                 evaluated = guarded
             else:
-                # The guard would empty the set, so it disarms itself and returns the full set.
-                # That means the caller gets configurations VIOLATING the max_slowdown they asked
-                # for; silently was the old behaviour and it is indistinguishable from the guard
-                # having been satisfied. Say so.
+                # The guard would drop every config, so the full set is kept, and it may exceed
+                # the requested max_slowdown. Warn about it.
                 logger.warning(
                     "Runtime guard (k=%s) would reject every candidate, so it was not applied: "
                     "the returned configurations may exceed the requested max slowdown.",
@@ -307,8 +338,36 @@ class GridWorkflowPipeline:
 
         return [self._to_recommendation(row, rank=i + 1) for i, row in enumerate(ranked)]
 
+    def _no_prediction_message(self, variant: WorkloadSpec, context: SystemContext, n_survivors: int) -> str:
+        """The error text when every candidate that passed feasibility got no usable prediction.
+
+        The simulation stage keeps only the numbers, so the predictors are asked once more, for
+        one of those candidates, in the order ``simulate_one`` asks them: the throughput
+        predictor, then the power predictor when the throughput was usable. The message names
+        the one that gave nothing and the reason it reports (Kavier puts it in
+        ``metadata['error_detail']``). This runs only on the failure path.
+        """
+        config = self.predictor_config or {}
+        name, predictor = config.get("performance"), self.throughput_predictor
+        prediction = predictor.predict(variant, context)
+        if prediction is not None and _usable(prediction.predicted_throughput):
+            # The throughput was usable, so the power dropped the candidate.
+            name, predictor = config.get("energy"), self.power_predictor
+            if not (getattr(predictor, "WRAPS_THROUGHPUT_ENGINE", False) and prediction.predicted_power):
+                prediction = predictor.predict(variant, context)
+        label = f"the {name} predictor" if name else type(predictor).__name__
+        metadata = (prediction.metadata or {}) if prediction is not None else {}
+        reason = metadata.get("error_detail") or metadata.get("error")
+        if prediction is None and not reason:
+            reason = getattr(predictor, "MISS_REASON", None)
+        message = (
+            f"Workflow ({self.strategy_name}): {label} gave no usable prediction for any of the "
+            f"{n_survivors} configurations that passed the feasibility check"
+        )
+        return f"{message}: {reason}" if reason else f"{message}."
+
     def _to_recommendation(self, row: EvaluatedCandidate, rank: int) -> Recommendation:
-        # min_gpu has no score -> inverse-GPU proxy for ordering; other policies use combined_score.
+        # min_gpu has no score, so 1/total_gpus stands in for it; other policies use combined_score.
         score = 1.0 / max(row.total_gpus, 1) if self.selection_policy == SelectionPolicy.MIN_GPU else row.combined_score
         metadata = {
             "predicted_power_watts": row.power,
@@ -339,10 +398,8 @@ class GridWorkflowPipeline:
 
 
 def _create_throughput_predictor(predictor_config: dict) -> BasePredictor:
-    # Single source of truth: delegate to PolicyFactory so the workflow and the
-    # strategy layer can never diverge on what `performance` resolves to (the old
-    # copy here silently collapsed every named model — e.g. tabpfn — to CatBoost).
-    # Imported lazily because recommendation_policies imports this module at load time.
+    # PolicyFactory resolves `performance` here too, so the workflow and the strategies agree.
+    # Imported lazily because coastline.sdk.policies imports this module.
     from coastline.sdk.policies import PolicyFactory
 
     return PolicyFactory.throughput_predictor(predictor_config)

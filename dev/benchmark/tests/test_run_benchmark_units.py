@@ -1,18 +1,8 @@
-"""Unit tests for the pure/logic helpers in ``benchmark.run_benchmark``.
+"""Unit tests for the helpers in ``benchmark.run_benchmark``.
 
-These tests exercise the unit-testable seams WITHOUT running the full 12-model
-benchmark and WITHOUT loading any real trained ML model (which would unpickle
-xgboost/catboost/etc. and risk a native segfault). Strategy:
-
-* The ML predictor classes are instantiated at module import in ``run_benchmark``
-  but they lazy-load their pickles only inside ``predict()``; merely importing the
-  module is therefore safe and loads no models.
-* ``evaluate_ml_predictor`` is tested with a hand-written mock predictor.
-* ``evaluate_kavier``'s cache ``pred_lookup`` path is tested by monkeypatching the
-  validation-CSV loader and using synthetic workloads whose model names are NOT in
-  Kavier's spec library, so the live simulator raises and the code falls back to the
-  CSV-derived prediction (deterministic, no model load).
-* All other helpers are pure functions over dicts / tiny synthetic frames.
+The tests neither run the full benchmark nor load a trained ML model, since unpickling the
+native ML models can segfault. ``evaluate_ml_predictor`` gets a mock predictor, and ``evaluate_kavier``
+gets model names that Kavier does not know.
 """
 
 import numpy as np
@@ -21,10 +11,6 @@ import pytest
 
 import benchmark.run_benchmark as rb
 from coastline.sdk.models.recommendation import Prediction
-
-# ---------------------------------------------------------------------------
-# Helpers / fixtures
-# ---------------------------------------------------------------------------
 
 
 def _synthetic_full_test() -> pd.DataFrame:
@@ -45,10 +31,10 @@ def _synthetic_full_test() -> pd.DataFrame:
 
 
 class _MockPredictor:
-    """Minimal predictor matching the ``predict(workload, ctx) -> Prediction`` API.
+    """Predictor with the ``predict(workload, ctx) -> Prediction`` interface.
 
-    Records the WorkloadSpec objects it is handed so the test can assert how
-    ``evaluate_ml_predictor`` decoded the curated row into a workload.
+    Records each WorkloadSpec it receives, so a test can check how ``evaluate_ml_predictor``
+    built the workload from a curated row.
     """
 
     def __init__(self, throughput=105.0, runtime=11.0, raise_on=None):
@@ -70,9 +56,7 @@ class _MockPredictor:
         )
 
 
-# ---------------------------------------------------------------------------
-# _build_meta — total_gpus_used assembly
-# ---------------------------------------------------------------------------
+# _build_meta
 
 
 def test_build_meta_computes_total_gpus_used():
@@ -99,19 +83,16 @@ def test_build_meta_fills_missing_gpu_counts_with_one():
         }
     )
     meta = rb._build_meta(df)
-    # NaN counts default to 1 -> 1*1 = 1
+    # NaN counts default to 1, so 1 * 1 = 1
     assert meta["total_gpus_used"].tolist() == [1.0]
 
 
-# ---------------------------------------------------------------------------
-# evaluate_kavier — live-simulator-only, fails loudly (no canned-CSV fallback)
-# ---------------------------------------------------------------------------
+# evaluate_kavier
 
 
 def test_evaluate_kavier_raises_on_unsimulatable_rows():
-    """Unknown model names make the live simulator raise per-row; evaluate_kavier
-    must refuse to report a partial/stale MdAPE and raise instead of silently
-    substituting canned predictions (the removed CSV-fallback behavior)."""
+    """When the simulator fails on a row (unknown model), evaluate_kavier raises instead of
+    reporting a partial MdAPE."""
     full_test = _synthetic_full_test()
     ml_data = {
         "full_test": full_test,
@@ -121,9 +102,7 @@ def test_evaluate_kavier_raises_on_unsimulatable_rows():
         rb.evaluate_kavier(ml_data)
 
 
-# ---------------------------------------------------------------------------
-# evaluate_ml_predictor — row-by-row result assembly via mock predictor
-# ---------------------------------------------------------------------------
+# evaluate_ml_predictor, with a mock predictor
 
 
 def test_evaluate_ml_predictor_assembles_predictions_and_meta():
@@ -145,7 +124,7 @@ def test_evaluate_ml_predictor_assembles_predictions_and_meta():
 
 
 def test_evaluate_ml_predictor_decodes_workload_fields():
-    """torch_dtype / enable_roce / counts are decoded from the curated row."""
+    """torch_dtype, enable_roce and the GPU counts are read from the curated row."""
     ml_data = {
         "full_test": _synthetic_full_test(),
         "y_throughput_test": np.array([100.0, 200.0]),
@@ -157,14 +136,13 @@ def test_evaluate_ml_predictor_decodes_workload_fields():
     w0, w1 = mp.seen
     assert w0.fine_tuning_method == "lora"
     assert w0.gpu_model == "FAKE-GPU"
-    # WorkloadSpec canonicalizes llm_model at ingestion (drops org prefix, lowercases),
-    # so "fakemodel-A" -> "fakemodel-a". See WorkloadSpec._canonicalize_llm_model.
+    # WorkloadSpec lowercases llm_model and drops any org prefix (WorkloadSpec._canonicalize_llm_model).
     assert w0.llm_model == "fakemodel-a"
     assert w0.batch_size == 4 and w0.tokens_per_sample == 512
     assert w0.gpus_per_node == 2 and w0.number_of_nodes == 1
     assert w0.torch_dtype == "bfloat16"
     assert w0.enable_roce is True
-    # Row 1 has NaN dtype/roce -> None
+    # Row 1 has NaN dtype and roce, which become None
     assert w1.torch_dtype is None
     assert w1.enable_roce is None
 
@@ -207,9 +185,7 @@ def test_evaluate_ml_predictor_none_throughput_becomes_zero():
     assert np.isnan(raw["y_pred_runtime"]).all()
 
 
-# ---------------------------------------------------------------------------
 # _apply_metric_status / _throughput_and_latency_metrics / _result_entry
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -239,7 +215,7 @@ def test_throughput_and_latency_metrics_shapes_and_status():
     assert thr_m["n"] == 2
     # MdAPE = median(|110-100|/100, |190-200|/200) = median(10%, 5%) = 7.5%
     assert thr_m["mdape"] == pytest.approx(7.5, abs=1e-6)
-    # Latency is a monotone transform; with matched ordering MdAPE matches.
+    # Latency is inversely proportional to throughput per row, so its MdAPE is finite too.
     assert np.isfinite(lat_m["mdape"])
 
 
@@ -252,7 +228,7 @@ def test_throughput_and_latency_metrics_all_zero_predictions_is_error():
         "predict_time_s": 0.0,
     }
     thr_m, lat_m = rb._throughput_and_latency_metrics(raw)
-    # compute_metrics masks out non-positive preds -> n == 0 -> status error.
+    # compute_metrics drops non-positive predictions, so n is 0 and the status is an error.
     assert thr_m["status"] == "Error: no valid predictions"
     assert lat_m["status"] == "Error: no valid predictions"
 
@@ -286,9 +262,7 @@ def test_result_entry_ms_per_100_nan_when_n_zero():
     assert np.isnan(entry["ms_per_100"])
 
 
-# ---------------------------------------------------------------------------
-# save_results_csv — result-row assembly to CSV
-# ---------------------------------------------------------------------------
+# save_results_csv
 
 
 def _ok_entry():
@@ -334,7 +308,7 @@ def test_save_results_csv_error_rows_omit_metric_columns(tmp_path):
     assert len(df) == 2
     assert set(df["status"]) == {"Error: boom"}
     assert set(df["id"]) == {"PA1"}
-    # Error rows carry id/model/type/metric/status only -> numeric cols absent/NaN.
+    # Error rows carry only id, model, type, metric and status, so the numeric columns are absent or NaN.
     if "mdape" in df.columns:
         assert df["mdape"].isna().all()
 
@@ -363,7 +337,7 @@ def test_save_results_csv_mixed_ok_and_error(tmp_path):
 
 
 def test_save_results_csv_relative_path_lands_under_results_dir(tmp_path, monkeypatch):
-    """A relative csv_path is resolved under BENCHMARKS_DIR/results (not CWD)."""
+    """A relative csv_path resolves under BENCHMARKS_DIR/results."""
     monkeypatch.setattr(rb, "BENCHMARKS_DIR", tmp_path)
     rb.save_results_csv({"RandomForest": _ok_entry()}, csv_path="thesis.csv")
     written = tmp_path / "results" / "thesis.csv"
@@ -372,9 +346,7 @@ def test_save_results_csv_relative_path_lands_under_results_dir(tmp_path, monkey
     assert set(df["model"]) == {"RandomForest"}
 
 
-# ---------------------------------------------------------------------------
-# prepare_ml_data — test-split loading (reads curated CSV only; no model load)
-# ---------------------------------------------------------------------------
+# prepare_ml_data: reads the curated CSV and loads no model
 
 
 def test_prepare_ml_data_returns_aligned_test_split():
@@ -394,14 +366,14 @@ def test_prepare_ml_data_returns_aligned_test_split():
     assert len(data["y_runtime_test"]) == n
     assert len(data["X_cat_test"]) == n
     assert len(data["X_num_test"]) == n
-    # full_test exposes the columns _build_meta / evaluators rely on.
+    # full_test has the columns that _build_meta and the evaluators read.
     for col in ("batch_size", "tokens_per_sample", "number_gpus", "number_nodes"):
         assert col in data["full_test"].columns
 
 
 def test_prepare_ml_data_max_gpus_filters_test_rows():
-    """max_gpus must drop rows where number_gpus * number_nodes exceeds the cap,
-    and is never larger than the unfiltered split."""
+    """max_gpus drops rows whose number_gpus * number_nodes exceeds it, and the result is no
+    larger than the unfiltered split."""
     full = rb.prepare_ml_data()
     capped = rb.prepare_ml_data(max_gpus=8)
 
@@ -409,7 +381,7 @@ def test_prepare_ml_data_max_gpus_filters_test_rows():
         capped["full_test"]["number_nodes"], errors="coerce"
     ).fillna(1)
     assert bool((tot <= 8).all())
-    # All aligned arrays shrink/stay together.
+    # The aligned arrays keep the same length.
     n = len(capped["full_test"])
     assert len(capped["y_throughput_test"]) == n
     assert len(capped["y_runtime_test"]) == n

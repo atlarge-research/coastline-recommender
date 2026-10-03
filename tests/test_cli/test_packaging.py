@@ -1,10 +1,10 @@
-"""Packaging guards: the uv-built wheel ships the whole ``coastline`` package (source +
-bundled data + templates), excludes the heavy/dev bits, and every declared console-script
-entry point actually imports.
+"""Packaging checks: the uv-built wheel ships the whole ``coastline`` package (source, bundled
+data and templates) without the large model artifacts and dev files, and every declared console
+script imports.
 
-The wheel build is opt-in: set ``COASTLINE_RUN_PACKAGING_TESTS=1`` to run it (it shells out
-to ``uv build``). The entry-point import checks are fast and always run — they catch a
-renamed/moved CLI target without building anything.
+The wheel build runs only with ``COASTLINE_RUN_PACKAGING_TESTS=1`` (it calls ``uv build``). The
+entry-point import checks are fast and always run; they catch a renamed or moved CLI target
+without a build.
 """
 
 from __future__ import annotations
@@ -18,20 +18,18 @@ from pathlib import Path
 
 import pytest
 
-# Repo root: tests/test_cli/ -> tests/ -> <repo>.
+# Repo root, two levels above tests/test_cli/.
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# Opt-in toggle: the wheel build stays out of the normal fast suite.
+# The wheel build stays out of the normal suite unless this is set.
 _RUN_BUILD = os.environ.get("COASTLINE_RUN_PACKAGING_TESTS") == "1"
 
 
 def _declared_console_scripts() -> dict[str, str]:
-    """The ``[project.scripts]`` table straight out of pyproject.toml.
+    """The ``[project.scripts]`` table from pyproject.toml.
 
-    Deriving the targets from pyproject (rather than a hand-maintained copy) is what
-    makes the import checks below an *independent* oracle: a script whose target is
-    renamed in pyproject alone is caught here, because pyproject is the source of truth
-    the packaging backend actually consumes.
+    The targets are read from the file the build backend uses, so a target renamed only in
+    pyproject.toml is still checked.
     """
     with (_REPO_ROOT / "pyproject.toml").open("rb") as fh:
         return tomllib.load(fh).get("project", {}).get("scripts", {})
@@ -41,13 +39,10 @@ _DECLARED_SCRIPTS = _declared_console_scripts()
 
 
 def test_documented_public_commands_are_declared_as_console_scripts():
-    """The two documented public commands ship as console scripts.
+    """The two documented commands, ``coastline`` (the CLI dispatcher) and ``coastline-ui``
+    (the FastAPI dashboard), are declared as console scripts.
 
-    Oracle (independent of the pyproject table under test): the deployment surface is
-    the single ``coastline`` dispatcher (facade/batch/recommend) plus ``coastline-ui``
-    (the FastAPI dashboard). Both MUST be installed on the
-    PATH by a `pip install coastline`; a subset check, so adding a new script doesn't
-    spuriously fail, but dropping either goes red.
+    A subset check: an added script passes, a missing one fails.
     """
     assert {"coastline", "coastline-ui"} <= set(_DECLARED_SCRIPTS), (
         f"missing documented command(s); declared scripts = {sorted(_DECLARED_SCRIPTS)}"
@@ -58,10 +53,8 @@ def test_documented_public_commands_are_declared_as_console_scripts():
 def test_console_script_target_resolves_to_a_callable(script_name):
     """Every declared console-script ``module:attr`` target imports to a callable.
 
-    Falsification: a target renamed/moved in pyproject (e.g. ``coastline.cli:main`` ->
-    a typo, or a deleted attribute) raises ImportError/AttributeError, or points at a
-    non-callable, and this goes red — that is exactly the broken-entry-point bug a user
-    would hit the first time they invoke the installed command.
+    A mistyped, moved or deleted target fails here with ImportError or AttributeError, before
+    a user runs the installed command.
     """
     target = _DECLARED_SCRIPTS[script_name]  # e.g. "coastline.cli:main"
     assert target.count(":") == 1, f"malformed entry-point spec: {target!r}"
@@ -79,8 +72,8 @@ def test_console_script_target_resolves_to_a_callable(script_name):
     reason="wheel-build packaging test is opt-in (set COASTLINE_RUN_PACKAGING_TESTS=1)",
 )
 def test_wheel_ships_package_not_heavy_artifacts(tmp_path):
-    """`uv build --wheel` ships the whole src/coastline tree (code + bundled data +
-    templates), and excludes model pickles, tests, and dev tooling."""
+    """`uv build --wheel` ships the src/coastline tree (code, bundled data, templates and the
+    small model pickles) and leaves out the large model pickles, tests and dev tooling."""
     out_dir = tmp_path / "wheelhouse"
     proc = subprocess.run(
         ["uv", "build", "--wheel", "--out-dir", str(out_dir)],
@@ -97,7 +90,7 @@ def test_wheel_ships_package_not_heavy_artifacts(tmp_path):
     with zipfile.ZipFile(wheels[0]) as zf:
         names = zf.namelist()
 
-    # The whole single package ships (facade, engine, cli, ui) — one root, no PYTHONPATH.
+    # The whole package ships (facade, engine, cli, ui) under one root, with no PYTHONPATH.
     assert "coastline/__init__.py" in names
     assert "coastline/sdk/recommend/facade.py" in names
     assert "coastline/sdk/models/workload.py" in names
@@ -105,20 +98,21 @@ def test_wheel_ships_package_not_heavy_artifacts(tmp_path):
     assert "coastline/ui/app.py" in names
     assert "coastline/py.typed" in names
 
-    # Bundled data + FastAPI templates ride along automatically (uv_build ships the tree).
+    # Bundled data and FastAPI templates ship with the tree (uv_build).
     assert "coastline/sdk/io/data/sample_raw_trace.csv" in names
+    assert "coastline/sdk/io/data/run_database.csv" in names  # what `lookup: default` reads
     assert "coastline/ui/templates/index.html" in names
 
-    # The parametric model subset ships bundled in the wheel (so pip install coastline[ml] serves
-    # them); the large/instance-based ones (tabpfn, random_forest, knn, gaussian_process, svr) do NOT.
+    # The parametric models ship in the wheel, so the [ml] extra can serve them; the large or
+    # instance-based ones (tabpfn, random_forest, knn, gaussian_process, svr) do not.
     _portfolio = "coastline/sdk/predictors/performance/data_driven/portfolio/"
     for stem in ("catboost", "xgboost", "lightgbm", "bayesian_ridge"):
         assert f"{_portfolio}{stem}.pkl" in names, f"{stem} model not bundled"
     assert any(n.startswith(f"{_portfolio}deep_learning/") for n in names)
-    # (predictor code for these ships; only their trained artifacts must not).
+    # Their predictor code ships; their trained artifacts do not.
     for excluded in ("tabpfn", "random_forest", "knn", "gaussian_process", "svr"):
         assert not [n for n in names if n.endswith(f"/{excluded}.pkl")], (
-            f"{excluded} model artifact must NOT ship in the public wheel"
+            f"{excluded} model artifact must not ship in the public wheel"
         )
     assert not [n for n in names if "/tests/" in n], "wheel must not ship test packages"
 

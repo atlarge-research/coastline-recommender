@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exp1 recommendation timing: 4 policies × N repeats → recommendation_timing_runs.csv."""
+"""Exp1 recommendation timing: 4 policies x N repeats, written to recommendation_timing_runs.csv and a summary CSV."""
 
 from __future__ import annotations
 
@@ -172,5 +172,5 @@ if __name__ == "__main__":
     ap.add_argument("--summary", type=Path, default=OUT / "recommendation_timing_summary.csv")
     ap.add_argument("--force", action="store_true")
     a = ap.parse_args()
-    print(f"{len(POLICIES)}×{a.repeats}={len(POLICIES) * a.repeats} timings")
+    print(f"{len(POLICIES)}*{a.repeats}={len(POLICIES) * a.repeats} timings")
     run(a.repeats, a.output, a.summary, a.force)

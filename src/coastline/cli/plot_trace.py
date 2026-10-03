@@ -1,4 +1,4 @@
-"""`coastline utils plot-trace` — plot a recommended trace's operational cluster timeline."""
+"""`coastline utils plot-trace`: plot the cluster timeline of a recommended trace."""
 
 from __future__ import annotations
 
@@ -6,11 +6,11 @@ import sys
 from typing import Optional, Sequence
 
 from coastline.cli._args import add_trace_layout_args
-from coastline.cli._shared import FriendlyParser
+from coastline.cli._shared import FriendlyParser, report_errors
 from coastline.sdk.trace.plot import _ORIG_GPUS, _ORIG_NODES, plot_trace_timeline
 
-# Columns used when --baseline is set (original layout, never overwritten by recommend-trace).
-_BASELINE_GPUS_COL = _ORIG_GPUS  # "metadata.orig_number_gpus"
+# Columns read with --baseline: the original layout, which recommend-trace leaves unchanged.
+_BASELINE_GPUS_COL = _ORIG_GPUS  # "metadata.orig_number_gpus", the job's total GPUs
 _BASELINE_NODES_COL = _ORIG_NODES  # "metadata.orig_num_nodes"
 
 
@@ -37,7 +37,7 @@ def _build_parser() -> FriendlyParser:
         dest="baseline",
         help=(
             "Use the original (pre-recommendation) GPU layout columns: "
-            f"{_BASELINE_GPUS_COL} and {_BASELINE_NODES_COL}.  "
+            f"{_BASELINE_GPUS_COL} (the job's total GPUs) over {_BASELINE_NODES_COL} nodes.  "
             "These are preserved by coastline recommend-trace, so --baseline works on both "
             "raw and patched traces.  Mutually exclusive with --gpus-per-node-col/--nodes-col."
         ),
@@ -93,7 +93,8 @@ def _build_parser() -> FriendlyParser:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
-    args = _build_parser().parse_args(argv)
+    parser = _build_parser()
+    args = parser.parse_args(argv)
 
     if args.baseline and (args.gpus_per_node_col or args.nodes_col):
         print(
@@ -103,23 +104,25 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         raise SystemExit(2)
 
     if args.baseline:
-        gpus_per_node_col = _BASELINE_GPUS_COL
+        total_gpus_col = _BASELINE_GPUS_COL
+        gpus_per_node_col = None
         nodes_col = _BASELINE_NODES_COL
         print(
-            f"note: --baseline — using original layout columns:\n"
-            f"  gpus-per-node : {_BASELINE_GPUS_COL}\n"
+            f"note: --baseline - using original layout columns:\n"
+            f"  total GPUs    : {_BASELINE_GPUS_COL}\n"
             f"  nodes         : {_BASELINE_NODES_COL}",
             file=sys.stderr,
         )
     else:
+        total_gpus_col = None
         gpus_per_node_col = args.gpus_per_node_col
         nodes_col = args.nodes_col
 
     from coastline.sdk.io.infrastructure import resolve_cluster_caps
 
     cluster_gpus, node_gpus, _ = resolve_cluster_caps(args.cluster_gpus, args.node_gpus)
-    print(
-        plot_trace_timeline(
+    with report_errors(parser):
+        stats = plot_trace_timeline(
             args.input,
             args.output,
             method=args.method,
@@ -130,8 +133,9 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             gpus_per_node_col=gpus_per_node_col,
             nodes_col=nodes_col,
             label=args.label,
+            total_gpus_col=total_gpus_col,
         )
-    )
+    print(stats)
 
 
 if __name__ == "__main__":

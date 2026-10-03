@@ -1,9 +1,7 @@
-"""``coastline utils`` — auxiliary tooling, offloaded from the core recommend verbs.
-
-A thin sub-dispatcher over the utilities that support (but are not) the recommender:
+"""``coastline utils``: helper commands that sit beside the recommender.
 
 * ``tune``          train a data-driven predictor on a measured-runs CSV ([ml] extra)
-* ``trace-to-runs`` convert a fine-tuning trace CSV → the flat measured-runs schema
+* ``trace-to-runs`` convert a fine-tuning trace CSV to the flat measured-runs schema
 * ``plot-trace``    plot a recommended trace's cluster timeline ([plot] extra)
 """
 

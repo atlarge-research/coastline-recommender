@@ -1,9 +1,7 @@
-"""split_data ratios/determinism + feature assembly (incl. Kavier spec parity).
+"""Tests for split_data, feature engineering and the Kavier spec features.
 
-These cover the data-plumbing logic that every one of the 10 trainers shares:
-the 70/15/15 split (seed 42), feature engineering / spec augmentation, the
-end-to-end ``load_and_preprocess_data`` contract, and the categorical /
-numerical encoders.
+All 10 trainers share this code: the 70/15/15 split (seed 42), the engineered
+features and the spec lookups.
 """
 
 from __future__ import annotations
@@ -15,9 +13,7 @@ import pytest
 from .. import common as C
 from .conftest import KNOWN_GPU, KNOWN_LLM, StubWorkload, make_synthetic_options
 
-# ---------------------------------------------------------------------------
 # split_data: ratios, alignment, determinism
-# ---------------------------------------------------------------------------
 
 
 def test_split_ratios_70_15_15():
@@ -25,18 +21,17 @@ def test_split_ratios_70_15_15():
     X = pd.DataFrame({"f": np.arange(n)})
     y = pd.DataFrame({"t": np.arange(n) * 2.0})
     (Xtr, ytr), (Xva, yva), (Xte, yte) = C.split_data(X, y)
-    # Hand-derived from sklearn's split rule (n_test = ceil(frac * n)):
-    #   test  = ceil(0.15  * 1000)        = 150   -> remainder 850
-    #   val   = ceil(0.176 *  850)=ceil(149.6)=150 -> train 700
-    #   train = 850 - 150                 = 700
+    # sklearn's split takes n_test = ceil(frac * n):
+    #   test  = ceil(0.15 * 1000) = 150, remainder 850
+    #   val   = ceil(0.176 * 850) = ceil(149.6) = 150
+    #   train = 850 - 150 = 700
     assert (len(Xtr), len(Xva), len(Xte)) == (700, 150, 150)
-    # Partition is exhaustive: parts tile the whole.
+    # The three parts cover every row.
     assert len(Xtr) + len(Xva) + len(Xte) == n
 
 
 def test_split_keeps_rows_aligned_across_arrays():
-    """Each input array must be split with the SAME row assignment; here y = 2*X
-    so the relationship must hold within every split."""
+    """All input arrays get the same row assignment: with y = 2*X the relation holds in every split."""
     n = 300
     X = pd.DataFrame({"f": np.arange(n)})
     y = pd.DataFrame({"t": np.arange(n) * 2.0})
@@ -74,24 +69,21 @@ def test_split_different_seed_changes_partition():
 
 
 def test_split_handles_four_arrays_like_the_trainers():
-    """Trainers call split_data(X_cat, X_num, y, y_log); verify the 4-array
-    unpacking shape used everywhere in train_performance_*.py."""
+    """split_data(X_cat, X_num, y, y_log), as the trainers call it, returns four arrays per split."""
     n = 120
     arrays = [pd.DataFrame({c: np.arange(n) + j for c in ["a"]}) for j in range(4)]
     train, val, test = C.split_data(*arrays)
-    # 4 arrays in -> 4 arrays out in each of the 3 groups.
+    # Four arrays in, four arrays out in each of the three groups.
     assert len(train) == len(val) == len(test) == 4
-    # Hand-derived sizes (ceil rule): test=ceil(0.15*120)=18 -> rem 102;
-    #   val=ceil(0.176*102)=ceil(17.95)=18 -> train=84.
+    # Ceil rule: test = ceil(0.15*120) = 18, remainder 102;
+    #   val = ceil(0.176*102) = ceil(17.95) = 18, train = 84.
     assert (len(train[0]), len(val[0]), len(test[0])) == (84, 18, 18)
-    # Every one of the 4 arrays must be split identically (row-count parity).
+    # All four arrays have the same length within each group.
     for g in (train, val, test):
         assert len({len(a) for a in g}) == 1
 
 
-# ---------------------------------------------------------------------------
 # Model-family / size-bucket extraction
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -118,23 +110,19 @@ def test_extract_model_size_bucket(name, bucket):
     assert C.extract_model_size_bucket(name) == bucket
 
 
-# ---------------------------------------------------------------------------
-# Spec-parity feature lookups (the Kavier-augmentation contract)
-# ---------------------------------------------------------------------------
+# Kavier spec feature lookups
 
 
 def test_llm_spec_features_known_model_matches_published_mistral7b_arch():
-    # KNOWN_LLM is Mistral-7B-v0.1. Oracle = its published model card / config
-    # (independent of this code): 32 transformer layers, hidden size 4096,
-    # 32 attention heads -> head dim 4096/32 = 128; a dense (non-MoE) model so
-    # exactly 1 expert.
+    # Expected values from the published Mistral-7B-v0.1 config: 32 layers, hidden
+    # size 4096, 32 attention heads; a dense model, so 1 expert.
     feats = C.llm_spec_features(KNOWN_LLM)
     assert set(feats) == set(C.LLM_SPEC_NUMERICAL)
     assert all(np.isfinite(v) for v in feats.values())
     assert feats["llm_n_layers"] == pytest.approx(32.0)
     assert feats["llm_d_model"] == pytest.approx(4096.0)
     assert feats["llm_n_heads"] == pytest.approx(32.0)
-    # d_head is the derived per-head width: 4096 / 32 = 128.
+    # Per-head width: 4096 / 32 = 128.
     assert feats["llm_d_head"] == pytest.approx(128.0)
     assert feats["llm_num_experts"] == 1.0
 
@@ -146,10 +134,9 @@ def test_llm_spec_features_unknown_model_is_all_nan():
 
 
 def test_gpu_spec_features_known_gpu_matches_published_a100_datasheet():
-    # KNOWN_GPU is the NVIDIA A100-SXM4-80GB. Oracle = the published NVIDIA
-    # datasheet (independent of this code's spec table):
-    #   FP16 tensor-core peak = 312 TFLOPS; HBM2e memory bandwidth = 2039 GB/s
-    #   (2.039 TB/s = 2.039e12 B/s, so bps/1e9 must land on 2039.0); 80 GB; 400 W TDP.
+    # Expected values from NVIDIA's A100-SXM4-80GB datasheet: FP16 tensor-core peak
+    # 312 TFLOPS, HBM2e bandwidth 2039 GB/s (2.039e12 B/s, so bps/1e9 = 2039.0),
+    # 80 GB memory, 400 W TDP.
     feats = C.gpu_spec_features(KNOWN_GPU)
     assert set(feats) == set(C.GPU_SPEC_NUMERICAL)
     assert all(np.isfinite(v) for v in feats.values())
@@ -165,15 +152,13 @@ def test_gpu_spec_features_unknown_gpu_is_all_nan():
 
 
 def test_spec_knobs_mfu_and_calibration_are_not_features():
-    """Feature parity must EXCLUDE the tuned calibration knobs."""
+    """The tuned calibration knobs are not features."""
     leak = {"mfu_factor", "calibration_factor", "mfu_multiplier", "comm_scale"}
     assert leak.isdisjoint(set(C.SPEC_NUMERICAL))
     assert leak.isdisjoint(set(C.GPU_SPEC_NUMERICAL))
 
 
-# ---------------------------------------------------------------------------
 # engineer_features
-# ---------------------------------------------------------------------------
 
 
 def test_engineer_features_adds_expected_columns_and_specs():
@@ -209,7 +194,7 @@ def test_engineer_features_roce_and_dtype_categories():
     )
     out = C.engineer_features(df)
     assert list(out["enable_roce"]) == ["1", "0", "unknown"]
-    # torch_dtype lower-cased; None / 'nan' -> 'unknown'.
+    # torch_dtype is lower-cased; None and 'nan' become 'unknown'.
     assert list(out["torch_dtype"]) == ["bfloat16", "unknown", "unknown"]
 
 
@@ -223,19 +208,16 @@ def test_engineer_features_total_gpus_clips_below_one():
         }
     )
     out = C.engineer_features(df)
-    # Both clipped to >=1 -> product 1.0.
+    # Both are clipped to 1, so the product is 1.0.
     assert out["total_gpus"].iloc[0] == 1.0
 
 
-# ---------------------------------------------------------------------------
 # get_feature_lists
-# ---------------------------------------------------------------------------
 
 
 def test_get_feature_lists_matches_featv3_schema():
-    # The featv3 schema is a fixed contract the trained pickles were fit on;
-    # spell it out independently of the module's concatenation so a reorder or
-    # dropped/renamed column is caught (order matters: column-indexed encoders).
+    # The trained pickles were fit on this featv3 column order. It is written out in
+    # full so a reordered, dropped or renamed column fails (encoders are indexed by column).
     cat, num = C.get_feature_lists()
     assert cat == [
         "method",
@@ -267,13 +249,11 @@ def test_get_feature_lists_matches_featv3_schema():
         "gpu_tdp_w",
         "gpu_net_bw_gbps",
     ]
-    # Categorical and numerical name-spaces must not overlap.
+    # No name is both categorical and numerical.
     assert set(cat).isdisjoint(set(num))
 
 
-# ---------------------------------------------------------------------------
 # workload_to_ml_feature_row / curated_series_to_ml_feature_row parity
-# ---------------------------------------------------------------------------
 
 
 def test_workload_feature_row_has_all_model_columns():
@@ -302,8 +282,7 @@ def test_workload_feature_row_missing_optionals_default_to_unknown():
 
 
 def test_curated_row_matches_workload_row_for_same_inputs():
-    """The two builders feed the same model schema; for identical inputs the
-    produced feature dicts must agree (guards against feature drift)."""
+    """For the same inputs, the curated-row and workload builders return the same feature dict."""
     row = pd.Series(
         {
             "model_name": KNOWN_LLM,

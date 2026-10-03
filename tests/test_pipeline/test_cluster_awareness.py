@@ -1,12 +1,13 @@
-"""Cluster-size awareness: resolve_cluster_caps + the grid never proposing a layout > the cluster.
+"""Cluster size: resolve_cluster_caps, and a grid that stays within the cluster.
 
-The cluster size is sysadmin-declared in infrastructure.yaml (or a --cluster-gpus flag) — never read
-from the workload trace. These tests pin (1) how the flag overrides the declared caps and (2) that
-`generate_candidates` never emits a candidate whose ACTUAL layout exceeds the cluster budget, including
-the non-power-of-two rounding case (request 30 at 8/node rounds up to 8x4 = 32).
+The cluster size comes from infrastructure.yaml or the --cluster-gpus flag, never from the workload
+trace. The tests cover how the flag overrides the declared caps, and that ``generate_candidates``
+keeps every layout within the cluster, including 30 GPUs at up to 8 per node (laid out as 6 x 5).
 """
 
 from __future__ import annotations
+
+import pytest
 
 import coastline.sdk.io.infrastructure as infra_mod
 from coastline.sdk.io.infrastructure import Infrastructure, resolve_cluster_caps
@@ -42,9 +43,6 @@ def _context(max_gpus: int, gpus_per_node: int = 8, max_nodes: int = 8) -> Syste
     )
 
 
-# --------------------------------------------------------------------------- #
-# resolve_cluster_caps
-# --------------------------------------------------------------------------- #
 class TestResolveClusterCaps:
     def test_defaults_to_infrastructure_file(self, monkeypatch):
         _use_fake_infra(monkeypatch)
@@ -59,13 +57,26 @@ class TestResolveClusterCaps:
         _use_fake_infra(monkeypatch)
         assert resolve_cluster_caps(cluster_gpus=4) == (4, 4, 1)  # per-node clamped to total; 1 node
 
+    @pytest.mark.parametrize(
+        "kwargs",
+        [{"cluster_gpus": 0}, {"cluster_gpus": -8}, {"node_gpus": 0}, {"node_gpus": -1}],
+        ids=["no cluster GPUs", "negative cluster GPUs", "no GPUs per node", "negative GPUs per node"],
+    )
+    def test_a_value_below_one_is_rejected(self, monkeypatch, kwargs):
+        # Zero is rejected (it would otherwise read as 'not given'), and so is a negative node width.
+        _use_fake_infra(monkeypatch)
+        with pytest.raises(ValueError, match="must be >= 1"):
+            resolve_cluster_caps(**kwargs)
 
-# --------------------------------------------------------------------------- #
-# generate_candidates — never exceeds the cluster budget
-# --------------------------------------------------------------------------- #
+    def test_one_gpu_is_a_valid_cluster(self, monkeypatch):
+        _use_fake_infra(monkeypatch)
+        assert resolve_cluster_caps(cluster_gpus=1, node_gpus=1) == (1, 1, 1)
+
+
+# generate_candidates stays within the cluster budget
 class TestGridNeverExceedsCluster:
     def test_explicit_grid_is_capped_to_cluster(self):
-        # Config asks for up to 64 GPUs, but the cluster is 16 -> 32 and 64 must be dropped.
+        # The grid asks for up to 64 GPUs on a 16-GPU cluster, so 32 and 64 are dropped.
         cands = generate_candidates(
             _workload(), _context(max_gpus=16), GridConfig(batch_sizes=[8], total_gpus=[1, 2, 4, 8, 16, 32, 64])
         )
@@ -74,18 +85,19 @@ class TestGridNeverExceedsCluster:
         assert max(totals) <= 16
 
     def test_empty_grid_is_derived_as_powers_of_two_up_to_cluster(self):
-        # No explicit grid -> derive [1,2,4,8,16,32] up to a 32-GPU cluster.
+        # Without a GPU list the grid is the powers of two up to the 32-GPU cluster.
         cands = generate_candidates(_workload(), _context(max_gpus=32), GridConfig(batch_sizes=[8], total_gpus=[]))
         totals = sorted({c.gpus_per_node * c.number_of_nodes for c in cands})
         assert totals == [1, 2, 4, 8, 16, 32]
 
-    def test_non_power_of_two_step_that_rounds_up_is_rejected(self):
-        # Request 30 GPUs at 8/node rounds to 8x4 = 32 actual, which exceeds a 30-GPU cluster.
-        # The airtight cap must drop it rather than propose a 32-GPU layout.
+    def test_non_power_of_two_step_gets_an_exact_layout_within_the_cluster(self):
+        # 30 GPUs at up to 8 per node is laid out as 6 x 5. Rounding up to 8 x 4 = 32 would
+        # exceed the 30-GPU cluster.
         cands = generate_candidates(
             _workload(), _context(max_gpus=30), GridConfig(batch_sizes=[8], total_gpus=[8, 16, 30])
         )
         totals = {c.gpus_per_node * c.number_of_nodes for c in cands}
         assert 32 not in totals
         assert all(t <= 30 for t in totals)
-        assert totals == {8, 16}  # 8x1 and 8x2; the 30-step layout (8x4=32) is dropped
+        assert totals == {8, 16, 30}
+        assert {(c.gpus_per_node, c.number_of_nodes) for c in cands} == {(8, 1), (8, 2), (6, 5)}

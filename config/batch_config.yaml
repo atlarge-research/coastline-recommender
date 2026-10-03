@@ -1,31 +1,33 @@
-# Coastline batch recommender — config for: config + input CSV -> output CSV.
+# Batch recommendation config: one recommendation for each row of an input CSV, written to an
+# output CSV.
 #
 #   coastline recommend-job --config config/batch_config.yaml \
-#                           --input docs/workloads.csv --output recommendations.csv
+#       --input config/coastline_functionality/sample_workloads.csv --output recommendations.csv
 #
-# or from Python:  coastline.recommend_csv(config, input_csv, output_csv)
+# From Python: coastline.recommend_csv(config, input_csv, output_csv)
 
 strategy:
-  name: multi_objective    # how candidates are ranked; alt: min_gpu (fewest feasible GPUs)
-  preset: balanced         # throughput-vs-energy weighting; alt: performance, energy
-  max_slowdown: 2.0        # SAFEGUARD: never recommend a config slower than 2x the
-                           # fastest feasible one. Omit for no slowdown cap.
+  name: multi_objective    # ranking policy; or min_gpu (fewest feasible GPUs)
+  preset: balanced         # weight of throughput against energy; or performance, energy
+  max_slowdown: 2.0        # drop configs more than 2x slower than the fastest feasible one;
+                           # omit for no limit
 
 predictors:
-  performance: kavier      # analytical engine; alt: tabpfn/catboost/... (needs the [ml] extra)
+  performance: kavier      # analytical model; or tabpfn, catboost, ... (need the [ml] extra)
   energy: kavier_power
-  feasibility: rules       # divisibility-only; keeps this example cheap.
-                           # Production default is `autoconf` (OOM-aware; ships in the core install).
+  feasibility: rules       # sanity checks only, no OOM check, which keeps this example cheap.
+                           # The default is autoconf (OOM-aware, part of the core install).
 
 grid:                      # search space swept per workload row
   gpu_models: ["NVIDIA-A100-SXM4-80GB"]
   batch_sizes: [4, 8, 16, 32]
   total_gpus: [1, 2, 4, 8, 16]
 
-# Optional column remap for arbitrary CSV headers. Defaults already accept common
-# spellings (model_name/llm_model, method/peft, gpu_model/gpu, tokens_per_sample/
-# seq_len, batch_size/batch, number_gpus, number_nodes).
+# Input columns are named after the workload fields: llm_model, fine_tuning_method, gpu_model,
+# tokens_per_sample and batch_size (per device), plus optional ones such as gpus_per_node and
+# number_of_nodes. Other columns are copied to the output as they are. A CSV that names the
+# workload fields differently needs a map from its column names to the field names:
 # input:
 #   columns:
-#     my_model_column: llm_model
-#     my_gpu_column: gpu_model
+#     model_name: llm_model
+#     seq_len: tokens_per_sample

@@ -19,8 +19,8 @@ from benchmark.metrics import compute_metrics
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-# Where the shipped Kavier calibration table may live, in preference order: the sibling kavier
-# source checkout first, then the same table as package data of an installed kavier.
+# Where to look for the Kavier calibration table, in order: a kavier source checkout at the path
+# below, then the package data of the installed kavier.
 _SIBLING_CALIBRATION_PATHS = (
     REPO_ROOT / "kavier" / "src" / "kavier" / "sdk" / "training" / "calibration" / "calibration.json",
 )
@@ -30,12 +30,11 @@ _CALIBRATION_RESOURCE = ("calibration", "calibration.json")
 
 @lru_cache(maxsize=1)
 def load_v2_calibration() -> dict:
-    """Return the shipped Kavier calibration table, loading it on first use.
+    """Return the shipped Kavier calibration table, read on the first call and cached.
 
-    Deliberately not read at import time so this module (and pytest collection of
-    anything that imports it) works in checkouts without the kavier sibling repo.
-    Resolution order: sibling source checkout, then installed kavier.sdk.training package
-    data; a clear error is raised only when the table is actually requested.
+    Reading it lazily lets this module be imported, and collected by pytest, without kavier.
+    Raises FileNotFoundError when neither the source checkout nor the installed kavier package
+    has the table.
     """
     for path in _SIBLING_CALIBRATION_PATHS:
         if path.is_file():
@@ -56,7 +55,7 @@ def load_v2_calibration() -> dict:
 
 
 def __getattr__(name: str):
-    """Keep ``V2_CALIBRATION`` importable without eager file I/O (PEP 562 lazy attribute)."""
+    """Load ``V2_CALIBRATION`` on first access instead of at import (PEP 562)."""
     if name == "V2_CALIBRATION":
         return load_v2_calibration()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

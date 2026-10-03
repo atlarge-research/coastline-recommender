@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from coastline.sdk.library.hardware import canonical_gpu_name
+from coastline.sdk.library.llm_names import kavier_llm_name
 from coastline.sdk.models.recommendation import Prediction
 
 logger = logging.getLogger(__name__)
@@ -70,7 +72,9 @@ def feature_row_has_unknown_specs(row_or_df: Any) -> bool:
 
 
 def llm_spec_features(model_name: Any) -> Dict[str, float]:
-    s = _LLM_LIB.get(str(model_name))
+    # Same lookup as the Kavier predictor: a lowercased catalog name or an HF id finds its entry.
+    key = kavier_llm_name(model_name)
+    s = _LLM_LIB.get(key) if key is not None else None
     if s is None:
         return {k: np.nan for k in LLM_SPEC_NUMERICAL}
     return {
@@ -80,15 +84,15 @@ def llm_spec_features(model_name: Any) -> Dict[str, float]:
         "llm_d_head": float(s.d_head),
         "llm_m_params": float(s.m_params),
         "llm_active_params": float(s.active_params),
-        # Hardcoded 1.0: Kavier dropped MoE tracking and training had zero MoE rows.
-        # Keep for featv3 pickle compatibility; remove on a featv4 retrain.
+        # Fixed at 1.0: Kavier has no MoE fields and the training data has no MoE rows.
+        # The featv3 pickles expect these columns; drop them on a featv4 retrain.
         "llm_num_experts": 1.0,
         "llm_active_experts": 1.0,
     }
 
 
 def gpu_spec_features(gpu_model: Any) -> Dict[str, float]:
-    s = _GPU_LIB.get(str(gpu_model))
+    s = _GPU_LIB.get(canonical_gpu_name(str(gpu_model)))
     if s is None:
         return {k: np.nan for k in GPU_SPEC_NUMERICAL}
     return {
@@ -102,42 +106,57 @@ def gpu_spec_features(gpu_model: Any) -> Dict[str, float]:
     }
 
 
-# Model artifacts are resolved in precedence order:
-#   1. PORTFOLIO_DIR/custom/  — user-tuned models (`coastline utils tune` writes here)
-#   2. PORTFOLIO_DIR/         — the bundled portfolio (all 10 in a dev checkout)
-#   3. the packaged portfolio/ next to this file — fallback when PORTFOLIO_DIR is overridden
-# By default PORTFOLIO_DIR *is* the packaged portfolio, so every model (bundled and user-tuned)
-# has one home inside the SDK. A read-only (pip) deployment sets PORTFOLIO_DIR to a writable dir.
+# Model artifacts are looked up in this order:
+#   1. PORTFOLIO_DIR/custom/: user-tuned models (`coastline utils tune` writes here)
+#   2. PORTFOLIO_DIR/: the bundled portfolio (all 10 models in a dev checkout)
+#   3. the packaged portfolio/ next to this file, used when PORTFOLIO_DIR points elsewhere
+# PORTFOLIO_DIR defaults to the packaged portfolio, so bundled and user-tuned models live in the
+# SDK. A read-only (pip) install sets PORTFOLIO_DIR to a writable directory. custom/ is
+# git-ignored and holds local tunes only: a file committed there would shadow the bundled model
+# (the thesis TabPFN) in every checkout.
 _BUNDLED_PORTFOLIO_DIR = Path(__file__).resolve().parent / "portfolio"
 PORTFOLIO_DIR = Path(os.environ.get("PORTFOLIO_DIR", str(_BUNDLED_PORTFOLIO_DIR)))
 
 
 def custom_models_dir() -> Path:
-    """Where user-tuned artifacts live (highest resolution precedence)."""
+    """Directory for user-tuned artifacts (searched first)."""
     return PORTFOLIO_DIR / "custom"
 
 
 def _resolve_artifact(*names: str) -> Path:
-    """First existing of custom/ > flat PORTFOLIO_DIR > packaged portfolio, trying each name
-    spelling per directory; falls back to the custom/ path of the first (canonical) name for a
-    clear not-found error."""
+    """Return the first existing path in custom/, PORTFOLIO_DIR, then the packaged portfolio,
+    trying each name in each directory. If none exists, return PORTFOLIO_DIR/<first name>
+    (where a downloaded model file belongs) for the not-found error."""
     directories = (PORTFOLIO_DIR / "custom", PORTFOLIO_DIR, _BUNDLED_PORTFOLIO_DIR)
     for directory in directories:
         for name in names:
             candidate = directory / name
             if candidate.exists():
                 return candidate
-    return PORTFOLIO_DIR / "custom" / names[0]
+    return PORTFOLIO_DIR / names[0]
+
+
+class ModelNotShippedError(FileNotFoundError):
+    """A data-driven model whose file is not in this install (the PyPI wheel leaves several out)."""
+
+
+def model_not_shipped_error(model_name: str, path: Path) -> ModelNotShippedError:
+    """The error for a missing model file, with what to do about it first and the path last."""
+    return ModelNotShippedError(
+        f"the {model_name} model is not in this install. Get the model files from the "
+        "coastline-recommender repository or its Zenodo archive and set PORTFOLIO_DIR to the "
+        f"directory that holds them (looked for {path})."
+    )
 
 
 def performance_trained_model_path(model_stem: str) -> Path:
-    """Path to a trained sklearn-style pickle (e.g. model_stem='xgboost') — ``<stem>.pkl``,
-    with the pre-rename ``performance_<stem>_featv3.pkl`` spelling as a legacy fallback."""
+    """Path to a trained sklearn-style pickle, ``<stem>.pkl`` (e.g. ``xgboost.pkl``), or the
+    older name ``performance_<stem>_featv3.pkl`` when only that exists."""
     return _resolve_artifact(f"{model_stem}.pkl", f"performance_{model_stem}{PERFORMANCE_MODEL_ARTIFACT_SUFFIX}.pkl")
 
 
 def performance_deep_learning_model_dir() -> Path:
-    """Directory holding DL weights + artifacts (``deep_learning/``; legacy spelling falls back)."""
+    """Directory with the deep-learning weights and artifacts (``deep_learning/``, or the older name)."""
     return _resolve_artifact("deep_learning", f"performance_deep_learning{PERFORMANCE_MODEL_ARTIFACT_SUFFIX}")
 
 
@@ -224,7 +243,8 @@ def workload_to_ml_feature_row(workload: Any) -> Dict[str, Any]:
 def encode_categoricals(row: Dict[str, Any], encoders: Dict[str, Any], cat_features: List[str]) -> pd.DataFrame:
     """Map categoricals through fitted LabelEncoders; unseen values fall back to 'unknown' or 0.
 
-    Used by xgboost, lightgbm, random_forest, svr, knn. CatBoost uses native categoricals.
+    Used by xgboost, lightgbm, random_forest, svr, knn and gaussian_process. CatBoost uses native
+    categoricals.
     """
     X_cat = pd.DataFrame()
     for col in cat_features:
@@ -246,7 +266,7 @@ def build_encoded_features(
     cat_features: List[str],
     num_features: List[str],
 ) -> pd.DataFrame:
-    """Assemble the model input row: LabelEncoded categoricals + raw numericals."""
+    """Assemble the model input row: LabelEncoded categoricals, then raw numericals."""
     X_cat = encode_categoricals(row, encoders, cat_features)
     X_num = pd.DataFrame([{f: row[f] for f in num_features}])
     return pd.concat([X_cat.reset_index(drop=True), X_num.reset_index(drop=True)], axis=1)
@@ -263,11 +283,25 @@ def invert_log_targets(y_log_pred: Any) -> Tuple[float, Optional[float]]:
     return throughput, runtime_seconds
 
 
-def finalize_ml_prediction(workload: Any, *, throughput, runtime_seconds, metadata) -> "Prediction | None":
-    """Build a Prediction or return None if throughput is missing/non-finite.
+def model_error_prediction(workload: Any, *, model_name: str, detail: str) -> Prediction:
+    """A Prediction with no numbers for a model artifact that cannot be used, with the reason in
+    ``metadata['error_detail']``. The pipeline drops the candidate and reports the reason, as it
+    does for Kavier's error results."""
+    gpus_per_node = int(workload.gpus_per_node or 1)
+    number_of_nodes = int(workload.number_of_nodes or 1)
+    return Prediction(
+        gpus_per_node=gpus_per_node,
+        number_of_nodes=number_of_nodes,
+        total_gpus=gpus_per_node * number_of_nodes,
+        metadata={"predictor": model_name, "error": "model_unavailable", "error_detail": detail},
+    )
 
-    Negative-finite throughput is clamped to 0; non-finite runtime becomes None.
-    (Non-finite values are not clamped to 0 — they'd silently corrupt downstream scoring.)
+
+def finalize_ml_prediction(workload: Any, *, throughput, runtime_seconds, metadata) -> "Prediction | None":
+    """Build a Prediction, or return None if throughput is missing or non-finite.
+
+    Negative values are clamped to 0 and a non-finite runtime becomes None. Non-finite values are
+    dropped instead of clamped because a 0 would corrupt the scoring downstream.
     """
     if throughput is None or not np.isfinite(throughput):
         return None

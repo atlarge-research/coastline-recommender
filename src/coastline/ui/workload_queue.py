@@ -1,10 +1,9 @@
-"""In-memory workload queue + FIFO cluster simulation (the Exp2/Exp4 operational view).
+"""In-memory workload queue and FIFO cluster simulation (the Exp2/Exp4 operational view).
 
-The cluster **simulation** — FIFO scheduling of the queued jobs onto a fixed GPU cluster, with
-per-job wait/runtime and per-cluster makespan/utilisation/energy — is done by Kavier
-(``kavier.sdk.cluster.schedule``). This module owns the in-memory queue, CSV import, and the
-adaptation of Kavier's result into the UI's SimulationResult/ClusterTimeline. Coastline consumes;
-Kavier simulates.
+Kavier (``kavier.sdk.cluster.schedule``) runs the simulation: FIFO scheduling of the queued jobs
+on a fixed GPU cluster, with per-job wait and runtime and the cluster's makespan, utilisation and
+energy. This module holds the queue, the CSV import and the conversion of Kavier's result into
+the UI's SimulationResult and ClusterTimeline.
 """
 
 from __future__ import annotations
@@ -12,9 +11,11 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import math
 import threading
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from kavier.sdk.cluster import schedule as cluster_schedule
@@ -22,30 +23,33 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-# Fallback per-GPU draw for the energy summary when a job carries no Kavier per-GPU power. Passed to
-# the simulator as its default; a job's own ``predicted_power_watts_per_gpu`` takes precedence.
+# Per-GPU power [W] for the energy summary when a job has none; passed to the simulator as its
+# default. A job's own predicted_power_watts_per_gpu takes precedence.
 _AVG_WATTS_PER_GPU = 350.0
 
 
 class QueueJob(BaseModel):
-    """Scheduler record: four fields are consumed by the FIFO sim; the rest is metadata."""
+    """Queue entry: the FIFO simulation reads four fields; the rest is metadata."""
 
     request_id: str = Field(..., description="Stable identifier")
-    arrival_time: float = Field(..., ge=0.0, description="Arrival timestamp (seconds, relative or epoch)")
+    arrival_time: float = Field(
+        ..., ge=0.0, allow_inf_nan=False, description="Arrival timestamp (seconds, relative or epoch)"
+    )
     num_gpus: int = Field(..., ge=1, description="GPUs requested")
-    predicted_duration_s: float = Field(..., gt=0.0, description="Predicted runtime in seconds")
+    predicted_duration_s: float = Field(..., gt=0.0, allow_inf_nan=False, description="Predicted runtime in seconds")
     predicted_power_watts_per_gpu: Optional[float] = Field(
         default=None,
         gt=0.0,
+        allow_inf_nan=False,
         description=(
             "Per-GPU power (W) captured at add-time from Kavier when the workload config is known; "
             "the simulator falls back to a cluster-average constant when this is None"
         ),
     )
-    llm_model: Optional[str] = Field(None, description="Display only — scheduler does not consume this")
+    llm_model: Optional[str] = Field(None, description="Display only - scheduler does not consume this")
     fine_tuning_method: Optional[str] = None
     gpu_model: Optional[str] = Field(
-        None, description="Kavier input — only consumed by the import handler's power/duration lookup"
+        None, description="Kavier input - only consumed by the import handler's power/duration lookup"
     )
     tokens_per_sample: Optional[int] = Field(default=None, gt=0, description="Kavier input")
     batch_size: Optional[int] = Field(None, description="Display + Kavier input")
@@ -88,6 +92,17 @@ def clear_jobs() -> int:
     return n
 
 
+def next_arrival_time() -> float:
+    """Arrival time for a job added without one: the latest arrival already queued, else 0.
+
+    Keeps the job on the queue's own time base (CSV imports carry relative offsets) and puts it
+    after the queued jobs in FIFO order. The earliest row of a CSV with ISO timestamps arrives
+    here too.
+    """
+    with _lock:
+        return max((j.arrival_time for j in _jobs), default=0.0)
+
+
 def generate_id() -> str:
     """Monotonic 3-digit job IDs (001, 002, ...); process-local, resets on restart."""
     global _id_counter
@@ -96,7 +111,7 @@ def generate_id() -> str:
         return f"{_id_counter:03d}"
 
 
-# Cluster simulation (delegated to kavier.sdk.cluster) + result adaptation.
+# Cluster simulation (in kavier.sdk.cluster) and conversion of its result.
 
 
 @dataclass
@@ -130,19 +145,15 @@ class SimulationResult:
 
 @dataclass
 class ClusterTimeline:
-    """Step-series for the cluster figure (the Exp2/Exp4 plot): GPUs allocated
-    and queue depth over time, both derived from a completed FIFO simulation.
+    """GPUs allocated and queue depth over time from a finished FIFO simulation (the Exp2/Exp4
+    cluster plot).
 
-    Times are normalised so ``t == 0`` is the first job arrival; the series runs
-    to ``t == makespan_s`` where the cluster drains back to empty. Each triple
-    ``(t[i], gpus_used[i], queue_depth[i])`` is the cluster state across the
-    half-open interval ``[t[i], t[i + 1])`` — i.e. a step-after staircase, the
-    natural shape for "allocated GPUs" and "jobs waiting", which only change at
-    discrete arrival / start / end events.
-
-    ``cluster_gpus`` is the capacity ceiling (the GPU chart's y-max and the
-    dashed reference rule). ``peak_gpus`` / ``peak_queue`` are the high-water
-    marks, handy for an at-a-glance caption."""
+    ``t == 0`` is the first arrival and the series ends at ``t == makespan_s``, when the cluster
+    is empty again. ``(t[i], gpus_used[i], queue_depth[i])`` holds over ``[t[i], t[i + 1])``, a
+    step-after series, since both values change only at arrival, start and end events.
+    ``cluster_gpus`` is the capacity (the y-max and dashed line of the GPU chart);
+    ``peak_gpus`` and ``peak_queue`` are the maxima.
+    """
 
     t: List[float]
     gpus_used: List[int]
@@ -168,22 +179,20 @@ def _empty_result() -> SimulationResult:
 
 
 def simulate_fifo(jobs: List[QueueJob], n_gpus_cluster: int) -> SimulationResult:
-    """FIFO simulation of a list of QueueJobs on an n-GPU cluster.
+    """FIFO simulation of QueueJobs on a cluster of ``n_gpus_cluster`` GPUs.
 
-    The scheduling + per-cluster metrics + energy are computed by Kavier
-    (``kavier.sdk.cluster.schedule``, strict-FIFO flat pool with head-of-line blocking); this
-    function only adapts the inputs/outputs to the UI's models. Oversized jobs (``num_gpus >
-    n_gpus_cluster``) are dropped — under strict FIFO they would block the queue head forever — so
-    the behaviour matches the previous in-process scheduler.
+    Kavier (``kavier.sdk.cluster.schedule``) computes the schedule, the cluster metrics and the
+    energy, as a strict-FIFO flat pool with head-of-line blocking; this function converts the
+    inputs and outputs. Jobs with ``num_gpus > n_gpus_cluster`` are dropped, since under strict
+    FIFO they would block the head of the queue forever.
     """
     if not jobs:
         return _empty_result()
     if n_gpus_cluster <= 0:
         raise ValueError(f"n_gpus_cluster must be > 0 (got {n_gpus_cluster})")
 
-    # Key the jobs by POSITION, not request_id: request_ids are normally unique but a client can set
-    # a duplicate (or a CSV import can carry one), and the scheduler must keep each result's own
-    # display metadata rather than collapsing duplicates onto the last job's.
+    # Jobs are keyed by position: a client or a CSV import can repeat a request_id, and each
+    # result keeps the metadata of its own job.
     rows = [
         {
             "job_id": i,
@@ -249,25 +258,14 @@ def simulate_fifo(jobs: List[QueueJob], n_gpus_cluster: int) -> SimulationResult
 
 
 def build_cluster_timeline(jobs: List[JobResult], n_gpus_cluster: int) -> ClusterTimeline:
-    """Turn a finished FIFO run into the two step-series the cluster figure draws:
-    GPUs allocated over time and jobs-in-queue over time.
+    """Build the GPUs-allocated and queue-depth step series from a finished FIFO run.
 
-    Pure and side-effect-free — it reads only the four scheduler-relevant fields
-    on each ``JobResult`` (arrival / start / end / num_gpus), so it is trivially
-    unit-testable and never re-runs the simulation. Pass the ``jobs`` from a
-    :class:`SimulationResult` (already FIFO-scheduled with start/end times set).
-
-    The series are built by a linear sweep over arrival / start / end events, not
-    an O(jobs × breakpoints) scan, so a few-thousand-job trace stays interactive:
-
-    * a job adds ``num_gpus`` at its ``start_time`` and releases them at
-      ``end_time`` → GPUs allocated;
-    * a job joins the queue at ``arrival_time`` and leaves it at ``start_time``
-      → queue depth.
-
-    Each event time lands on exactly one breakpoint, and the cumulative value
-    *after* applying every delta at that time is the state for the interval
-    starting there. Times are normalised to the first arrival."""
+    Pass the ``jobs`` of a :class:`SimulationResult`; only arrival, start, end and num_gpus are
+    read. One sweep over the events builds both series: a job holds ``num_gpus`` from
+    ``start_time`` to ``end_time`` and waits in the queue from ``arrival_time`` to
+    ``start_time``. The value after all deltas at a time is the state from that time on.
+    Times start at the first arrival.
+    """
     runnable = [j for j in jobs if j.num_gpus <= n_gpus_cluster]
     if not runnable:
         return ClusterTimeline(
@@ -282,9 +280,8 @@ def build_cluster_timeline(jobs: List[JobResult], n_gpus_cluster: int) -> Cluste
 
     t0 = min(j.arrival_time for j in runnable)
 
-    # Signed deltas keyed by event time. Kavier's schedule uses exact times, so a release and the
-    # matching dispatch coincide on one breakpoint; the capacity clamp in the sweep below is a cheap
-    # defensive guard against any float sliver and never distorts a well-formed run.
+    # Signed deltas keyed by event time. Kavier's times are exact, so a release and the start it
+    # allows share one breakpoint; the clamp in the sweep below only guards against float error.
     gpu_delta: Dict[float, int] = defaultdict(int)
     queue_delta: Dict[float, int] = defaultdict(int)
     for j in runnable:
@@ -296,8 +293,7 @@ def build_cluster_timeline(jobs: List[JobResult], n_gpus_cluster: int) -> Cluste
         queue_delta[arrival] += 1
         queue_delta[start] -= 1
 
-    # Always anchor the series at t=0 (the first arrival) so the chart starts on
-    # the axis even if nothing is running yet at that instant.
+    # Start the series at t=0 (the first arrival), even when nothing runs yet at that time.
     breakpoints = sorted(set(gpu_delta) | set(queue_delta) | {0.0})
 
     cap = int(n_gpus_cluster)
@@ -311,10 +307,8 @@ def build_cluster_timeline(jobs: List[JobResult], n_gpus_cluster: int) -> Cluste
     for e in breakpoints:
         cum_gpus += gpu_delta.get(e, 0)
         cum_queue += queue_delta.get(e, 0)
-        # Keep the running accumulator exact (so a later release still nets back
-        # to zero) but never publish more than the cluster can hold: the only way
-        # ``cum_gpus`` exceeds ``cap`` is the sub-eps double-count above, since
-        # the FIFO scheduler itself never over-allocates.
+        # Clamp only the shown value, so later releases still bring cum_gpus back to zero.
+        # cum_gpus can exceed cap only through float error; the scheduler never over-allocates.
         shown_gpus = min(cum_gpus, cap)
         t_list.append(e)
         gpus_list.append(shown_gpus)
@@ -335,14 +329,55 @@ def build_cluster_timeline(jobs: List[JobResult], n_gpus_cluster: int) -> Cluste
     )
 
 
-# CSV import (multiple trace schemas tolerated via column-name aliases).
+# CSV import; column-name aliases cover several trace schemas.
 
 
-def parse_csv(text: str) -> List[QueueJob]:
-    """Parse a workload-trace CSV into QueueJobs; accepts flexible column-name aliases.
+def _number(cell: Optional[str]) -> Optional[float]:
+    """A cell as a float, or None when it is blank or not a number."""
+    if not cell:
+        return None
+    try:
+        return float(cell)
+    except ValueError:
+        return None
 
-    Required columns: arrival (submission_time / arrival_time), num_gpus, duration
-    (duration_ms / duration_s / predicted_duration_s). Standard trace headers import straight through."""
+
+def _timestamp(cell: Optional[str]) -> Optional[datetime]:
+    """A cell as an ISO 8601 timestamp (one without a zone is UTC), or None when it is not one."""
+    if not cell:
+        return None
+    try:
+        stamp = datetime.fromisoformat(cell.strip())
+    except ValueError:
+        return None
+    return stamp if stamp.tzinfo is not None else stamp.replace(tzinfo=timezone.utc)
+
+
+def _arrival_seconds(cells: List[Optional[str]], iso_start: float = 0.0) -> List[Optional[float]]:
+    """The arrival of each row in seconds, None where a cell is blank or unreadable.
+
+    Numbers are kept as they are. In a column with no number but ISO timestamps, the earliest
+    timestamp arrives at ``iso_start`` and the others keep their spacing from it.
+    """
+    numbers = [_number(cell) for cell in cells]
+    if any(number is not None for number in numbers):
+        return numbers
+    stamps = [_timestamp(cell) for cell in cells]
+    known = [stamp for stamp in stamps if stamp is not None]
+    if not known:
+        return numbers
+    start = min(known)
+    return [None if stamp is None else iso_start + (stamp - start).total_seconds() for stamp in stamps]
+
+
+def parse_csv(text: str, iso_start: float = 0.0) -> List[QueueJob]:
+    """Parse a workload-trace CSV into QueueJobs, accepting several names per column.
+
+    Required: arrival (submission_time or arrival_time), num_gpus, and duration (duration_ms,
+    duration_s or predicted_duration_s). Arrivals are seconds, kept as given, or ISO timestamps:
+    the earliest arrives at ``iso_start`` (the import passes the queue's next arrival time) and the
+    others keep their spacing from it.
+    """
     reader = csv.DictReader(io.StringIO(text))
     if not reader.fieldnames:
         raise ValueError("CSV has no header row")
@@ -387,7 +422,7 @@ def parse_csv(text: str) -> List[QueueJob]:
             return None
         try:
             v = int(float(row[col]))
-        except ValueError:
+        except (ValueError, OverflowError):  # OverflowError: an infinite cell
             return None
         return v if v > 0 else None
 
@@ -396,12 +431,14 @@ def parse_csv(text: str) -> List[QueueJob]:
             return None
         try:
             v = float(row[col])
-            return v if v > 0 else None
+            return v if math.isfinite(v) and v > 0 else None
         except ValueError:
             return None
 
+    rows = list(reader)
+    arrivals = _arrival_seconds([row.get(col_arrival) for row in rows], iso_start)
     jobs: List[QueueJob] = []
-    for row in reader:
+    for row, arrival_time in zip(rows, arrivals):
         # Skip rows with non-positive / unparseable duration (jobs that never completed).
         try:
             if col_dur_s and row.get(col_dur_s):
@@ -413,18 +450,14 @@ def parse_csv(text: str) -> List[QueueJob]:
         except ValueError:
             continue
         if duration <= 0:
-            continue  # silently skip impossibly-short rows
+            continue  # skip rows without a positive duration
 
         # Drop rows with missing/unparseable arrival or GPU count rather than failing the whole import.
-        try:
-            arrival_time = float(row[col_arrival]) if row.get(col_arrival) else None
-        except ValueError:
-            arrival_time = None
         if arrival_time is None:
             continue
         try:
             num_gpus = int(float(row[col_gpus])) if row.get(col_gpus) else 0
-        except ValueError:
+        except (ValueError, OverflowError):  # OverflowError: an infinite cell
             num_gpus = 0
         if num_gpus < 1:
             continue

@@ -1,4 +1,4 @@
-# build / cache / OS cruft
+# Build, cache and editor files
 __pycache__/
 *.py[cod]
 .DS_Store
@@ -13,50 +13,29 @@ htmlcov/
 build/
 dist/
 .venv/
+.uv/
 .idea/
 .vscode/
 
-# uv
-.uv/
-
-# MkDocs build output
+# MkDocs output
 site/
 
-.data6model/
-
-# recommender run artifacts (config-driven CLI output; git-ignored)
+# Run outputs (they can contain private trace columns)
 recommender/runs/
-
-# build-time vendored wheels (autoconf OOM model) — never committed
-vendor/*.whl
-
-# generated benchmark outputs1
+/out/
+/cluster_timeline*.pdf
 dev/benchmark/results/*.csv
 
-# local-only trace data
+# Local data, never committed
+.data6model/
+vendor/*.whl
 daniele_data/
-
-# Trained ML model artifacts are TRACKED under src/coastline/.../data_driven/portfolio/ (NOTE:
-# this repo is PUBLIC — world-readable; the largest ride via Git LFS — see .gitattributes). The
-# wheel ships only the 5 parametric ones (the 5 heavy + custom/ are wheel-excluded); the default
-# Kavier physics path needs none.
-
-# Stray generated doc artifacts (the docs live under docs/ as MkDocs Markdown).
-/USAGE.html
-/cluster_timeline*.pdf
-/demo/
-
-# local demo data + generated artifacts
 demo/
-
-# local run outputs (coastline run / recommend-trace: CSV + PDF). Regenerated; may echo private trace columns.
-/out/
-
-# stray copies of the private measured-runs dataset — the canonical copy lives in the gitignored demo/ above
 /baseline_*.csv
-
-# Agent/workflow worktrees + local Claude state
-.claude/
-
-# Local-only pre-trained recommender image bundle (kept off the public repo)
 docker/recommender/
+
+# Model pickles are tracked under src/coastline/sdk/predictors/performance/data_driven/portfolio/,
+# the large ones through Git LFS (.gitattributes).
+# portfolio/custom/ holds models tuned locally with `coastline utils tune` (it creates the folder).
+# The resolver tries custom/ first, so a committed file there would replace the bundled model.
+src/coastline/sdk/predictors/performance/data_driven/portfolio/custom/

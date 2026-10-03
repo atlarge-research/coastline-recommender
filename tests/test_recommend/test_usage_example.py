@@ -1,7 +1,6 @@
-"""The embedded docs example (docs/usage.py) runs end-to-end and prints the documented columns.
+"""docs/usage.py runs end to end in a subprocess and prints the documented columns.
 
-Two guarantees in one: the example reproduced in the docs is correct, and the whole public API path
-— the callable facade, the batch DataFrame verb, and recommend_csv — works via a real subprocess.
+The example uses the callable facade, the batch DataFrame API and recommend_csv.
 """
 
 from __future__ import annotations
@@ -23,10 +22,9 @@ def test_usage_example_runs_and_prints_documented_columns():
     assert proc.returncode == 0, proc.stderr
 
     out = proc.stdout
-    # Oracle: the public output contract — the batch DataFrame's prediction column names. These are
-    # the API's promise, not a snapshot of any computed number, so a rename/removal here breaks the
-    # docs and this test, while a change to the predicted values leaves it green.
+    # Check the column names of the batch output only, so a change in the predicted values
+    # does not fail the test.
     for column in ("total_gpus", "throughput_tok_s", "energy_wh"):
         assert column in out, f"{column} missing from usage.py output"
-    # The final (CSV) section reached its print, so all four sections ran without raising.
+    # The last section (CSV) printed, so all four sections ran.
     assert "recommend_csv wrote" in out

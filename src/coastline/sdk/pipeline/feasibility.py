@@ -32,11 +32,10 @@ class FeasibilityChecker(Protocol):
 def evaluate_chunk(checker: FeasibilityChecker, workloads: Sequence[WorkloadSpec]) -> list[tuple[bool, dict[str, Any]]]:
     """Verdicts for a run of candidates, in input order.
 
-    A free function, NOT a Protocol default: ``FeasibilityChecker`` is satisfied structurally and
-    no implementer inherits from it, so a method body added to the Protocol would reach none of
-    them. A checker may offer ``check_chunk`` to evaluate a whole run at once (the AutoConf
-    backend batches its classifier call that way); otherwise each candidate is checked in turn,
-    which is exactly today's behaviour.
+    A checker may provide ``check_chunk`` to judge the whole run at once (the AutoConf backend
+    batches its classifier this way); otherwise each candidate is checked in turn. This is a
+    function because checkers match ``FeasibilityChecker`` structurally and do not inherit
+    Protocol methods.
     """
     batched = getattr(checker, "check_chunk", None)
     if batched is not None:
@@ -51,24 +50,29 @@ def evaluate_chunk(checker: FeasibilityChecker, workloads: Sequence[WorkloadSpec
 
 
 def is_expensive(checker: FeasibilityChecker) -> bool:
-    """Whether one call costs enough to be worth shipping to a worker process.
+    """Whether one call costs enough to send to a worker process.
 
-    Strictly ``True``: a checker that happens to carry a truthy attribute of some other shape
-    has not declared anything, and defaulting it to "fork me" would be the wrong way round.
+    Only ``EXPENSIVE is True`` counts; any other value, truthy or not, means no.
     """
     return getattr(checker, "EXPENSIVE", False) is True
 
 
 class _RulesThenAutoconfChecker:
-    """Divisibility rules first, then AutoConf OOM classifier. Rules guard configs the classifier never trained on."""
+    """Structural sanity guards first, then the AutoConf OOM classifier.
+
+    The guards are the two checks of :class:`RulesFeasibilityChecker` (a positive GPU count and a
+    per-device batch of at least 1). They have no memory model; they keep invalid jobs, which the
+    classifier was not trained on, away from it. The empirical per-device token budget is a
+    separate, opt-in layer (see :func:`_wrap_with_empirical_guard`).
+    """
 
     def __init__(self, model_version: str):
         self._rules = RulesFeasibilityChecker()
         self._autoconf = AutoconfFeasibilityChecker(model_version=model_version)
 
     @property
-    def EXPENSIVE(self) -> bool:  # noqa: N802 — mirrors the class-level flag on plain checkers
-        """Worth forking exactly when the AutoConf leg is: the rules leg is a modulo."""
+    def EXPENSIVE(self) -> bool:  # noqa: N802 (same name as the class attribute of other checkers)
+        """Expensive when the AutoConf checker is; the guards are two integer comparisons."""
         return bool(getattr(self._autoconf, "EXPENSIVE", False))
 
     def is_feasible(self, workload: WorkloadSpec) -> tuple[bool, dict[str, Any]]:
@@ -78,11 +82,11 @@ class _RulesThenAutoconfChecker:
         return self._autoconf.is_feasible(workload)
 
     def batches(self) -> bool:
-        """One classifier call per chunk exactly when the AutoConf leg can batch."""
+        """Whether the AutoConf checker judges a chunk in one call."""
         return bool(self._autoconf.batches())
 
     def check_chunk(self, workloads: Sequence[WorkloadSpec]) -> list[tuple[bool, dict[str, Any]]]:
-        """Rules per candidate, then ONE classifier call for everything the rules let through."""
+        """Guards per candidate, then one classifier call for all candidates that pass them."""
         results: list[Any] = [None] * len(workloads)
         survivors: list[WorkloadSpec] = []
         positions: list[int] = []
@@ -102,11 +106,11 @@ class _RulesThenAutoconfChecker:
 
 
 def _wrap_with_empirical_guard(checker: FeasibilityChecker, predictor_config: dict) -> FeasibilityChecker:
-    """Layer the empirical per-device token ceiling on top of the selected backend.
+    """Add the empirical per-device token ceiling on top of the selected backend.
 
-    Opt-in (``predictors.empirical_oom_guard: true``), because it is a blunt instrument derived
-    from one cluster's campaigns: it only ever turns feasible into infeasible, and enabling it by
-    default would silently change every recommendation. See EMPIRICAL_OOM_TOKEN_BUDGET.
+    Off unless ``predictors.empirical_oom_guard: true``: the ceiling was fitted on one cluster's
+    campaigns and can only turn feasible candidates infeasible, so turning it on by default would
+    change recommendations. See EMPIRICAL_OOM_TOKEN_BUDGET.
     """
     if not predictor_config.get("empirical_oom_guard", False):
         return checker
@@ -116,10 +120,10 @@ def _wrap_with_empirical_guard(checker: FeasibilityChecker, predictor_config: di
 
 
 def create_feasibility_checker(predictor_config: dict) -> FeasibilityChecker:
-    """Build feasibility checker from config (predictors.feasibility: autoconf|rules|none).
+    """Build the feasibility checker from the config (predictors.feasibility: autoconf|rules|none).
 
-    ``predictors.empirical_oom_guard: true`` additionally layers the measured per-device token
-    ceiling over whichever backend is selected; it is off by default.
+    ``predictors.empirical_oom_guard: true`` adds the measured per-device token ceiling on top of
+    the selected backend; it is off by default.
     """
     mode = predictor_config.get("feasibility", FeasibilityMode.AUTOCONF.value)
     version = predictor_config.get("autoconf_model_version", DEFAULT_AUTOCONF_MODEL_VERSION)
@@ -136,7 +140,9 @@ def create_feasibility_checker(predictor_config: dict) -> FeasibilityChecker:
             "feasibility=autoconf requested but the AutoConf model cannot be loaded "
             "(needs Python >= 3.10 and the ado autoconf package: "
             "pip install 'coastline-recommender[autoconf]'). "
-            "Set COASTLINE_ALLOW_RULES_FALLBACK=1 to knowingly degrade to divisibility-only rules."
+            "Set COASTLINE_ALLOW_RULES_FALLBACK=1 to knowingly degrade to the rules backend: "
+            "structural sanity guards only (positive GPU count, per-device batch >= 1), "
+            "no memory model and no OOM check."
         )
 
     if mode == FeasibilityMode.RULES:
@@ -145,6 +151,6 @@ def create_feasibility_checker(predictor_config: dict) -> FeasibilityChecker:
     if mode == FeasibilityMode.NONE:
         return _wrap_with_empirical_guard(NoOpFeasibilityChecker(), predictor_config)
 
-    # A typo (e.g. "Autoconf", "auto-conf", "strict") must fail loudly rather than fall
-    # through to the rules checker and silently bypass the OOM veto.
+    # An unknown mode (such as "Autoconf", "auto-conf" or "strict") raises, so a typo cannot
+    # skip the OOM check.
     raise ValueError(f"unknown feasibility mode {mode!r}: expected one of {[m.value for m in FeasibilityMode]}")

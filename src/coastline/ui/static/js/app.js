@@ -1,12 +1,12 @@
-/* Coastline dashboard — Recommend (with embedded Queue/Admin) and Playground.
-   Persistent Activity log mirrors every toast so failures are never lost. */
+/* Coastline dashboard: the Recommend tab (with the queue and admin panel) and the Playground.
+   The Activity log keeps a copy of every toast. */
 "use strict";
 
 const $ = (id) => document.getElementById(id);
 const val = (id) => $(id).value;
 
-// fetch with a hard client-side timeout: a stalled backend (e.g. a slow ML
-// predictor) must surface as an error toast, never an infinite spinner.
+// fetch with a client-side timeout, so a stalled backend (e.g. a slow ML predictor)
+// shows an error toast instead of a spinner that never stops.
 async function fetchT(url, opts = {}, timeoutMs = 60000) {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeoutMs);
@@ -14,7 +14,7 @@ async function fetchT(url, opts = {}, timeoutMs = 60000) {
     return await fetch(url, { ...opts, signal: ctl.signal });
   } catch (err) {
     if (err.name === "AbortError") {
-      throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s — the selected predictor may be too slow for interactive use.`);
+      throw new Error(`Request timed out after ${Math.round(timeoutMs / 1000)}s. The selected predictor may be too slow for interactive use.`);
     }
     throw err;
   } finally {
@@ -22,25 +22,25 @@ async function fetchT(url, opts = {}, timeoutMs = 60000) {
   }
 }
 
-/* ── formatting ───────────────────────────────────── */
-const fmtThroughput = (v) => v == null ? "—" : Math.round(v).toLocaleString() + " tok/s";
+/* Formatting */
+const fmtThroughput = (v) => v == null ? "-" : Math.round(v).toLocaleString() + " tok/s";
 function fmtRuntime(s) {
-  if (s == null) return "—";
+  if (s == null) return "-";
   if (s < 60) return s.toFixed(0) + " s";
   if (s < 3600) return (s / 60).toFixed(1) + " min";
   if (s < 86400) return (s / 3600).toFixed(1) + " h";
   return (s / 86400).toFixed(1) + " d";
 }
 function fmtEnergy(kwh) {
-  if (kwh == null) return "—";
+  if (kwh == null) return "-";
   return kwh < 1 ? (kwh * 1000).toFixed(0) + " Wh" : kwh.toFixed(2) + " kWh";
 }
-const fmtPower = (w) => w == null ? "—" : Math.round(w) + " W";
+const fmtPower = (w) => w == null ? "-" : Math.round(w) + " W";
 
-/* Arrival time: render epoch-style (> ~Sep 2001) as YYYY-MM-DD, HH:MM:SS;
-   relative seconds (e.g. CSV-imported 0, 5, 10) stay as "N.N s". */
+/* Arrival time: epoch seconds (after Sep 2001) render as YYYY-MM-DD, HH:MM:SS;
+   relative seconds (e.g. CSV-imported 0, 5, 10) render as "N.N s". */
 function fmtArrival(t) {
-  if (t == null) return "—";
+  if (t == null) return "-";
   if (t > 1e9) {
     const d = new Date(t * 1000);
     const p = (n) => String(n).padStart(2, "0");
@@ -51,12 +51,12 @@ function fmtArrival(t) {
 }
 function fmtLayout(g, n) {
   n = n || 1; g = g || 1;
-  return `${n} node${n > 1 ? "s" : ""} × ${g} GPU${g > 1 ? "s" : ""}`;
+  return `${n} node${n > 1 ? "s" : ""} x ${g} GPU${g > 1 ? "s" : ""}`;
 }
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
   (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-/* ── Activity log (persistent) ────────────────────── */
+/* Activity log */
 function logActivity(level, message) {
   const list = $("activityList");
   if (!list) return;
@@ -77,7 +77,7 @@ function clearActivity() {
   if (list) list.innerHTML = '<div class="activity-empty">No activity yet.</div>';
 }
 
-/* Transient banner (5s) + permanent record in the Activity log. */
+/* Banner that fades after 5 s; the message also goes to the Activity log. */
 function toast(message, type = "err") {
   const box = document.createElement("div");
   box.className = `toast ${type}`;
@@ -87,7 +87,7 @@ function toast(message, type = "err") {
   logActivity(type, message);
 }
 
-/* state: prefix ∈ {rec, pg}; name ∈ {Empty, Loading, Data} */
+/* prefix is "rec" or "pg"; name is "Empty", "Loading" or "Data". */
 function setState(prefix, name) {
   for (const s of ["Empty", "Loading", "Data"]) {
     const el = $(prefix + s);
@@ -97,7 +97,7 @@ function setState(prefix, name) {
   }
 }
 
-/* ── tabs ─────────────────────────────────────────── */
+/* Tabs */
 function initTabs() {
   document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => {
     document.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
@@ -109,7 +109,7 @@ function initTabs() {
   }));
 }
 
-/* ── Recommend — hardware-mode segmented control ── */
+/* Recommend: hardware-mode toggle */
 function initHwToggle() {
   document.querySelectorAll("#hwMode .seg").forEach((seg) => seg.addEventListener("click", () => {
     document.querySelectorAll("#hwMode .seg").forEach((s) => s.classList.remove("active"));
@@ -122,16 +122,16 @@ function initHwToggle() {
 const hwMode = () => document.querySelector("#hwMode .seg.active").dataset.mode;
 
 const PRESET_NOTE = {
-  balanced: "Balanced — weights runtime and power equally (α/β = 0.5 / 0.5).",
-  performance: "Performance — favours throughput over power (α/β = 0.2 / 0.8).",
-  energy: "Energy-saver — favours lower power over throughput (α/β = 0.8 / 0.2).",
+  balanced: "Balanced: weights runtime and power equally (alpha/beta = 0.5 / 0.5).",
+  performance: "Performance: favours throughput over power (alpha/beta = 0.2 / 0.8).",
+  energy: "Energy-saver: favours lower power over throughput (alpha/beta = 0.8 / 0.2).",
 };
 function syncPolicy() {
   const isMultiObjective = val("rec_strategy") === "multi_objective";
   $("presetField").style.display = isMultiObjective ? "" : "none";
   $("policyNote").textContent = isMultiObjective
     ? PRESET_NOTE[val("rec_preset")]
-    : "Minimum GPUs — fewest total GPUs that remain feasible for the workload.";
+    : "Minimum GPUs: the fewest total GPUs that remain feasible for the workload.";
 }
 
 function recPayload() {
@@ -179,7 +179,7 @@ async function submitRec(ev) {
 
   setState("rec", "Loading");
   $("recBtn").disabled = true;
-  logActivity("info", `POST /api/recommend (${val("rec_llm_model")} · ${val("rec_method")} · ${val("rec_model")})`);
+  logActivity("info", `POST /api/recommend (${val("rec_llm_model")}, ${val("rec_method")}, ${val("rec_model")})`);
   try {
     const resp = await fetchT("/api/recommend", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -188,14 +188,14 @@ async function submitRec(ev) {
     const data = await resp.json();
     if (resp.status === 404) {
       setState("rec", "Empty");
-      toast(`No feasible configuration — the selected model (${val("rec_model")}) may not cover this workload yet.`, "info");
+      toast(`No recommendation from the selected model (${val("rec_model")}). It may not cover this workload, or its files may be missing from this install.`, "info");
       return;
     }
     if (!resp.ok || !data.success) throw new Error(data.detail || data.error || "Recommendation failed");
     _lastRec = data;
     renderRec(data);
     setState("rec", "Data");
-    logActivity("ok", `Recommendation OK — ${(data.candidates || []).length} candidates`);
+    logActivity("ok", `Recommendation OK: ${(data.candidates || []).length} candidates`);
   } catch (err) {
     setState("rec", "Empty");
     toast(err.message || "Something went wrong.");
@@ -208,12 +208,12 @@ function renderRec(data) {
   const ws = data.workload_summary || {};
   const label = data.strategy === "min_gpu"
     ? "Minimum GPUs"
-    : `Multi-objective · ${(data.preset || "balanced").replace(/^\w/, (c) => c.toUpperCase())}`;
+    : `Multi-objective (${(data.preset || "balanced").replace(/^\w/, (c) => c.toUpperCase())})`;
   const cands = data.candidates || [];
-  $("recSub").textContent = `${ws.llm_model} · ${ws.fine_tuning_method} · ${ws.gpu_model}`;
+  $("recSub").textContent = `${ws.llm_model}, ${ws.fine_tuning_method}, ${ws.gpu_model}`;
   $("recSummary").innerHTML = `
     <div class="item"><span class="k">Policy</span><span class="v">${esc(label)}</span></div>
-    <div class="item"><span class="k">Dataset</span><span class="v mono">${Number(ws.dataset_size || 0).toLocaleString()} × ${esc(String(ws.training_epochs))} ep</span></div>
+    <div class="item"><span class="k">Dataset</span><span class="v mono">${Number(ws.dataset_size || 0).toLocaleString()} x ${esc(String(ws.training_epochs))} ep</span></div>
     <div class="item"><span class="k">Simulated</span><span class="v mono">${cands.length} configs</span></div>`;
   const tbody = $("recRows");
   if (!cands.length) {
@@ -226,7 +226,7 @@ function renderRec(data) {
     return `<tr class="${best ? "best" : ""}" style="animation-delay:${i * 45}ms">
       <td><span class="rank-num">${c.rank}</span>${best ? '<span class="tag-best">Best</span>' : ""}</td>
       <td><div class="layout-main">${esc(fmtLayout(c.gpus_per_node, nodes))}</div><div class="layout-sub">${c.total_gpus} GPUs total</div></td>
-      <td class="r num">${c.batch_size ?? "—"}</td>
+      <td class="r num">${c.batch_size ?? "-"}</td>
       <td class="r num">${fmtThroughput(c.predicted_throughput)}</td>
       <td class="r num">${fmtRuntime(c.predicted_runtime_seconds)}</td>
       <td class="r num">${fmtEnergy(c.energy_kwh)}</td>
@@ -270,7 +270,7 @@ async function scheduleCandidate(idx) {
   } catch (e) { toast("Schedule failed: " + e); }
 }
 
-/* ── Playground ───────────────────────────────────── */
+/* Playground */
 function pgPayload() {
   const models = Array.from(document.querySelectorAll("#pgModels input:checked")).map((c) => c.value);
   return {
@@ -305,7 +305,7 @@ async function submitPg(ev) {
     renderPg(data);
     setState("pg", "Data");
     const avail = (data.results || []).filter((r) => r.available).length;
-    logActivity("ok", `Playground OK — ${avail}/${(data.results || []).length} model(s) returned a prediction`);
+    logActivity("ok", `Playground OK: ${avail}/${(data.results || []).length} model(s) returned a prediction`);
   } catch (err) {
     setState("pg", "Empty");
     toast(err.message || "Something went wrong.");
@@ -314,8 +314,8 @@ async function submitPg(ev) {
   }
 }
 
-// Predictor family for colour-coding the Playground rows:
-//   kavier → analytical (blue) · cache → retrieval/ground-truth (green) · everything else → data-driven ML (orange)
+// Predictor family, used to colour the Playground rows: kavier is analytical (blue), cache
+// returns measured runs (green), and every other model is data-driven ML (orange).
 function pgFamily(modelId) {
   if (modelId === "kavier") return "kavier";
   if (modelId === "cache") return "cache";
@@ -325,19 +325,19 @@ function pgFamily(modelId) {
 function renderPg(data) {
   const cfg = data.config || {};
   const results = data.results || [];
-  $("pgSub").textContent = `${cfg.llm_model} · ${cfg.fine_tuning_method} · ${cfg.gpu_model}`;
+  $("pgSub").textContent = `${cfg.llm_model}, ${cfg.fine_tuning_method}, ${cfg.gpu_model}`;
   $("pgSummary").innerHTML = `
     <div class="item"><span class="k">Layout</span><span class="v">${esc(fmtLayout(cfg.gpus_per_node, cfg.number_of_nodes))}</span></div>
     <div class="item"><span class="k">Batch / Seq</span><span class="v mono">${cfg.batch_size} / ${cfg.tokens_per_sample}</span></div>
-    <div class="item"><span class="k">Dataset</span><span class="v mono">${(cfg.dataset_size ?? 0).toLocaleString()} × ${cfg.training_epochs ?? "?"} ep</span></div>
+    <div class="item"><span class="k">Dataset</span><span class="v mono">${(cfg.dataset_size ?? 0).toLocaleString()} x ${cfg.training_epochs ?? "?"} ep</span></div>
     <div class="item"><span class="k">Models</span><span class="v mono">${results.length}</span></div>`;
   const tbody = $("pgRows");
   tbody.innerHTML = results.map((r, i) => {
-    const fam = pgFamily(r.model);  // kavier → blue, cache → green, data-driven ML → orange
+    const fam = pgFamily(r.model);
     if (!r.available) {
       return `<tr class="dim-row fam-${fam}" style="animation-delay:${i * 45}ms">
-        <td>${esc(r.label)} <span class="muted">· not available yet</span></td>
-        <td class="r num dim">—</td><td class="r num dim">—</td><td class="r num dim">—</td><td class="r num dim">—</td></tr>`;
+        <td>${esc(r.label)} <span class="muted">(not available yet)</span></td>
+        <td class="r num dim">-</td><td class="r num dim">-</td><td class="r num dim">-</td><td class="r num dim">-</td></tr>`;
     }
     return `<tr class="fam-${fam}" style="animation-delay:${i * 45}ms">
       <td class="config-cell">${esc(r.label)}</td>
@@ -349,7 +349,7 @@ function renderPg(data) {
   }).join("");
 }
 
-/* ── Queue & admin (embedded inside the Recommend tab) ─ */
+/* Queue and admin (inside the Recommend tab) */
 async function refreshQueue() {
   try {
     const resp = await fetch("/api/queue");
@@ -363,20 +363,20 @@ function renderQueue(jobs) {
   $("queueCount").textContent = n === 0 ? "empty" : (n === 1 ? "1 job" : `${n} jobs`);
   const tbody = $("queueRows");
   if (!n) {
-    tbody.innerHTML = `<tr class="queue-empty"><td colspan="9">Queue is empty — add a job above, or import a CSV in admin mode.</td></tr>`;
+    tbody.innerHTML = `<tr class="queue-empty"><td colspan="9">Queue is empty. Add a job above, or import a CSV in admin mode.</td></tr>`;
     return;
   }
   tbody.innerHTML = jobs.map((j) => `
     <tr>
       <td><code>${esc(j.request_id)}</code></td>
-      <td>${esc(j.llm_model || "—")}</td>
+      <td>${esc(j.llm_model || "-")}</td>
       <td class="r num">${j.num_gpus}</td>
-      <td class="r num">${j.batch_size ?? '<span class="dim">—</span>'}</td>
-      <td class="r num">${j.training_epochs ?? '<span class="dim">—</span>'}</td>
+      <td class="r num">${j.batch_size ?? '<span class="dim">-</span>'}</td>
+      <td class="r num">${j.training_epochs ?? '<span class="dim">-</span>'}</td>
       <td class="r num">${fmtRuntime(j.predicted_duration_s)}</td>
-      <td class="r num">${j.predicted_power_watts_per_gpu ? fmtPower(j.predicted_power_watts_per_gpu) + "/GPU" : '<span class="dim">—</span>'}</td>
+      <td class="r num">${j.predicted_power_watts_per_gpu ? fmtPower(j.predicted_power_watts_per_gpu) + "/GPU" : '<span class="dim">-</span>'}</td>
       <td class="r num">${fmtArrival(j.arrival_time)}</td>
-      <td class="action"><button class="btn-mini danger icon queue-remove" data-id="${esc(j.request_id)}" type="button" title="Remove">×</button></td>
+      <td class="action"><button class="btn-mini danger icon queue-remove" data-id="${esc(j.request_id)}" type="button" title="Remove">x</button></td>
     </tr>`).join("");
   tbody.querySelectorAll(".queue-remove").forEach((b) =>
     b.addEventListener("click", () => removeQueueJob(b.dataset.id))
@@ -398,8 +398,8 @@ async function submitQueueJob(ev) {
   const gpu_model = val("q_gpu_model");       if (gpu_model) payload.gpu_model = gpu_model;
   const tokens = parseInt(val("q_tokens"), 10);  if (tokens) payload.tokens_per_sample = tokens;
   const batch = parseInt(val("q_batch"), 10);    if (batch) payload.batch_size = batch;
-  // Duration is an optional override: backend will Kavier-predict when the
-  // workload config is complete, and fall back to this user value otherwise.
+  // Optional duration: the backend uses Kavier's prediction when the workload config is
+  // complete, and this value otherwise.
   const dur_raw = val("q_duration");
   const predicted_duration_s = dur_raw ? parseFloat(dur_raw) : null;
   if (predicted_duration_s !== null && predicted_duration_s > 0) {
@@ -412,7 +412,7 @@ async function submitQueueJob(ev) {
     });
     const data = await resp.json();
     if (!resp.ok) return toast(data.detail || "Could not add job.");
-    const src = data.duration_source === "kavier" ? " · Kavier-predicted duration" : " · user duration";
+    const src = data.duration_source === "kavier" ? " (Kavier-predicted duration)" : " (user duration)";
     toast(`Added job ${data.job.request_id}${src}`, "ok");
     refreshQueue();
   } catch (e) { toast("Add failed: " + e); }
@@ -427,7 +427,7 @@ async function removeQueueJob(id) {
 }
 
 async function clearQueue() {
-  if (!confirm("Clear ALL queued jobs?")) return;
+  if (!confirm("Clear all queued jobs?")) return;
   try {
     await fetch("/api/admin/clear", { method: "POST" });
     $("adminResults").innerHTML = "";
@@ -441,11 +441,9 @@ function toggleAdmin() {
   $("adminToggle").classList.toggle("active");
 }
 
-/* ── Cluster timeline figure (GPUs allocated + queue depth over time) ────────
-   The Exp2/Exp4 cluster plot, drawn from the FIFO run's step-series
-   (data.timeline). Two stacked SVG strip-charts on a shared time axis with a
-   crosshair scrubber (pointer + arrow keys). Presentation only — it reads the
-   timeline payload and never re-fetches. */
+/* Cluster timeline: the Exp2/Exp4 cluster plot of GPUs allocated and queue depth over time,
+   drawn from the FIFO run's step series (data.timeline). Two stacked SVG charts share a time
+   axis, with a crosshair moved by the pointer or the arrow keys. Nothing is fetched here. */
 const SVGNS = "http://www.w3.org/2000/svg";
 function svgEl(tag, attrs) {
   const n = document.createElementNS(SVGNS, tag);
@@ -480,9 +478,8 @@ function renderClusterTimeline(mount, tl) {
   const span = tl.makespan_s || ts[ts.length - 1] || 1;
   const peakG = tl.peak_gpus || 0, peakQ = tl.peak_queue || 0;
 
-  // viewBox geometry (CSS scales the SVG to the container width). Margins are
-  // sized for the larger tick / axis-title fonts (see .ct-tick / .ct-axis-title
-  // in coastline.css) so the bigger labels never clip — matching the CLI plot.
+  // viewBox geometry; CSS scales the SVG to the container width. The margins leave room for
+  // the tick and axis-title fonts (.ct-tick, .ct-axis-title in coastline.css), as in the CLI plot.
   const W = 820, ML = 60, MR = 16, MT = 22;
   const gpuH = 150, gap = 40, queueH = 78, xlabH = 48;
   const H = MT + gpuH + gap + queueH + xlabH;
@@ -496,7 +493,7 @@ function renderClusterTimeline(mount, tl) {
   const yqf = (v) => qB - (v / yMaxQ) * queueH;
 
   const summary =
-    `Peak ${peakG} of ${cap} GPUs in use · peak queue ${peakQ} ${peakQ === 1 ? "job" : "jobs"} · span ${fmtRuntime(span)}`;
+    `Peak ${peakG} of ${cap} GPUs in use, peak queue ${peakQ} ${peakQ === 1 ? "job" : "jobs"}, span ${fmtRuntime(span)}`;
   const valueText = (t, g, q) =>
     `At ${fmtRuntime(t)}: ${g} of ${cap} GPUs in use, ${q} ${q === 1 ? "job" : "jobs"} queued`;
 
@@ -538,7 +535,7 @@ function renderClusterTimeline(mount, tl) {
     lbl.textContent = fmtRuntime(tv);
     svg.appendChild(lbl);
   }
-  // Horizontal gridlines + y ticks — GPU chart (0 / mid / capacity).
+  // Horizontal gridlines and y ticks for the GPU chart (0, mid, capacity).
   for (const v of [...new Set([0, Math.round(cap / 2), cap])]) {
     const y = ygf(v);
     svg.appendChild(svgEl("line", { class: "ct-grid", x1: ML, y1: y, x2: W - MR, y2: y }));
@@ -546,10 +543,9 @@ function renderClusterTimeline(mount, tl) {
     lbl.textContent = v;
     svg.appendChild(lbl);
   }
-  // Horizontal gridlines + y ticks — queue chart. Jobs are integers, so keep the
-  // queue axis on whole numbers (no 2.5, 5.5, ...), mirroring the CLI plot's
-  // MaxNLocator(integer=True). peak_queue is already an integer count; Math.round
-  // + de-dupe guards any mid value (qMax / 2) that would otherwise land on a half.
+  // Horizontal gridlines and y ticks for the queue chart, on whole numbers as with the CLI
+  // plot's MaxNLocator(integer=True): Math.round moves a midpoint (qMax / 2) off a half and the
+  // Set drops duplicate ticks.
   const qMax = Math.max(peakQ, 1);
   const qRaw = qMax <= 1 ? [0, 1] : qMax <= 4 ? [0, qMax] : [0, qMax / 2, qMax];
   const qticks = [...new Set(qRaw.map((v) => Math.round(v)))];
@@ -600,7 +596,7 @@ function renderClusterTimeline(mount, tl) {
 
   plot.insertBefore(svg, plot.firstChild);  // SVG behind the overlays
 
-  // ── crosshair wiring ──
+  // Crosshair events
   const scrub = plot.querySelector(".ct-scrub");
   const readout = plot.querySelector(".ct-readout");
   const roT = readout.querySelector(".ct-ro-t");
@@ -656,23 +652,23 @@ function renderClusterTimeline(mount, tl) {
 }
 
 async function runFifo() {
-  $("adminResults").innerHTML = '<p class="note">Running…</p>';
+  $("adminResults").innerHTML = '<p class="note">Running...</p>';
   try {
     const resp = await fetchT("/api/admin/run", { method: "POST" }, 120000);
     const data = await resp.json();
     if (!resp.ok) return toast(data.detail || "Run failed.");
     if (!data.totals) {
-      $("adminResults").innerHTML = '<p class="note">Queue is empty — add a job or import a CSV first.</p>';
+      $("adminResults").innerHTML = '<p class="note">Queue is empty. Add a job or import a CSV first.</p>';
       return;
     }
     const t = data.totals;
     const jobsHtml = (data.jobs || []).map((j) => `
       <tr>
         <td><code>${esc(j.request_id)}</code></td>
-        <td>${esc(j.llm_model || "—")}</td>
+        <td>${esc(j.llm_model || "-")}</td>
         <td class="r num">${j.num_gpus}</td>
-        <td class="r num">${j.batch_size ?? '<span class="dim">—</span>'}</td>
-        <td class="r num">${j.training_epochs ?? '<span class="dim">—</span>'}</td>
+        <td class="r num">${j.batch_size ?? '<span class="dim">-</span>'}</td>
+        <td class="r num">${j.training_epochs ?? '<span class="dim">-</span>'}</td>
         <td class="r num">${fmtRuntime(j.predicted_duration_s)}</td>
         <td class="r num">${fmtRuntime(j.wait_time_s)}</td>
         <td class="r num">${fmtRuntime(j.completion_time_s)}</td>
@@ -694,11 +690,10 @@ async function runFifo() {
           <tbody>${jobsHtml}</tbody>
         </table>
       </div>`;
-    // Draw the cluster figure (GPUs allocated + queue depth over time) from the
-    // run's step-series; it sits between the totals and the per-job table.
+    // The cluster figure sits between the totals and the per-job table.
     renderClusterTimeline($("clusterFigMount"), data.timeline);
     logActivity("ok",
-      `Admin · FIFO run OK — ${t.n_jobs} jobs · makespan ${t.makespan_s.toFixed(1)}s · energy ${t.total_energy_kwh.toFixed(3)} kWh`);
+      `Admin FIFO run OK: ${t.n_jobs} jobs, makespan ${t.makespan_s.toFixed(1)}s, energy ${t.total_energy_kwh.toFixed(3)} kWh`);
   } catch (e) { toast("Run failed: " + e); }
 }
 
@@ -722,12 +717,8 @@ function importCsv(ev) {
   ev.target.value = "";  // reset so re-picking the same file still fires "change"
 }
 
-/* ── Inline help hints ─────────────────────────────────────────────────────
-   Build an accessible "i" trigger + tooltip from each [data-hint] label/legend.
-   The CSS handles showing it (:hover / :focus-within, so mouse, keyboard, and
-   tap all work); this only wires the markup + ARIA. A click on the dot must
-   never submit the form or open the field it sits inside. Defensive throughout:
-   a failure here must not break the rest of init. */
+/* Inline help hints: an "i" button and a tooltip for each [data-hint] label or legend.
+   The CSS shows the tooltip on :hover and :focus-within; this adds the markup and ARIA. */
 function initHints() {
   let seq = 0;
   document.querySelectorAll("[data-hint]").forEach((host) => {
@@ -761,16 +752,14 @@ function initHints() {
 
     wrap.appendChild(dot);
     wrap.appendChild(pop);
-    // Place the hint as a SIBLING right after the label (still within the same
-    // .field / .group), never inside the <label for=…>: nesting the "i" button
-    // there would fold it into the field's accessible name and into the label's
-    // own click target. afterend keeps the reading order label · (i) · …
+    // Insert the hint after the label, in the same .field or .group. Inside the label, the
+    // button would become part of the field's accessible name and of the label's click target.
     host.insertAdjacentElement("afterend", wrap);
     host.removeAttribute("data-hint");
   });
 }
 
-/* ── init ─────────────────────────────────────────── */
+/* Init */
 function bindClick(id, fn) {
   const el = $(id);
   if (el) el.addEventListener("click", fn);

@@ -1,9 +1,8 @@
-"""Coastline — context-aware GPU/datacenter configuration recommender for LLM fine-tuning.
+"""Coastline: context-aware GPU and datacenter configuration recommender for LLM fine-tuning.
 
-A bare ``import coastline`` stays light: the public verbs/classes are resolved lazily
-from :mod:`coastline.sdk.recommend` on first access (PEP 562), so pandas / kavier / the
-predictor backends are not imported until you actually call one. The module is also
-callable — ``coastline(predictor=...)`` returns a configured :class:`Coastline`.
+``import coastline`` is cheap. The public names are loaded from :mod:`coastline.sdk.recommend`
+on first access (PEP 562), so pandas, Kavier and the predictor backends load only when used.
+The module is callable: ``coastline(predictor=...)`` returns a configured :class:`Coastline`.
 """
 
 from __future__ import annotations
@@ -19,7 +18,7 @@ try:
 except PackageNotFoundError:  # pragma: no cover - source tree without installed metadata
     __version__ = "0.0.0+unknown"
 
-# Public name -> the module it is resolved from (all live under coastline.sdk.recommend).
+# Public name and the module that defines it.
 _LAZY_ATTRS = {
     "recommend": "coastline.sdk.recommend",
     "recommend_csv": "coastline.sdk.recommend",
@@ -48,7 +47,7 @@ def __getattr__(name: str) -> Any:
     target = _LAZY_ATTRS.get(name)
     if target is not None:
         value = getattr(importlib.import_module(target), name)
-        globals()[name] = value  # cache so subsequent access skips __getattr__
+        globals()[name] = value  # cached, so later lookups skip __getattr__
         return value
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
@@ -60,8 +59,7 @@ def __dir__() -> list[str]:
 class _CallableModule(_sys.modules[__name__].__class__):
     """Make ``coastline(predictor=...)`` return a configured Coastline.
 
-    Subclassing the module type preserves PEP 562 ``__getattr__`` (the lazy attrs above)
-    while adding ``__call__``.
+    A subclass of the module type keeps the PEP 562 ``__getattr__`` above and adds ``__call__``.
     """
 
     def __call__(self, predictor: str = "kavier", **kwargs: Any) -> "Coastline":

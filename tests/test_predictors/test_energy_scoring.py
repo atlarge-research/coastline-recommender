@@ -1,22 +1,17 @@
-"""Oracle-based tests for the multi-objective energy power-scoring path — the LIVE
-GridWorkflowPipeline + normalize_candidates + rank_candidates.
+"""Tests for multi-objective power scoring in GridWorkflowPipeline (normalize_candidates and
+rank_candidates), on synthetic inputs.
 
-Scoring model under test (all oracles below are hand-derived from these definitions,
-written in a DIFFERENT form than the implementation):
-    power_cost(c)  = c.power (per-GPU watts) × c.total_gpus          # TOTAL cluster watts
-    time_cost(c)   = 1 / c.throughput                                # runtime proxy
-    power_score    = (p_max − power_cost) / (p_max − p_min)          # min-max, higher=better
-    throughput_score = (t_max − time_cost) / (t_max − t_min)         # min-max over 1/throughput
-    combined_score = α·power_score + β·throughput_score              # α=power weight, β=throughput
-Preset weights (α_power, β_throughput): energy (0.8, 0.2), balanced (0.5, 0.5),
-performance (0.2, 0.8).
+Scoring model:
+    power_cost(c)    = c.power (watts per GPU) x c.total_gpus     # total cluster watts
+    time_cost(c)     = 1 / c.throughput                           # runtime proxy
+    power_score      = (p_max - power_cost) / (p_max - p_min)     # min-max, higher is better
+    throughput_score = (t_max - time_cost) / (t_max - t_min)      # min-max over 1/throughput
+    combined_score   = alpha * power_score + beta * throughput_score
+alpha weights power and beta throughput. Preset weights (alpha, beta): energy (0.8, 0.2),
+balanced (0.5, 0.5), performance (0.2, 0.8).
 
-Guards a real, fixed bug: predictors report power PER-GPU (~constant across GPU count),
-but total cluster power is per-GPU-watts × total_gpus. The pre-fix per-GPU fixed-cap
-formula divided per-GPU power by a fixed TDP budget, so power_score spuriously climbed
-toward 1.0 as total_gpus grew, making large clusters look almost free on energy.
-EvaluatedCandidate.power (surfaced as predicted_power_watts) stays per-GPU for display.
-Inputs are synthetic; no artifacts.
+Predictors report power per GPU, which barely changes with GPU count, so the score uses total
+cluster power. ``EvaluatedCandidate.power`` (shown as predicted_power_watts) stays per GPU.
 """
 
 from __future__ import annotations
@@ -33,9 +28,9 @@ from coastline.sdk.pipeline.workflow import GridWorkflowPipeline
 
 
 class _ScriptedPredictor:
-    """Scripted (throughput, power) lookup keyed by (total_gpus, batch_size); used as
-    both throughput and power predictor so per-candidate numbers stay coupled. ``power``
-    is PER-GPU watts, exactly as the real power predictors report it."""
+    """Scripted (throughput, power) lookup keyed by (total_gpus, batch_size), used as both the
+    throughput and the power predictor. ``power`` is watts per GPU, as the real power predictors
+    report it."""
 
     def __init__(self, table: Dict[Tuple[int, int], Tuple[float, float]]) -> None:
         self.table = table
@@ -92,40 +87,32 @@ def _pipeline(table, *, total_gpus, policy="balanced", alpha=0.5, beta=0.5):
 
 
 def test_energy_weighting_prefers_lower_total_power_regardless_of_gpu_count():
-    """Regression: power_cost is TOTAL watts (per-GPU × count), not per-GPU. Equal
-    throughput; 1 GPU @ 390 W/GPU = 390 W total vs 2 GPUs @ 100 W/GPU = 200 W total.
-    Under energy weighting (α=0.9 power, β=0.1 thr) the lower-TOTAL-power 2-GPU config
-    must win even though it uses MORE GPUs.
+    """Power cost is total watts (watts per GPU x GPU count). With equal throughput, 2 GPUs at
+    100 W (200 W total) beat 1 GPU at 390 W (390 W total) under alpha=0.9, beta=0.1.
 
-    By hand: power_cost 2-GPU=200, 1-GPU=390 → p_min=200, p_max=390.
-      power_score(2GPU) = (390-200)/(390-200) = 190/190 = 1.0
-      power_score(1GPU) = (390-390)/190       = 0.0
-    Equal throughput → t_max==t_min → throughput_score = 1.0 for both (degenerate axis).
-      combined(2GPU) = 0.9·1.0 + 0.1·1.0 = 1.0  →  combined(1GPU) = 0.9·0.0 + 0.1·1.0 = 0.1
+        power_score: 2 GPUs (390 - 200) / 190 = 1.0, 1 GPU (390 - 390) / 190 = 0.0
+        throughput_score: 1.0 for both (equal throughput)
+        combined: 2 GPUs 0.9 x 1.0 + 0.1 x 1.0 = 1.0, 1 GPU 0.9 x 0.0 + 0.1 x 1.0 = 0.1
     """
     table = {(1, 4): (500.0, 390.0), (2, 4): (500.0, 100.0)}
     recs = _pipeline(table, total_gpus=[1, 2], alpha=0.9, beta=0.1).recommend(_workload(), _context())
     by_gpus = {r.total_gpus: r.metadata for r in recs}
     assert recs[0].total_gpus == 2
-    assert by_gpus[2]["power_score"] == pytest.approx(1.0)  # 200 W total -> lowest -> best
-    assert by_gpus[1]["power_score"] == pytest.approx(0.0)  # 390 W total -> highest -> worst
+    assert by_gpus[2]["power_score"] == pytest.approx(1.0)  # 200 W total, the lowest
+    assert by_gpus[1]["power_score"] == pytest.approx(0.0)  # 390 W total, the highest
     assert by_gpus[2]["combined_score"] == pytest.approx(1.0)
     assert by_gpus[1]["combined_score"] == pytest.approx(0.1)
-    # Cross-check against the old per-GPU fixed-cap bug: 1 - 100/400 = 0.75 (A100 TDP=400 W).
+    # A per-GPU fixed-cap score would give 1 - 100/400 = 0.75 (A100 TDP 400 W).
     assert by_gpus[2]["power_score"] != pytest.approx(1.0 - 100.0 / 400.0)
 
 
 def test_performance_weighting_prefers_higher_throughput_despite_higher_total_power():
-    """Complement of the energy test on the SAME trade-off: with performance weighting
-    (α=0.2 power, β=0.8 thr) the higher-throughput config wins even though it draws more
-    TOTAL power — proving β actually weights throughput.
+    """Under alpha=0.2, beta=0.8 the higher-throughput config wins although it draws more total
+    power.
 
-    LOW : 1 GPU @ 100 W = 100 W total, 300 tok/s.  HIGH: 2 GPU @ 250 W = 500 W total, 600 tok/s.
-    power_cost: LOW=100, HIGH=500 → power_score LOW=1.0, HIGH=0.0.
-    time_cost:  LOW=1/300, HIGH=1/600 → t_min=1/600, t_max=1/300
-      throughput_score(HIGH) = (1/300 - 1/600)/(1/300 - 1/600) = 1.0 ; (LOW) = 0.0
-      combined(HIGH) = 0.2·0.0 + 0.8·1.0 = 0.8  >  combined(LOW) = 0.2·1.0 + 0.8·0.0 = 0.2
-    (Under energy weights the winner would flip — see the energy test.)
+        LOW: 1 GPU at 100 W (100 W total), 300 tok/s. HIGH: 2 GPUs at 250 W (500 W total), 600 tok/s.
+        power_score: LOW 1.0, HIGH 0.0. throughput_score: HIGH 1.0, LOW 0.0.
+        combined: HIGH 0.2 x 0.0 + 0.8 x 1.0 = 0.8, LOW 0.2 x 1.0 + 0.8 x 0.0 = 0.2
     """
     table = {(1, 4): (300.0, 100.0), (2, 4): (600.0, 250.0)}
     recs = _pipeline(table, total_gpus=[1, 2], policy="performance", alpha=0.2, beta=0.8).recommend(
@@ -140,14 +127,11 @@ def test_performance_weighting_prefers_higher_throughput_despite_higher_total_po
 
 
 def test_power_score_is_linear_minmax_of_total_power_with_interior_point():
-    """power_score is a LINEAR min-max ramp over TOTAL power; an interior point pins the
-    slope (endpoints alone can't). Equal throughput isolates the power axis.
+    """power_score is linear min-max over total power; the middle point checks the slope. Equal
+    throughput isolates the power axis.
 
-    total_gpus 1/2/4 @ per-GPU 100/125/100 W → total power 100/250/400 W.
-    p_min=100, p_max=400.
-      power_score(100) = (400-100)/300 = 1.0
-      power_score(250) = (400-250)/300 = 150/300 = 0.5   <- interior
-      power_score(400) = (400-400)/300 = 0.0
+        total_gpus 1/2/4 at 100/125/100 W per GPU: total power 100/250/400 W
+        power_score: (400 - 100) / 300 = 1.0, (400 - 250) / 300 = 0.5, (400 - 400) / 300 = 0.0
     """
     table = {(1, 4): (500.0, 100.0), (2, 4): (500.0, 125.0), (4, 4): (500.0, 100.0)}
     recs = _pipeline(table, total_gpus=[1, 2, 4], policy="energy", alpha=0.8, beta=0.2).recommend(
@@ -162,15 +146,13 @@ def test_power_score_is_linear_minmax_of_total_power_with_interior_point():
 
 
 def test_throughput_score_is_minmax_of_inverse_throughput_not_throughput():
-    """throughput_score min-maxes 1/throughput (runtime), NOT throughput directly, so it
-    is linear in runtime and nonlinear in throughput. Equal TOTAL power isolates the axis.
+    """throughput_score is min-max over 1/throughput (runtime), so it is linear in runtime. Equal
+    total power isolates the axis.
 
-    total_gpus 1/2/4 @ per-GPU 300/150/75 W → total power 300/300/300 W (power axis degenerate → 1.0).
-    throughputs 300/400/600 tok/s → time_cost 1/300, 1/400, 1/600. t_min=1/600, t_max=1/300.
-      throughput_score(400) = (1/300 - 1/400)/(1/300 - 1/600)
-                            = (1/1200)/(1/600) = 600/1200 = 0.5   <- interior
-      throughput_score(300) = 0.0 ; throughput_score(600) = 1.0
-    A DIRECT throughput min-max would instead give (400-300)/(600-300) = 1/3 ≈ 0.333.
+        total_gpus 1/2/4 at 300/150/75 W per GPU: 300 W total each, so power_score is 1.0
+        throughputs 300/400/600 tok/s: time_cost 1/300, 1/400, 1/600
+        throughput_score(400) = (1/300 - 1/400) / (1/300 - 1/600) = 0.5; 300 gives 0.0, 600 gives 1.0
+        Min-max over throughput itself would give (400 - 300) / (600 - 300) = 1/3.
     """
     table = {(1, 4): (300.0, 300.0), (2, 4): (400.0, 150.0), (4, 4): (600.0, 75.0)}
     recs = _pipeline(table, total_gpus=[1, 2, 4], policy="performance", alpha=0.2, beta=0.8).recommend(
@@ -180,31 +162,27 @@ def test_throughput_score_is_minmax_of_inverse_throughput_not_throughput():
     assert by_gpus[1]["throughput_score"] == pytest.approx(0.0)
     assert by_gpus[2]["throughput_score"] == pytest.approx(0.5)
     assert by_gpus[4]["throughput_score"] == pytest.approx(1.0)
-    # Reject the linear-in-throughput bug (would be 1/3 for the 400 tok/s config).
+    # Min-max over throughput itself would give 1/3 for the 400 tok/s config.
     assert by_gpus[2]["throughput_score"] != pytest.approx(1.0 / 3.0)
-    # Power axis is degenerate (all 300 W total) so every power_score collapses to 1.0.
+    # Every config draws 300 W in total, so every power_score is 1.0.
     assert by_gpus[2]["power_score"] == pytest.approx(1.0)
 
 
 def test_lone_feasible_candidate_gets_degenerate_scores_of_one():
-    """With a single feasible candidate p_max==p_min and t_max==t_min, so both min-max
-    denominators are zero. The guard must yield 1.0 (best) on each axis, not NaN/crash."""
+    """With one feasible candidate both min-max denominators are zero, and each score is 1.0."""
     table = {(2, 4): (500.0, 137.0)}
     recs = _pipeline(table, total_gpus=[2], policy="energy", alpha=0.8, beta=0.2).recommend(_workload(), _context())
     assert len(recs) == 1
     assert recs[0].metadata["power_score"] == pytest.approx(1.0)
     assert recs[0].metadata["throughput_score"] == pytest.approx(1.0)
-    # combined = 0.8·1.0 + 0.2·1.0 = 1.0
+    # combined = 0.8 x 1.0 + 0.2 x 1.0 = 1.0
     assert recs[0].metadata["combined_score"] == pytest.approx(1.0)
 
 
 def test_predicted_power_watts_stays_per_gpu_and_tokens_per_watt_uses_it():
-    """The stored/displayed power stays PER-GPU (the fix lives in the SCORE, not the
-    surfaced power). tokens_per_watt is derived from the per-GPU value.
-
-    2 GPUs @ 137 W/GPU, 500 tok/s.
-      predicted_power_watts = 137 (per-GPU), NOT 137×2 = 274 (would be the total-power bug).
-      tokens_per_watt = 500 / 137 = 3.6496 tok/W, NOT 500/274 = 1.825 (total-power bug).
+    """The reported power stays per GPU, and tokens_per_watt uses it. For 2 GPUs at 137 W and
+    500 tok/s, predicted_power_watts is 137 (the total is 274) and tokens_per_watt is
+    500 / 137 = 3.6496.
     """
     table = {(2, 4): (500.0, 137.0)}
     recs = _pipeline(table, total_gpus=[2], policy="energy").recommend(_workload(), _context())

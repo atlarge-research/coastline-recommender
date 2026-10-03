@@ -10,29 +10,63 @@ import numpy as np
 import pandas as pd
 
 from coastline.sdk.io.sample_data import sample_raw_trace_path
+from coastline.sdk.library.hardware import canonical_gpu_name
 from coastline.sdk.models.context import SystemContext
 from coastline.sdk.models.recommendation import Prediction
-from coastline.sdk.models.workload import WorkloadSpec, canonical_model_name
+from coastline.sdk.models.workload import WorkloadSpec, canonical_method_name, canonical_model_name
 from coastline.sdk.predictors.base import BasePredictor
 
 logger = logging.getLogger(__name__)
 
 
-# Default source columns for the hit value; a lookup CSV with other names sets these explicitly.
+# Default source columns for a hit; a lookup CSV with other headers passes its own names.
 _DEFAULT_THROUGHPUT_COL = "dataset_tokens_per_second"
 _DEFAULT_RUNTIME_COL = "train_runtime"
+# Measured per-GPU power of the run (optional column; the raw trace and the bundled sample have it).
+_DEFAULT_POWER_COL = "gpu_power_watts_avg"
+
+#: Metadata key of a hit's measured per-GPU power in watts, present when the run recorded one.
+MEASURED_POWER_KEY = "measured_power_watts"
+
+_CONFIG_COLS = [
+    "model_name",
+    "method",
+    "gpu_model",
+    "number_nodes",
+    "number_gpus",
+    "tokens_per_sample",
+    "batch_size",
+]
+_NUMERIC_CONFIG_COLS = ["number_nodes", "number_gpus", "tokens_per_sample", "batch_size"]
+
+
+def _measured_power(values: np.ndarray) -> Optional[float]:
+    """The first run's power, else the median of the runs that recorded one, else None."""
+    valid = values[np.isfinite(values) & (values > 0)]
+    if not len(valid):
+        return None
+    first = values[0]
+    return float(first) if np.isfinite(first) and first > 0 else float(np.median(valid))
 
 
 class RetrievalPredictor(BasePredictor):
-    """SHA256-hash-indexed exact-match cache over the curated run database.
+    """Exact-match cache over the curated run database, indexed by SHA256 hash.
 
-    Returns the first recorded run's throughput/runtime on a hit (~0% error);
-    returns None on a miss so the orchestrator falls back to simulation predictors.
-    ``throughput_col`` / ``runtime_col`` name the source columns the hit reads (defaults match
-    the run DB), so a lookup CSV that stores throughput/duration under other headers still works.
+    On a hit, returns the first recorded run's throughput and runtime (~0% error); on a miss,
+    returns None so the orchestrator falls back to a simulation predictor. ``throughput_col``
+    and ``runtime_col`` name the columns a hit reads (the defaults match the run database), for
+    lookup CSVs that use other headers.
+
+    Power comes from the power predictor (Kavier). A hit also carries the run's measured power
+    from ``power_col`` in ``metadata[MEASURED_POWER_KEY]``, which the pipeline uses when the power
+    predictor has none (a model outside Kavier's catalog), so the measured run can still be
+    recommended.
     """
 
-    #: A hash into a prebuilt index at ~4.6 us -- never worth a dispatch.
+    #: The reason a recommendation reports when every candidate missed.
+    MISS_REASON = "no measured run in the lookup database matches"
+
+    #: A hash lookup in a prebuilt index, ~4.6 us; not worth a worker dispatch.
     EXPENSIVE = False
 
     def __init__(
@@ -41,17 +75,19 @@ class RetrievalPredictor(BasePredictor):
         *,
         throughput_col: Optional[str] = None,
         runtime_col: Optional[str] = None,
+        power_col: Optional[str] = None,
     ):
-        """Load the RAW trace (not ML-subset) and build the hash index."""
+        """Load the raw trace (rather than the ML subset) and build the hash index."""
         self._throughput_col = throughput_col or _DEFAULT_THROUGHPUT_COL
         self._runtime_col = runtime_col or _DEFAULT_RUNTIME_COL
+        self._power_col = power_col or _DEFAULT_POWER_COL
         if dataset_path is None:
             env = os.environ.get("DATA_DIR")
-            # parents[7] == the superproject umbrella that holds the shared trace-archive/.
+            # parents[7] is the superproject that holds trace-archive/.
             data_dir = Path(env) if env else Path(__file__).resolve().parents[7] / "trace-archive"
             full_trace = data_dir / "profiling-dataset" / "raw_trace.csv"
-            # Fall back to the bundled sample when the full trace is
-            # absent, so a plain `pip install` still serves a few exact-match cache hits.
+            # Without the full trace, use the bundled sample, so a `pip install` still serves a few
+            # exact-match cache hits.
             dataset_path = full_trace if full_trace.exists() else sample_raw_trace_path()
 
         self.dataset_path = dataset_path
@@ -75,28 +111,35 @@ class RetrievalPredictor(BasePredictor):
             logger.info(f"Loaded dataset from {self.dataset_path}")
             logger.info(f"Dataset shape: {dataset.shape}")
 
-            required_cols = [
-                "model_name",
-                "method",
-                "gpu_model",
-                "number_nodes",
-                "number_gpus",
-                "tokens_per_sample",
-                "batch_size",
-                self._throughput_col,
-                self._runtime_col,
-            ]
+            required_cols = [*_CONFIG_COLS, self._throughput_col, self._runtime_col]
             missing_cols = [col for col in required_cols if col not in dataset.columns]
             if missing_cols:
                 raise ValueError(f"Missing required columns: {missing_cols}")
 
-            # Filter out invalid runs (should already be done, but double-check)
+            # Drop invalid runs, in case the file still has any
             if "is_valid" in dataset.columns:
                 initial_count = len(dataset)
                 dataset = dataset.loc[dataset["is_valid"] == 1.0].copy()
                 filtered_count = initial_count - len(dataset)
                 if filtered_count > 0:
                     logger.warning(f"Filtered out {filtered_count} invalid runs")
+
+            # A cell such as 'OOM' or '' in a numeric column becomes NaN, so its row is dropped
+            # below instead of failing the comparisons (the same coercion `coastline utils tune` uses).
+            numeric_cols = [*_NUMERIC_CONFIG_COLS, self._throughput_col, self._runtime_col]
+            if self._power_col in dataset.columns:
+                numeric_cols.append(self._power_col)
+            for col in numeric_cols:
+                dataset[col] = pd.to_numeric(dataset[col], errors="coerce")
+
+            initial_count = len(dataset)
+            dataset = dataset.loc[dataset[_NUMERIC_CONFIG_COLS].notna().all(axis=1)].copy()
+            config_filtered = initial_count - len(dataset)
+            if config_filtered > 0:
+                logger.warning(
+                    f"Filtered out {config_filtered} rows with a missing or non-numeric "
+                    f"{', '.join(_NUMERIC_CONFIG_COLS)}"
+                )
 
             # Filter out rows with missing/invalid throughput or runtime values
             initial_count = len(dataset)
@@ -120,31 +163,24 @@ class RetrievalPredictor(BasePredictor):
             raise
 
     def _build_index(self):
-        """Build the SHA256 hash index (O(1) lookup); stores stats + first-run values per config."""
+        """Build the SHA256 hash index (O(1) lookup), with stats and first-run values per config."""
         if self.dataset is None or len(self.dataset) == 0:
             logger.warning("Cannot build index: dataset is empty")
             return
 
-        config_cols = [
-            "model_name",
-            "method",
-            "gpu_model",
-            "number_nodes",
-            "number_gpus",
-            "tokens_per_sample",
-            "batch_size",
-        ]
+        has_power = self._power_col in self.dataset.columns
 
-        for config_key, group in self.dataset.groupby(config_cols):
+        for config_key, group in self.dataset.groupby(_CONFIG_COLS):
             config_tuple = config_key if isinstance(config_key, tuple) else (config_key,)
             if len(config_tuple) != 7:
                 logger.warning(f"Skipping malformed grouped key: {config_tuple}")
                 continue
 
+            # Keyed on the spellings WorkloadSpec stores, so 'LoRA' or a GPU alias in the CSV still hits.
             config_hash = self._hash_configuration(
                 canonical_model_name(str(config_tuple[0])),
-                str(config_tuple[1]),
-                str(config_tuple[2]),
+                canonical_method_name(str(config_tuple[1])),
+                canonical_gpu_name(str(config_tuple[2])),
                 float(config_tuple[3]),
                 float(config_tuple[4]),
                 float(config_tuple[5]),
@@ -153,6 +189,7 @@ class RetrievalPredictor(BasePredictor):
 
             throughputs = pd.to_numeric(group[self._throughput_col], errors="coerce").to_numpy(dtype=float)
             runtimes = pd.to_numeric(group[self._runtime_col], errors="coerce").to_numpy(dtype=float)
+            measured_power = _measured_power(group[self._power_col].to_numpy(dtype=float)) if has_power else None
 
             throughput_median = float(np.median(throughputs))
             throughput_std = float(np.std(throughputs))
@@ -188,6 +225,7 @@ class RetrievalPredictor(BasePredictor):
                 "run_count": run_count,
                 "throughput_first": throughput_first,
                 "runtime_first": runtime_first,
+                "measured_power_watts": measured_power,
             }
 
             self.aggregation_stats[config_hash] = {
@@ -247,8 +285,23 @@ class RetrievalPredictor(BasePredictor):
             f"Cache HIT: {workload.llm_model} ({workload.fine_tuning_method}) - "
             f"Throughput: {config_data['throughput_median']:.0f} tokens/sec, "
             f"Runtime: {config_data['runtime_median']:.1f}s "
-            f"(±{config_data['throughput_std']:.0f} tokens/sec, n={stats['count']})"
+            f"(+/-{config_data['throughput_std']:.0f} tokens/sec, n={stats['count']})"
         )
+
+        metadata = {
+            "predictor": "retrieval",
+            "cache_hit": True,
+            "throughput_std": config_data["throughput_std"],
+            "runtime_std": config_data["runtime_std"],
+            "run_count": stats["count"],
+            "throughput_min": config_data["throughput_min"],
+            "throughput_max": config_data["throughput_max"],
+            "runtime_min": config_data["runtime_min"],
+            "runtime_max": config_data["runtime_max"],
+            "coefficient_of_variation": stats["cv"],
+        }
+        if config_data["measured_power_watts"] is not None:
+            metadata[MEASURED_POWER_KEY] = config_data["measured_power_watts"]
 
         return Prediction(
             gpus_per_node=workload.gpus_per_node or 1,
@@ -256,18 +309,7 @@ class RetrievalPredictor(BasePredictor):
             total_gpus=int(config_data["number_of_nodes"] * config_data["gpus_per_node"]),
             predicted_throughput=config_data["throughput_first"],
             predicted_runtime_seconds=config_data["runtime_first"],
-            metadata={
-                "predictor": "retrieval",
-                "cache_hit": True,
-                "throughput_std": config_data["throughput_std"],
-                "runtime_std": config_data["runtime_std"],
-                "run_count": stats["count"],
-                "throughput_min": config_data["throughput_min"],
-                "throughput_max": config_data["throughput_max"],
-                "runtime_min": config_data["runtime_min"],
-                "runtime_max": config_data["runtime_max"],
-                "coefficient_of_variation": stats["cv"],
-            },
+            metadata=metadata,
         )
 
     def get_name(self) -> str:

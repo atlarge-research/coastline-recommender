@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Coastline — LLM fine-tuning recommender</title>
+<title>Coastline: LLM fine-tuning recommender</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -17,7 +17,7 @@
     <div class="brand">
       <span class="mark" aria-hidden="true"></span>
       <span class="wordmark">COASTLINE</span>
-      <span class="tagline">Context-aware recommender for LLM fine-tuning workloads · VU Amsterdam · IBM Research</span>
+      <span class="tagline">Context-aware recommender for LLM fine-tuning workloads | VU Amsterdam | IBM Research | <a href="https://github.com/atlarge-research/coastline-recommender/blob/main/LICENSE-TabPFN.txt">Built with PriorLabs-TabPFN</a></span>
     </div>
     {% if infra %}
     <div class="readout">
@@ -35,7 +35,7 @@
     <button class="tab" data-tab="usage" role="tab">Usage</button>
   </nav>
 
-  <!-- ══ RECOMMEND ═══════════════════════════════════ -->
+  <!-- Recommend -->
   <section class="tab-panel active" id="panel-recommend">
     <div class="workbench workbench-with-stack">
       <aside class="panel config">
@@ -87,19 +87,19 @@
             <div class="field span-2">
               <div class="segmented" id="hwMode" role="tablist">
                 <button type="button" class="seg active" data-mode="total">Total GPUs</button>
-                <button type="button" class="seg" data-mode="nodes">Nodes × per-node</button>
+                <button type="button" class="seg" data-mode="nodes">Nodes x per-node</button>
               </div>
             </div>
             <div class="field span-2" data-hw="total">
-              <label for="rec_total_gpus">GPUs available <span class="unit">≤ {{ infra.total_gpus if infra else 1024 }}</span></label>
+              <label for="rec_total_gpus">GPUs available <span class="unit">&lt;= {{ infra.total_gpus if infra else 1024 }}</span></label>
               <input type="number" id="rec_total_gpus" min="1" max="{{ infra.total_gpus if infra else 1024 }}" step="1" value="16">
             </div>
             <div class="field" data-hw="nodes" hidden>
-              <label for="rec_num_nodes">Nodes <span class="unit">≤ {{ infra.max_nodes if infra else 128 }}</span></label>
+              <label for="rec_num_nodes">Nodes <span class="unit">&lt;= {{ infra.max_nodes if infra else 128 }}</span></label>
               <input type="number" id="rec_num_nodes" min="1" max="{{ infra.max_nodes if infra else 128 }}" step="1" value="2">
             </div>
             <div class="field" data-hw="nodes" hidden>
-              <label for="rec_gpus_per_node">GPUs / node <span class="unit">≤ {{ infra.max_gpus_per_node if infra else 8 }}</span></label>
+              <label for="rec_gpus_per_node">GPUs / node <span class="unit">&lt;= {{ infra.max_gpus_per_node if infra else 8 }}</span></label>
               <input type="number" id="rec_gpus_per_node" min="1" max="{{ infra.max_gpus_per_node if infra else 8 }}" step="1" value="8">
             </div>
           </fieldset>
@@ -115,16 +115,16 @@
             <div class="field span-2">
               <label for="rec_strategy">Strategy</label>
               <select id="rec_strategy">
-                <option value="multi_objective" selected>Multi-objective — throughput vs. power</option>
+                <option value="multi_objective" selected>Multi-objective: throughput vs. power</option>
                 <option value="min_gpu">Minimum GPUs</option>
               </select>
             </div>
             <div class="field span-2" id="presetField">
               <label for="rec_preset">Preset</label>
               <select id="rec_preset">
-                <option value="balanced" selected>Balanced · 0.5 / 0.5</option>
-                <option value="performance">Performance · 0.2 / 0.8</option>
-                <option value="energy">Energy-saver · 0.8 / 0.2</option>
+                <option value="balanced" selected>Balanced (0.5 / 0.5)</option>
+                <option value="performance">Performance (0.2 / 0.8)</option>
+                <option value="energy">Energy-saver (0.8 / 0.2)</option>
               </select>
             </div>
             <p class="policy-note span-2" id="policyNote"></p>
@@ -147,7 +147,7 @@
         </div>
         <div class="state loading" id="recLoading" hidden>
           <div class="bars" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
-          <p>Simulating &amp; ranking…</p>
+          <p>Simulating &amp; ranking...</p>
         </div>
         <div class="state data" id="recData" hidden>
           <div class="summary" id="recSummary"></div>
@@ -163,7 +163,7 @@
         </div>
       </section>
 
-      <!-- ── Queue + admin — stacked under the Recommendations panel ── -->
+      <!-- Queue and admin, below the Recommendations panel -->
       <section class="queue-section">
         <div class="panel queue-panel">
         <div class="results-head">
@@ -214,7 +214,7 @@
             <input type="number" id="q_epochs" min="1" step="1" value="3" required>
           </div>
           <div class="field">
-            <label for="q_duration">Duration <span class="unit">override · s</span></label>
+            <label for="q_duration">Duration <span class="unit">fallback, s</span></label>
             <input type="number" id="q_duration" min="1" step="1" placeholder="Kavier predicts">
           </div>
           <div class="queue-bar" style="grid-column: 1 / -1;">
@@ -222,7 +222,7 @@
             <button type="button" id="queueRefresh" class="btn-mini">Refresh</button>
             <button type="button" id="queueClear" class="btn-mini danger">Clear all</button>
             <span class="spacer"></span>
-            <button type="button" id="adminToggle" class="btn-mini">🔑 Admin</button>
+            <button type="button" id="adminToggle" class="btn-mini">Admin</button>
           </div>
         </form>
         <div class="table-wrap">
@@ -230,14 +230,14 @@
             <thead><tr>
               <th>ID</th><th>Model</th><th class="r">GPUs</th><th class="r">Batch</th><th class="r">Epochs</th><th class="r">Duration</th><th class="r">Power</th><th class="r">Arrival</th><th></th>
             </tr></thead>
-            <tbody id="queueRows"><tr class="queue-empty"><td colspan="9">Queue is empty — add a job above, or import a CSV in admin mode.</td></tr></tbody>
+            <tbody id="queueRows"><tr class="queue-empty"><td colspan="9">Queue is empty. Add a job above, or import a CSV in admin mode.</td></tr></tbody>
           </table>
         </div>
         <div id="adminPanel" class="admin-block" hidden>
           <div class="admin-head">
-            <h3>Admin · FIFO scheduler</h3>
+            <h3>Admin: FIFO scheduler</h3>
           </div>
-          <p class="note">Runs the queue on the sysadmin-declared cluster and reports per-job + cluster metrics. CSV import accepts multiple trace schemas (flexible column aliases).</p>
+          <p class="note">Runs the queue on the declared cluster and reports per-job and cluster metrics. CSV import accepts several names for each column.</p>
           <div class="queue-bar no-divider">
             <button type="button" id="adminRun" class="btn-mini primary">Run cluster (FIFO)</button>
             <label class="btn-mini" for="csvFile" style="cursor:pointer;">Import CSV</label>
@@ -251,7 +251,7 @@
     </div>
   </section>
 
-  <!-- ══ PLAYGROUND ══════════════════════════════════ -->
+  <!-- Playground -->
   <section class="tab-panel" id="panel-playground" hidden>
     <div class="workbench">
       <aside class="panel config">
@@ -339,7 +339,7 @@
         </div>
         <div class="state loading" id="pgLoading" hidden>
           <div class="bars" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
-          <p>Running each model…</p>
+          <p>Running each model...</p>
         </div>
         <div class="state data" id="pgData" hidden>
           <div class="summary" id="pgSummary"></div>
@@ -357,48 +357,48 @@
     </div>
   </section>
 
-  <!-- ══ USAGE / MANUAL ══════════════════════════════ -->
+  <!-- Usage -->
   <section class="tab-panel" id="panel-usage" hidden>
     <div class="panel" style="padding: 16px 24px 22px;">
       <div class="results-head">
         <h2>Usage</h2>
-        <span class="results-sub">A quick map of every panel and what it does</span>
+        <span class="results-sub">What each panel does</span>
       </div>
       <div class="usage-body">
         <h3>Recommend</h3>
-        <p>Pick a workload — model, fine-tuning method, sequence length, batch, epochs, dataset size. Set the hardware budget (either a single <em>Total GPUs</em> number, or <em>Nodes × GPUs / node</em>). Pick a policy: <b>Multi-objective</b> ranks candidates by a weighted mix of throughput and power (Balanced / Performance / Energy-saver presets), <b>Minimum GPUs</b> returns the fewest GPUs that still satisfy feasibility.</p>
-        <p>The <em>Prediction model</em> controls which simulator estimates throughput + power for each candidate: <b>Kavier</b> (analytical, fast, calibrated on the 4-model set) or one of 10 data-driven ML models. <em>Cache lookup</em> returns exact-match historical runs (~0% MdAPE when the workload is in the dataset; nothing otherwise).</p>
-        <p>Click <b>Recommend configuration</b>. Coastline generates a feasibility-filtered grid of candidates, simulates each one, ranks them, and shows the top results.</p>
+        <p>Set the workload: model, fine-tuning method, sequence length, batch, epochs and dataset size. Set the hardware budget as <em>Total GPUs</em> or as <em>Nodes x GPUs / node</em>. Pick a policy: <b>Multi-objective</b> ranks candidates by a weighted mix of throughput and power (presets Balanced, Performance and Energy-saver), and <b>Minimum GPUs</b> returns the fewest GPUs that pass the feasibility check.</p>
+        <p>The <em>Prediction model</em> estimates throughput and power for each candidate: <b>Kavier</b> (analytical) or one of 10 data-driven models. <em>Cache lookup</em> returns the measured run that matches the workload, and nothing when no run matches.</p>
+        <p><b>Recommend configuration</b> builds a grid of feasible candidates, predicts each one, ranks them and shows the top results.</p>
 
         <h3>Schedule</h3>
-        <p>Each row in the Recommendations table has a small <b>Schedule</b> button that appends that configuration to the workload queue. Kavier's per-GPU power for the workload is captured at scheduling time so the cluster-wide energy summary reflects the real workload.</p>
+        <p>The <b>Schedule</b> button on a row adds that configuration to the workload queue, with Kavier's per-GPU power for the workload. The energy totals use that power.</p>
 
         <h3>Workload queue</h3>
-        <p>The queue stores the four fields a FIFO scheduler needs: <em>request ID</em>, <em>arrival</em>, <em>num_gpus</em>, <em>predicted duration</em>. Use the inline form to add a single job, or click <b>Admin → Import CSV</b> to bulk-load a trace. Column aliases tolerated: <code>submission_time</code> or <code>arrival_time</code> for arrival; <code>num_gpus</code> or <code>number_gpus</code> for GPU count; <code>duration_ms</code>, <code>duration_s</code>, or <code>predicted_duration_s</code> for duration. Optional columns: <code>request_id</code>, <code>llm_model</code>, <code>fine_tuning_method</code>, <code>batch_size</code>, <code>power_watts_per_gpu</code>.</p>
+        <p>A queued job has a request ID, an arrival time, a GPU count and a predicted duration, the four fields the FIFO scheduler reads. Add one job with the form, or many with <b>Admin -> Import CSV</b>. Accepted columns: <code>submission_time</code> or <code>arrival_time</code> for the arrival (seconds or ISO timestamps); <code>num_gpus</code> or <code>number_gpus</code> for the GPU count; <code>duration_ms</code>, <code>duration_s</code> or <code>predicted_duration_s</code> for the duration. Optional columns: <code>request_id</code>, <code>llm_model</code>, <code>fine_tuning_method</code>, <code>batch_size</code>, <code>power_watts_per_gpu</code>.</p>
 
-        <h3>Admin · FIFO scheduler</h3>
-        <p><b>Run cluster (FIFO)</b> simulates the queue running on the sysadmin-declared cluster (see the masthead readout). Strict head-of-line FIFO; oversized jobs (more GPUs than the cluster has) are skipped defensively. Per-job: start / end / wait / completion time + energy. Cluster-wide: total runtime, average wait, average JCT, total energy. Per-GPU power comes from Kavier when the job's full workload config is known, otherwise a 350 W/GPU placeholder.</p>
-        <p>The run also draws a <b>Cluster timeline</b> — GPUs allocated over time (against the dashed capacity ceiling) above jobs-in-queue over time, on a shared axis. Hover or focus the chart and use the arrow keys to read GPUs in use and queue depth at any moment.</p>
+        <h3>Admin: FIFO scheduler</h3>
+        <p><b>Run cluster (FIFO)</b> runs the queue in strict FIFO order on the declared cluster (see the masthead). A job that needs more GPUs than the cluster has is skipped. The results give each job's duration, wait, completion time and energy, and the cluster's total runtime, average wait, average JCT and total energy. A job's per-GPU power comes from Kavier when its workload is complete, and is 350 W otherwise.</p>
+        <p>The run also draws the <b>Cluster timeline</b>: GPUs in use over time, with the capacity as a dashed line, above the number of queued jobs. Hover or focus the chart and use the arrow keys to read both at any time.</p>
 
         <h3>Playground</h3>
-        <p>Pick one concrete configuration (model + method + GPU + tokens + batch + layout) and check the predictors you want to compare. Each runs the same config in an isolated subprocess and reports throughput / runtime / power / energy. Used to compare data-driven vs analytical predictors on the same workload (the thesis Exp1 comparison, one row at a time).</p>
+        <p>Pick one configuration and the predictors to compare. Each predictor runs in its own subprocess and reports throughput, runtime, power and energy for that configuration, as one row of the thesis Exp1 comparison.</p>
 
         <h3>Activity</h3>
-        <p>Every action — recommend, schedule, queue add/remove/run, errors — is logged at the bottom of the page with timestamp + level (<b>info</b> / <b>ok</b> / <b>err</b>). Capped at 50 entries; the Clear button resets it. Toast banners fade after 5 seconds, but the log keeps a permanent record so failures are never lost.</p>
+        <p>Requests, queue changes, runs and errors are logged at the bottom of the page with a time and a level (<b>info</b>, <b>ok</b> or <b>err</b>). The log keeps the last 50 entries, and Clear empties it. Banners fade after 5 seconds; their messages stay in the log.</p>
 
         <h3>Endpoints (REST API)</h3>
         <p>
-          <code>GET /api/health</code> · <code>GET /api/infrastructure</code> ·
-          <code>POST /api/recommend</code> · <code>POST /api/predict</code> ·
-          <code>GET|POST /api/queue</code> · <code>DELETE /api/queue/{id}</code> ·
-          <code>POST /api/admin/run</code> · <code>POST /api/admin/import</code> ·
+          <code>GET /api/health</code>, <code>GET /api/infrastructure</code>,
+          <code>POST /api/recommend</code>, <code>POST /api/predict</code>,
+          <code>GET|POST /api/queue</code>, <code>DELETE /api/queue/{id}</code>,
+          <code>POST /api/admin/run</code>, <code>POST /api/admin/import</code>,
           <code>POST /api/admin/clear</code>
         </p>
       </div>
     </div>
   </section>
 
-  <!-- ── Activity log (terminal-style, persistent) ── -->
+  <!-- Activity log -->
   <aside class="activity">
     <div class="activity-head">
       <h3>Activity</h3>

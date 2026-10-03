@@ -13,8 +13,11 @@ from coastline.sdk.models.recommendation import Prediction  # noqa: F401  (retur
 from coastline.sdk.models.workload import WorkloadSpec
 from coastline.sdk.predictors.base import BasePredictor
 from coastline.sdk.predictors.performance.data_driven.ml_common import (
+    ModelNotShippedError,
     feature_row_has_unknown_specs,
     finalize_ml_prediction,
+    model_error_prediction,
+    model_not_shipped_error,
     performance_deep_learning_model_dir,
     workload_to_ml_feature_row,
 )
@@ -27,7 +30,7 @@ DL_MODEL_DIR = performance_deep_learning_model_dir()
 
 
 class DeepLearningPredictor(BasePredictor):
-    """EmbeddingNN-backed performance predictor (auto-selects CUDA/MPS/CPU at load time)."""
+    """Performance predictor backed by EmbeddingNN; runs on CUDA, MPS or CPU, whichever is available."""
 
     #: A torch forward pass: ~4 ms per prediction.
     EXPENSIVE = True
@@ -57,18 +60,16 @@ class DeepLearningPredictor(BasePredictor):
         weights_path = self.model_dir / "performance_deep_learning.pth"
         artifacts_path = self.model_dir / "performance_deep_learning_artifacts.pkl"
 
-        if not weights_path.exists() or not artifacts_path.exists():
-            raise FileNotFoundError(
-                f"DL model not found at {self.model_dir}. "
-                "Train it first: python -m trainer.main --model deep_learning  (dev/ on PYTHONPATH)"
-            )
+        for path in (weights_path, artifacts_path):
+            if not path.exists():
+                raise model_not_shipped_error("deep_learning", path)
 
         with open(artifacts_path, "rb") as f:
             self._artifacts = pickle.load(f)
 
         checkpoint = torch.load(weights_path, map_location=self._device, weights_only=False)
 
-        # noise_std=0.0 at inference — no Gaussian noise injection
+        # No Gaussian input noise at inference.
         self._model = EmbeddingNN(
             embedding_dims=checkpoint["embedding_dims"],
             num_numerical_features=checkpoint["num_numerical_features"],
@@ -83,18 +84,30 @@ class DeepLearningPredictor(BasePredictor):
         logger.info(f"Deep Learning model loaded from {self.model_dir} on {self._device}")
 
     def predict(self, workload: WorkloadSpec, context: SystemContext) -> Optional[Prediction]:
-        """Predict throughput for a workload, or None if the model can't load."""
+        """Predict throughput for a workload, or None for a model or GPU missing from Kavier's library.
+
+        Model files that cannot be loaded give a Prediction with no numbers and the reason in
+        ``metadata['error_detail']``. A missing model file raises ModelNotShippedError.
+        """
         try:
             self._load()
-        except Exception as e:  # missing/corrupt artifacts, torch load errors, etc.
+        except ModelNotShippedError:
+            raise
+        except Exception as e:  # corrupt artifacts, torch load errors, etc.
             logger.warning(str(e))
-            return None
+            return model_error_prediction(
+                workload,
+                model_name="deep_learning",
+                detail=f"model artifact could not be loaded: {self.model_dir} ({e})",
+            )
 
         model = self._model
         artifacts = self._artifacts
         if model is None or artifacts is None:
             logger.warning("Deep learning predictor artifacts are incomplete")
-            return None
+            return model_error_prediction(
+                workload, model_name="deep_learning", detail=f"model artifact is incomplete: {self.model_dir}"
+            )
 
         row = workload_to_ml_feature_row(workload)
         if feature_row_has_unknown_specs(row):

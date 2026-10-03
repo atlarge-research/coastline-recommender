@@ -44,10 +44,10 @@ from .common import (  # noqa: E402
 
 def train_tabpfn(ckpt: str | None = None):
     if not TABPFN_AVAILABLE:
-        print("\n❌ TabPFN not available. Install with: pip install tabpfn")
+        print("\nTabPFN not available. Install with: pip install tabpfn")
         return
 
-    print("\n🚀 Training TabPFN Model...")
+    print("\nTraining TabPFN Model...")
 
     # TabPFN handles mixed types natively, so feed concatenated raw features.
     X_cat, X_num, y, cat_features, num_features = load_and_preprocess_data()
@@ -69,19 +69,18 @@ def train_tabpfn(ckpt: str | None = None):
     except ImportError:
         device = "cpu"
 
-    # One model per target — TabPFN does not support multi-output.
-    # Use v2 weights by default (the only redistributable version).
-    # If a checkpoint path is explicitly provided and exists, use it instead.
+    # One model per target: TabPFN has no multi-output mode.
+    # The v2 weights are the default (the only redistributable version); --ckpt selects a
+    # local checkpoint instead.
     model_cls = cast(Any, TabPFNRegressor)
 
     _ckpt_path = Path(ckpt).expanduser() if ckpt is not None else None
     if _ckpt_path is not None:
-        # An explicit --ckpt that doesn't exist is a hard error (matches the SDK tune path):
-        # silently training on v2 when you asked for your own checkpoint is a footgun.
+        # A missing --ckpt file raises, as in the SDK tune path, instead of falling back to v2.
         if not _ckpt_path.exists():
             raise ValueError(f"--ckpt path does not exist: {_ckpt_path}")
-        # A local checkpoint may embed non-v2 (research-only) weights into the saved pickle —
-        # fine for your own model; do NOT use it to regenerate the *bundled* tabpfn.pkl.
+        # A local checkpoint may put non-v2 (research-only) weights into the saved pickle.
+        # Use it for your own models; do not use it to regenerate the bundled tabpfn.pkl.
         print(f"  using checkpoint: {_ckpt_path}")
 
         def make_regressor():
@@ -101,17 +100,17 @@ def train_tabpfn(ckpt: str | None = None):
     model_throughput = make_regressor()
     y_throughput = y_log_train[TARGET_COLUMNS["throughput"]].to_numpy()
     model_throughput.fit(X_train.values, y_throughput)
-    print("  ✓ Throughput model trained")
+    print("  Throughput model trained")
 
     model_runtime = make_regressor()
     y_runtime = y_log_train[TARGET_COLUMNS["runtime_seconds"]].to_numpy()
     model_runtime.fit(X_train.values, y_runtime)
-    print("  ✓ Runtime model trained")
+    print("  Runtime model trained")
 
     model = {"throughput": model_throughput, "runtime": model_runtime}
 
     training_time = time.time() - start_time
-    print(f"✅ Training completed in {training_time:.2f} seconds")
+    print(f"Training completed in {training_time:.2f} seconds")
 
     y_log_val_pred_throughput = model["throughput"].predict(X_val.values)
     y_log_val_pred_runtime = model["runtime"].predict(X_val.values)

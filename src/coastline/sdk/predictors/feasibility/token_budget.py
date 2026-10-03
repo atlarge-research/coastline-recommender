@@ -1,17 +1,16 @@
-"""The empirical OOM guard: a per-device token-budget ceiling derived from measured campaigns.
+"""Empirical OOM guard: a per-device token budget derived from measured campaigns.
 
-AutoConf fails in both directions. It waves through configurations far beyond its training
-envelope (the largest validly observed per-device load was 131,072 tokens; the recommender asked
-for 633,600 and the cluster OOMed), and it rejects some models on a training-data failure prior
-rather than a memory calculation.
+AutoConf errs both ways. It accepts configurations far outside its training data (the largest
+valid per-device load observed was 131,072 tokens; the recommender asked for 633,600 and the
+cluster ran out of memory), and it rejects some models because of a failure prior learned from
+its training data rather than a memory calculation.
 
-The campaigns support a blunter rule that catches most of what AutoConf missed:
+The campaigns support a simpler rule that catches most of what AutoConf missed:
 
     per_device_batch_size x max_seq_length  >  threshold   ->  infeasible
 
-This checker is a *guard*, never a replacement: it only ever turns a feasible verdict into an
-infeasible one, and it is opt-in. It wraps whatever backend the config already selected, so
-``autoconf`` keeps doing the OOM classification and this adds the envelope ceiling on top.
+The guard is opt-in and can only turn a feasible verdict into an infeasible one. It wraps the
+backend the config selected, so ``autoconf`` still does the OOM classification.
 """
 
 from __future__ import annotations
@@ -31,9 +30,9 @@ class _Checker(Protocol):
 class TokenBudgetFeasibilityChecker:
     """Reject a configuration whose per-device token load exceeds ``threshold``.
 
-    ``WorkloadSpec.batch_size`` is per-device (Kavier's convention) and ``tokens_per_sample`` is
-    the max sequence length, so their product is the tokens one device must hold. That product,
-    not the effective batch, is what tracks the observed OOMs.
+    ``WorkloadSpec.batch_size`` is per device (Kavier's convention) and ``tokens_per_sample`` is
+    the max sequence length, so their product is the tokens one device must hold. The observed
+    OOMs track this product; they do not track the effective batch.
     """
 
     #: Arithmetic on two integers; never worth a worker dispatch on its own.
@@ -64,9 +63,9 @@ class TokenBudgetFeasibilityChecker:
 class GuardedFeasibilityChecker:
     """Run the empirical guard first, then the selected backend.
 
-    Guard-first is deliberate: the guard is cheap arithmetic and the backend may be an AutoGluon
-    model, so a config the guard already rejects never pays for a classifier call. The guard can
-    only veto; a config it passes is decided entirely by the backend.
+    The guard is cheap arithmetic and the backend may be an AutoGluon model, so a config the
+    guard rejects costs no classifier call. The guard can only veto; the backend decides every
+    config the guard passes.
     """
 
     def __init__(self, guard: TokenBudgetFeasibilityChecker, backend: _Checker) -> None:
@@ -74,8 +73,8 @@ class GuardedFeasibilityChecker:
         self._backend = backend
 
     @property
-    def EXPENSIVE(self) -> bool:  # noqa: N802 — mirrors the class-level flag on plain checkers
-        """Worth forking exactly when the wrapped backend is: the guard itself is arithmetic."""
+    def EXPENSIVE(self) -> bool:  # noqa: N802 (mirrors the class-level flag on plain checkers)
+        """Same as the wrapped backend; the guard itself is arithmetic."""
         return bool(getattr(self._backend, "EXPENSIVE", False))
 
     def is_feasible(self, workload: WorkloadSpec) -> tuple[bool, dict[str, Any]]:
@@ -89,15 +88,15 @@ class GuardedFeasibilityChecker:
         return ok, merged
 
     def batches(self) -> bool:
-        """Delegates: the guard itself is per candidate, the backend decides the regime."""
+        """Whether the backend batches; the guard itself runs per candidate."""
         backend_batches = getattr(self._backend, "batches", None)
         return bool(backend_batches()) if backend_batches is not None else False
 
     def check_chunk(self, workloads: Sequence[WorkloadSpec]) -> list[tuple[bool, dict[str, Any]]]:
-        """Guard every candidate, then hand the survivors to the backend in one go.
+        """Guard every candidate, then pass the survivors to the backend in one call.
 
-        Without this the guard would hide any batching the backend offers, since it is the
-        outermost checker whenever the empirical OOM guard is enabled.
+        When the guard is enabled it is the outermost checker, so without this method the backend
+        could not batch.
         """
         results: list[Any] = [None] * len(workloads)
         survivors: list[WorkloadSpec] = []

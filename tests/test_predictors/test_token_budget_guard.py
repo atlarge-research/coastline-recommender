@@ -1,8 +1,7 @@
-"""The empirical OOM guard: a per-device token ceiling layered over the selected backend.
+"""The empirical OOM guard: a per-device token ceiling in front of the selected backend.
 
-The threshold and the strict comparison are not arbitrary; they were re-derived from the nine
-Zurich campaigns (135 jobs: 49 OOM, 86 completed). These tests pin the properties that derivation
-established, so a later "tidy-up" cannot quietly change the semantics.
+The threshold and the strict comparison come from the nine Zurich campaigns (135 jobs: 49 OOM,
+86 completed).
 """
 
 from __future__ import annotations
@@ -42,9 +41,7 @@ class _Spy:
         return self.verdict, {"backend": "spy"}
 
 
-# --------------------------------------------------------------------------- #
 # The threshold itself
-# --------------------------------------------------------------------------- #
 
 
 def test_the_documented_threshold_is_the_one_derived_from_the_campaigns() -> None:
@@ -52,11 +49,11 @@ def test_the_documented_threshold_is_the_one_derived_from_the_campaigns() -> Non
 
 
 def test_the_comparison_is_strictly_greater_than() -> None:
-    """Load-bearing: 14 campaign jobs sat at exactly 60,224 tokens/device and all COMPLETED.
-    Using >= here would reject them and drop the rule's accuracy from 89.6% to 79.3%."""
+    """14 campaign jobs ran at 60,224 tokens/device and all completed. Using >= would reject them
+    and drop the rule's accuracy from 89.6% to 79.3%."""
     checker = TokenBudgetFeasibilityChecker(EMPIRICAL_OOM_TOKEN_BUDGET)
 
-    at_threshold, _ = checker.is_feasible(_workload(32, 1882))  # 32 x 1882 == 60,224 exactly
+    at_threshold, _ = checker.is_feasible(_workload(32, 1882))  # 32 x 1882 = 60,224
     just_over, _ = checker.is_feasible(_workload(32, 1883))  # 60,256
 
     assert at_threshold is True
@@ -64,8 +61,8 @@ def test_the_comparison_is_strictly_greater_than() -> None:
 
 
 def test_the_guard_reproduces_the_known_false_alarm() -> None:
-    """The single false positive in the campaigns: 8 GPUs, per-device batch 32 x 2475 tokens
-    = 79,200, which completed. The guard is expected to reject it; that is the known cost."""
+    """The one false alarm in the campaigns: 8 GPUs, per-device batch 32 x 2475 tokens = 79,200,
+    which completed. The guard rejects it."""
     checker = TokenBudgetFeasibilityChecker(EMPIRICAL_OOM_TOKEN_BUDGET)
 
     feasible, metadata = checker.is_feasible(_workload(32, 2475))
@@ -75,8 +72,8 @@ def test_the_guard_reproduces_the_known_false_alarm() -> None:
 
 
 def test_the_guard_measures_per_device_load_not_effective_batch() -> None:
-    """WorkloadSpec.batch_size is PER-DEVICE. Two configs with the same per-device load must get
-    the same verdict however many GPUs they span, or the guard would track the wrong quantity."""
+    """WorkloadSpec.batch_size is per device, so two configs with the same per-device load get the
+    same verdict however many GPUs they span."""
     checker = TokenBudgetFeasibilityChecker(EMPIRICAL_OOM_TOKEN_BUDGET)
 
     one_node = _workload(64, 2048)
@@ -92,13 +89,11 @@ def test_a_nonsense_threshold_is_rejected_at_construction() -> None:
         TokenBudgetFeasibilityChecker(0)
 
 
-# --------------------------------------------------------------------------- #
 # Composition: the guard may only veto
-# --------------------------------------------------------------------------- #
 
 
 def test_the_guard_never_promotes_an_infeasible_config() -> None:
-    """It is a guard, not a second opinion: a backend `no` stays `no` however small the config."""
+    """The guard can only veto: a backend `no` stays `no` however small the config."""
     backend = _Spy(verdict=False)
     guarded = GuardedFeasibilityChecker(TokenBudgetFeasibilityChecker(EMPIRICAL_OOM_TOKEN_BUDGET), backend)
 
@@ -108,8 +103,8 @@ def test_the_guard_never_promotes_an_infeasible_config() -> None:
 
 
 def test_a_vetoed_config_never_reaches_the_backend() -> None:
-    """Guard-first is deliberate: the backend may be an AutoGluon model, and cheap arithmetic
-    should not pay for a classifier call on a config it has already rejected."""
+    """The guard runs first, so a config it rejects costs no backend call (the backend may be an
+    AutoGluon model)."""
     backend = _Spy()
     guarded = GuardedFeasibilityChecker(TokenBudgetFeasibilityChecker(EMPIRICAL_OOM_TOKEN_BUDGET), backend)
 
@@ -131,13 +126,11 @@ def test_a_passing_config_is_decided_by_the_backend_and_keeps_both_metadata() ->
     assert metadata["tokens_per_device"] == 8192
 
 
-# --------------------------------------------------------------------------- #
-# Wiring: opt-in, and it must not change the default
-# --------------------------------------------------------------------------- #
+# Wiring: opt-in, off by default
 
 
 def test_the_guard_is_off_by_default() -> None:
-    """Enabling it by default would silently change every recommendation this project has made."""
+    """The guard is off by default, so existing recommendations do not change."""
     checker = create_feasibility_checker({"feasibility": "rules"})
 
     feasible, _ = checker.is_feasible(_workload(64, 4096))  # 262,144
@@ -162,7 +155,7 @@ def test_the_threshold_is_overridable() -> None:
 
 
 def test_the_guard_composes_with_every_backend_including_none() -> None:
-    """`feasibility: none` means "no OOM model", not "no guard" — the guard is orthogonal."""
+    """`feasibility: none` turns off the OOM model; the guard still applies on top of it."""
     checker = create_feasibility_checker({"feasibility": "none", "empirical_oom_guard": True})
 
     assert checker.is_feasible(_workload(64, 4096))[0] is False

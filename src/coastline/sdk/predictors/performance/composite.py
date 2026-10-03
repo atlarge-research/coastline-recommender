@@ -11,19 +11,19 @@ from coastline.sdk.predictors.base import BasePredictor
 
 
 class CacheThenSimulatePredictor(BasePredictor):
-    """Exact cache match first, else a simulation predictor.
+    """Return an exact cache match if there is one, else the fallback predictor's result.
 
-    The shape is ``if in database: retrieve() else: simulate(model=...)``. The fallback is a
-    plain :class:`BasePredictor` — Kavier physics by default, or any user-selected model (an ML
-    portfolio model, …) — so a cache miss simulates with whatever the config chose.
+    As pseudocode: ``if in database: retrieve() else: simulate(model=...)``. The fallback is any
+    :class:`BasePredictor`: Kavier by default, or the model the config selects (for example an
+    ML portfolio model).
     """
 
     @property
-    def EXPENSIVE(self) -> bool:  # noqa: N802 -- mirrors the class-level flag on plain predictors
-        """Worth forking when the simulate leg is: a cache hit is a hash, a miss runs the model.
+    def EXPENSIVE(self) -> bool:  # noqa: N802 (mirrors the class-level flag on plain predictors)
+        """Follows the fallback: a cache hit is a hash lookup, a miss runs the fallback model.
 
-        Keyed off the fallback rather than the cache, because a grid that misses is the case the
-        fork exists for; a grid that hits pays a dispatch it did not need, which is cheap.
+        Forking helps grids that miss the cache; a grid that hits pays for a dispatch it did not
+        need, which is cheap.
         """
         return bool(getattr(self._fallback, "EXPENSIVE", False))
 
@@ -38,4 +38,4 @@ class CacheThenSimulatePredictor(BasePredictor):
         return self._fallback.predict(workload, context)
 
     def get_name(self) -> str:
-        return f"intelligent (cache→{self._fallback.get_name()})"
+        return f"intelligent (cache->{self._fallback.get_name()})"

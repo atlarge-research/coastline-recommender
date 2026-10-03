@@ -1,4 +1,4 @@
-"""`coastline utils tune` — tune a data-driven predictor on a measured-runs CSV."""
+"""`coastline utils tune`: tune a data-driven predictor on a measured-runs CSV."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ def _build_parser() -> FriendlyParser:
     p.add_argument(
         "--output",
         default=None,
-        help="Artifact path (default: the SDK's bundled models dir, custom/<model>.pkl — where "
+        help="Artifact path (default: the SDK's bundled models dir, custom/<model>.pkl - where "
         "--method/predictors.performance auto-discovers it). Set PORTFOLIO_DIR to redirect.",
     )
     p.add_argument("--seed", type=int, default=42, help="Split seed (default 42).")
@@ -67,7 +67,8 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
             seed=args.seed,
             on_step=lambda msg: print(msg, flush=True),
         )
-    except (DatasetFormatError, RuntimeError, ValueError) as exc:
+    # OSError: the dataset cannot be read, or the tuned model cannot be saved.
+    except (DatasetFormatError, RuntimeError, ValueError, OSError) as exc:
         print(f"coastline utils tune: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
@@ -78,7 +79,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     if result["metrics"]:
         print(
             f"holdout ({result['rows_test']} rows): "
-            f"throughput MdAPE {result['metrics']['test_mdape_throughput_pct']:.1f}% · "
+            f"throughput MdAPE {result['metrics']['test_mdape_throughput_pct']:.1f}%, "
             f"runtime MdAPE {result['metrics']['test_mdape_runtime_pct']:.1f}%"
         )
     print(f"serve it with: coastline recommend-trace ... --method {args.model}")

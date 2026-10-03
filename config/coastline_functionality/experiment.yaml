@@ -1,9 +1,9 @@
-# The canonical Coastline recommendation policy — every door (CLI, facade/API, UI) falls
-# back to this file. It declares HOW to recommend (strategy / predictors / grid). WHERE you
-# run (cluster caps) lives in infrastructure.yaml; the workload is optional here and only
-# used by `coastline recommend-job --config` single-job mode (batch/trace/UI supply their own).
+# Default recommendation policy, used when no other config is given (CLI, dashboard and
+# PolicyFactory). It sets the strategy, predictors and grid; the cluster limits are in
+# infrastructure.yaml.
 
-# Optional: a declared single job for `recommend-job --config`. Omit for a policy-only config.
+# The job that `coastline recommend-job` runs. Omit it for a policy-only config; batch, trace
+# and dashboard runs supply their own workloads.
 workload:
   llm_model: "granite-3.1-3b-a800m-instruct"
   fine_tuning_method: "lora"
@@ -11,17 +11,17 @@ workload:
   tokens_per_sample: 2048
   batch_size: 8
 
-# How candidates are ranked. The one default is multi_objective/balanced; alt: min_gpu.
+# Ranking: multi_objective with the balanced preset (the default), or min_gpu.
 strategy:
   name: "multi_objective"
   preset: "balanced"
 
-# The three simulation models: throughput, energy, feasibility.
+# The models for throughput, energy and feasibility.
 predictors:
-  performance: "intelligent"   # exact cache hit else the `fallback` model; alt: kavier, cache, or an ML model name
+  performance: "intelligent"   # exact cache hit, else the `fallback` model; or kavier, cache, or an ML model name
   fallback: "kavier"           # model used on a cache miss (kavier | catboost | xgboost | ...); intelligent only
   energy: "kavier_power"
-  feasibility: "autoconf"      # OOM-aware; alt: rules (divisibility-only)
+  feasibility: "autoconf"      # OOM-aware; or rules (sanity checks only, no OOM check)
   # lookup: "default"                                 # cache DB CSV: a path, or "default" for the bundled run DB
   # lookup_throughput_col: "dataset_tokens_per_second"  # which column a cache hit reads as throughput
   # lookup_runtime_col: "train_runtime"                 # which column a cache hit reads as duration
@@ -32,8 +32,8 @@ grid:
   total_gpus: [1, 2, 4, 8, 16, 32]
   top_k: 3
 
-# How the tool itself runs (the machine it runs ON, not the cluster it reasons about --
-# that lives in infrastructure.yaml). Each pipeline stage forks its candidates across this
-# many processes and joins before the next stage starts; 1 runs everything sequentially.
+# The machine Coastline runs on (the cluster is described in infrastructure.yaml). A pipeline
+# stage may split its candidates across up to parallel_workers processes, and the next stage
+# starts when they all finish; 1 runs everything in one process.
 runtime:
   parallel_workers: 4

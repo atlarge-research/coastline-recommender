@@ -1,100 +1,83 @@
 # Coastline
 
-[![CI](https://github.com/atlarge-research/coastline-recommender/actions/workflows/ci.yml/badge.svg)](https://github.com/atlarge-research/coastline-recommender/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/atlarge-research/coastline-recommender/branch/main/graph/badge.svg)](https://codecov.io/gh/atlarge-research/coastline-recommender)
+A context-aware recommender system for fine-tuning LLMs.
+
+[![MIT License](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/atlarge-research/coastline-recommender/blob/main/LICENSE)
+[![Documentation](https://img.shields.io/badge/docs-site-green.svg)](https://atlarge-research.github.io/coastline-recommender/)
 [![PyPI](https://img.shields.io/pypi/v/coastline-recommender.svg)](https://pypi.org/project/coastline-recommender/)
-[![MIT License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-Context-aware recommender for **GPU / datacenter configurations** for LLM fine-tuning: given a
-workload it grid-searches configs, filters infeasible ones, predicts **throughput + power**, and
-ranks them on a performance↔energy score. Throughput comes from **Kavier** (analytical physics) or
-a data-driven model (TabPFN, CatBoost, …); energy from Kavier-power; feasibility from IBM
-**AutoConf**.
+Coastline makes context-, objective-, and policy-aware infrastructure recommendations for LLM fine-tuning
+workloads. It accounts for infrastructure constraints, workload demands, and user objectives, and recommends
+best-fit configurations as part of an LLM fine-tuning ecosystem. Coastline predicts performance with
+physics-driven simulation (Kavier) and machine-learning models. Every candidate configuration is cross-checked
+through a feasibility module (IBM AutoConf) before being output to the user.
 
-**Accuracy** (throughput MdAPE, 15% holdout): default `intelligent` = cache hit (0%) → Kavier
-(6.2%). ML predictors (bring your own trained artifacts): TabPFN 2.1%, XGBoost 7.2%, CatBoost 8.4%.
-
-📖 **Full documentation:** run `uv run --group docs mkdocs serve` — Overview · Getting started ·
-Architecture · per-component pages (pipeline, predictors, energy, feasibility, policies, library) ·
-Contributing.
+Built with PriorLabs-TabPFN. See the TabPFN section below.
 
 ## Install
 
 ```bash
-pip install coastline-recommender                 # core engine + AutoConf OOM-feasibility safeguard
-pip install "coastline-recommender[ml]"           # + heavy ML backends (TabPFN, XGBoost, …)
+pip install coastline-recommender          # Kavier, AutoConf, the CLI, and the dashboard
+pip install "coastline-recommender[ml]"    # adds the data-driven predictors
 ```
 
-From a checkout (uv-native): `uv sync`, then `uv run coastline …`.
+Python 3.11 to 3.13. The import name is `coastline`.
 
-## Use it
+## Quick start
 
-```python
-import coastline
-
-rec = coastline(predictor="kavier")            # or "intelligent", "tabpfn", a model name
-results = rec({"llm_model": "mistral-7b-v0.1", "fine_tuning_method": "lora",
-               "gpu_model": "NVIDIA-A100-SXM4-80GB", "tokens_per_sample": 1024, "batch_size": 32},
-              total_gpus=[1, 2, 4, 8], preset="balanced")
-print(results[0])                                      # best-ranked Recommendation
-
-df = coastline.recommend(batch_df, predictor="kavier", goal="balanced", max_gpus=8)  # batch → DataFrame
-```
-
-One `coastline` command (five subcommands) plus the dashboard:
+From a clone of this repository:
 
 ```bash
-coastline recommend-job --interactive                                               # guided REPL
-coastline recommend-job --config config/coastline_functionality/experiment.yaml        # one job → recommendation.json
-coastline recommend-job --config config.yaml --input workloads.csv --output recs.csv # batch CSV → CSV
-coastline recommend-trace --input trace.csv --output enriched.csv --visual           # annotate + plot a trace
-coastline simulate --model mistral-7b-v0.1 --method lora --gpu-model NVIDIA-A100-SXM4-80GB \
-    --tokens 1024 --batch-size 16 --gpus-per-node 4                                 # predict ONE config
-coastline explain --model mistral-7b-v0.1 --method lora --gpu-model NVIDIA-A100-SXM4-80GB \
-    --tokens 1024 --batch-size 16 --preset balanced                                 # why that config won
-coastline utils tune --data runs.csv --model tabpfn                                  # tune | trace-to-runs | plot-trace
-coastline-ui                                                                        # FastAPI dashboard :8000
+uv sync
+uv run coastline recommend-job
+uv run coastline explain --model mistral-7b-v0.1 --method lora --gpu-model NVIDIA-A100-SXM4-80GB \
+  --tokens 2048 --batch-size 8
+uv run coastline --help
 ```
 
-Run the full API tour with `uv run python docs/usage.py` (reproduced in the
-[getting-started guide](docs/getting-started.md)); see `config/` for sample configs.
+`coastline recommend-job` recommends a configuration for the job declared in
+`config/coastline_functionality/experiment.yaml`. The subcommands are `recommend-job`, `recommend-trace`,
+`simulate`, `explain`, and `utils`. Each documents its flags with `--help`. `uv run coastline-ui` serves the
+dashboard at <http://127.0.0.1:8000>.
 
-## Structure
+## Documentation
 
-One installable package under `src/coastline`:
+<https://atlarge-research.github.io/coastline-recommender/>. Build it locally with
+`uv run --group docs mkdocs serve`.
 
-| Surface | Role |
-|---|---|
-| `coastline.cli` | the single `coastline` command (argparse dispatch) |
-| `coastline.ui`  | the FastAPI dashboard (`coastline-ui`) |
-| `coastline.sdk` | the engine: `recommend · pipeline · predictors · policies · models · library · trace · io` |
+## Development
 
-The `sdk` is import-light: `import coastline` pulls no heavy backend until a predictor needs it.
-Dev-only tooling (`benchmark/`, the ML `trainer/`, the `ado_plugin/`) lives under `dev/` and is
-excluded from the wheel; trained model pickles under `models/` are never shipped (regenerate via the
-trainer). See [Architecture](docs/architecture.md).
-
-## Develop
+`uv sync` installs the dev tools. CI runs these gates on every pull request
+([ci.yml](https://github.com/atlarge-research/coastline-recommender/blob/main/.github/workflows/ci.yml)):
 
 ```bash
-uv sync --extra ml                                    # + heavy native ML backends
-uv run --all-extras pytest                            # main suite
-uv run --all-extras pytest dev/trainer/tests          # trainer suite (own invocation)
-uv run --all-extras pytest dev/benchmark/tests        # benchmark suite (own invocation)
-uv run --all-extras pytest -m ml_isolated -p no:cacheprovider   # native-ML tests (own process)
-uv run ruff check . && uv run mypy
-uv run --all-extras pytest --cov                      # …with a coverage report (CI adds --cov-report=xml for Codecov)
-uv run --group docs mkdocs serve                      # serve the docs at http://127.0.0.1:8000
+uv run pre-commit run --all-files --show-diff-on-failure      # ruff check, ruff format, whitespace
+uv run mypy                                                   # strict, on the packages listed in pyproject.toml
+uv run --all-extras pytest --cov
+uv run --all-extras pytest -m ml_isolated -p no:cacheprovider FILE  # native ML backends, one file per process
+uv run --group docs mkdocs build --strict
 ```
 
-Run `uv run pre-commit install` once per clone and the ruff gates (plus whitespace hygiene) run on
-every commit; CI runs the same hooks with `uv run pre-commit run --all-files`.
+Run `uv run pre-commit install` once per clone to get the hooks on commit.
 
-## External dependencies (not vendored)
+## TabPFN
 
-- **Kavier** — analytical throughput/power engine; PyPI dependency (`kavier>=0.5,<0.6`).
-- **AutoConf** — OOM-feasibility safeguard (`ado-autoconf`); ships by default in the core install.
+Built with PriorLabs-TabPFN.
+
+The `tabpfn` predictor and the model file `portfolio/tabpfn.pkl` (in
+`src/coastline/sdk/predictors/performance/data_driven/`) contain TabPFN v2 weights. TabPFN v2 is described in
+Hollmann et al., "Accurate predictions on small data with a tabular foundation model", Nature 637, 319-326
+(2025), [doi:10.1038/s41586-024-08328-6](https://doi.org/10.1038/s41586-024-08328-6).
+The weights are licensed under the Prior Labs License v1.2; a copy is in
+[LICENSE-TabPFN.txt](https://github.com/atlarge-research/coastline-recommender/blob/main/LICENSE-TabPFN.txt). The
+model file is stored with Git LFS and left out of the PyPI wheel; clone the repository with Git LFS to use it.
+
+## Citation
+
+See [CITATION.cff](https://github.com/atlarge-research/coastline-recommender/blob/main/CITATION.cff).
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](https://github.com/atlarge-research/coastline-recommender/blob/main/LICENSE). The TabPFN weights
+are under the Prior Labs License v1.2, in
+[LICENSE-TabPFN.txt](https://github.com/atlarge-research/coastline-recommender/blob/main/LICENSE-TabPFN.txt).

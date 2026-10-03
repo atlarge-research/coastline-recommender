@@ -9,8 +9,7 @@ from rich.text import Text
 
 console = Console()
 
-# One accent for the advisor; green is reserved for the chosen recommendation,
-# yellow for energy — matching the per-domain "channel" idea in kavier_ui.
+# Cyan is the accent colour, green marks the chosen recommendation and yellow marks energy.
 ACCENT = "cyan"
 WINNER = "green"
 ENERGY = "yellow"
@@ -27,7 +26,7 @@ _LOGO = r"""
 def banner() -> Panel:
     logo = Text(_LOGO, style="bold cyan")
     sub = Text("GPU configuration advisor for LLM fine-tuning", style="dim")
-    tag = Text("throughput · runtime · energy, ranked", style="cyan")
+    tag = Text("throughput | runtime | energy, ranked", style="cyan")
     body = Align.center(Text("\n").join([logo, Text(), sub, tag]))
     return Panel(body, border_style="cyan", padding=(1, 4), title="[bold]interactive[/]", title_align="right")
 

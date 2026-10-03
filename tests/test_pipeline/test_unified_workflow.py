@@ -1,10 +1,7 @@
-"""Tests for the unified grid → feasibility → simulate → policy workflow.
+"""Tests for the workflow of grid, feasibility, simulation and selection.
 
-Every assertion here is checked against an oracle that is independent of the code
-under test: the grid is enumerated by hand, the min-max / weighted-sum scores are
-derived from first principles in the comments, and the Kavier physics engine is
-pinned only via invariants (positivity, [idle, TDP] bounds, sub-linear scaling) and
-cross-checks — never a copied magic number.
+The expected grids and scores are worked out in the comments. Kavier is checked only through
+invariants: positive throughput, power within [idle, TDP] and sub-linear scaling.
 """
 
 import math
@@ -70,21 +67,19 @@ def _cand(*, total_gpus, throughput=100.0, power=100.0, throughput_score=0.0, po
     )
 
 
-# --------------------------------------------------------------------------- grid
+# grid
 
 
 def test_grid_enumerates_batch_by_gpu_with_node_packing(workload, context):
     grid = grid_config_from_dict({"grid": {"batch_sizes": [4, 8, 16], "total_gpus": [1, 2, 4, 8, 16]}})
     candidates = generate_candidates(workload, context, grid)
 
-    # Oracle: candidates = batch_sizes × total_gpus. All 5 GPU counts fit (max_gpus=16)
-    # and pack within max_nodes=2 (16 GPUs → 2 nodes @ 8/node), so 3 × 5 = 15 survive,
-    # each GPU count appearing exactly 3 times (once per batch size).
+    # 3 batch sizes x 5 GPU counts. All fit max_gpus=16 and max_nodes=2 (16 GPUs is 2 nodes of
+    # 8), so all 15 remain, 3 per GPU count.
     assert len(candidates) == 15
     assert Counter(c.total_gpus for c in candidates) == {1: 3, 2: 3, 4: 3, 8: 3, 16: 3}
 
-    # Node layout oracle: packs GPUs to the 8/node cap. 16 GPUs → (8 per node, 2 nodes);
-    # 8 GPUs → (8, 1); anything ≤ node cap stays single-node.
+    # Up to 8 GPUs per node: 16 GPUs is (8, 2), 8 GPUs is (8, 1), and fewer stay on one node.
     by_total = {c.total_gpus: (c.gpus_per_node, c.number_of_nodes) for c in candidates}
     assert by_total[16] == (8, 2)
     assert by_total[8] == (8, 1)
@@ -93,17 +88,16 @@ def test_grid_enumerates_batch_by_gpu_with_node_packing(workload, context):
 
 
 def test_grid_drops_total_gpus_exceeding_max_gpus(workload, context):
-    # max_gpus=16 (from context); 32 > 16 must be dropped, 8 and 16 kept.
+    # max_gpus=16 comes from the context, so 32 is dropped.
     grid = grid_config_from_dict({"grid": {"batch_sizes": [8], "total_gpus": [8, 16, 32]}})
     candidates = generate_candidates(workload, context, grid)
 
-    assert {c.total_gpus for c in candidates} == {8, 16}  # 32 clipped by max_gpus
-    assert len(candidates) == 2  # one batch size × two surviving GPU counts
+    assert {c.total_gpus for c in candidates} == {8, 16}  # 32 is over max_gpus
+    assert len(candidates) == 2  # one batch size x two GPU counts
 
 
 def test_grid_drops_layout_exceeding_max_nodes(workload):
-    # max_gpus=32 leaves 16 GPUs *within* the GPU budget, but with 8/node and max_nodes=1
-    # the 16-GPU layout needs 2 nodes → dropped; only the single-node 8-GPU config survives.
+    # 16 GPUs fit max_gpus=32 but need 2 nodes of 8, more than max_nodes=1.
     ctx = SystemContext(
         available_gpu_models=[GPU],
         max_gpus=32,
@@ -116,7 +110,7 @@ def test_grid_drops_layout_exceeding_max_nodes(workload):
     assert {c.total_gpus for c in candidates} == {8}  # 16 needs 2 nodes > max_nodes=1
 
 
-# ------------------------------------------------------------------------ min_gpu
+# min_gpu
 
 
 def test_min_gpu_ranks_by_gpu_count_then_throughput():
@@ -128,63 +122,57 @@ def test_min_gpu_ranks_by_gpu_count_then_throughput():
     ]
     ranked = rank_candidates(rows, "min_gpu", top_k=4)
 
-    # Oracle: sort by (total_gpus asc, throughput desc). Fewest GPUs first; the two
-    # 2-GPU rows tie-break on throughput (90 before 60), then 4-GPU, then 8-GPU.
+    # Sorted by total_gpus ascending, then by throughput descending.
     assert [(c.total_gpus, c.throughput) for c in ranked] == [(2, 90), (2, 60), (4, 100), (8, 200)]
 
 
-# --------------------------------------------------------------------- normalize
+# normalize
 
 
 def test_normalize_candidates_minmax_power_and_time_scores():
-    # power_cost = power × total_gpus ; time_cost = 1/throughput.
-    # c1: pc=100×1=100, tc=1/100=0.01   c2: pc=100×2=200, tc=1/300   c3: pc=100×4=400, tc=1/400=0.0025
+    # power_cost = power * total_gpus: 100, 200, 400. time_cost = 1 / throughput: 0.01, 1/300, 0.0025.
     c1 = _cand(total_gpus=1, power=100, throughput=100)
     c2 = _cand(total_gpus=2, power=100, throughput=300)
     c3 = _cand(total_gpus=4, power=100, throughput=400)
     normalize_candidates([c1, c2, c3], "grid")
 
-    # power_score = (p_max − pc)/(p_max − p_min), p_min=100 p_max=400, span=300:
-    #   c1 (400−100)/300 = 1.0 ; c2 (400−200)/300 = 0.6667 ; c3 (400−400)/300 = 0.0
+    # power_score = (400 - power_cost) / 300: 1.0, 2/3, 0.0
     assert c1.power_score == pytest.approx(1.0)
     assert c2.power_score == pytest.approx(2 / 3)
     assert c3.power_score == pytest.approx(0.0)
 
-    # throughput_score = (t_max − tc)/(t_max − t_min), t_min=0.0025 t_max=0.01, span=0.0075:
-    #   c1 (0.01−0.01)/0.0075 = 0.0 ; c2 (0.01−1/300)/0.0075 = 0.8889 ; c3 (0.01−0.0025)/0.0075 = 1.0
+    # throughput_score = (0.01 - time_cost) / 0.0075: 0.0, 0.8889, 1.0
     assert c1.throughput_score == pytest.approx(0.0)
     assert c2.throughput_score == pytest.approx((0.01 - 1 / 300) / 0.0075)
     assert c3.throughput_score == pytest.approx(1.0)
 
 
 def test_normalize_frontier_marks_pareto_dominated():
-    # In (power_cost, time_cost) space, lower is better on both axes.
-    # b: pc=100, tc=1/200=0.005 (fast, cheap) dominates
-    #   a: pc=100, tc=1/100=0.010 (same power, slower)  → dominated
-    #   c: pc=200, tc=1/50 =0.020 (pricier AND slower)  → dominated
+    # Lower power_cost and time_cost are better. b (power_cost 100, time_cost 0.005) dominates
+    # a (same power, slower) and c (power_cost 200, time_cost 0.02).
     a = _cand(total_gpus=1, power=100, throughput=100)
     b = _cand(total_gpus=1, power=100, throughput=200)
     c = _cand(total_gpus=2, power=100, throughput=50)
     normalize_candidates([a, b, c], "frontier")
 
     assert (a.dominated, b.dominated, c.dominated) == (True, False, True)
-    # Dominated candidates are zeroed so ranking skips them; the survivor keeps a real score.
+    # Dominated candidates get zero scores, so ranking skips them; the survivor keeps its score.
     assert a.power_score == 0.0 and a.throughput_score == 0.0
     assert c.power_score == 0.0 and c.throughput_score == 0.0
-    assert b.power_score == pytest.approx(1.0)  # sole survivor → best on the single-element frontier
+    assert b.power_score == pytest.approx(1.0)  # the only point on the frontier
 
 
-# -------------------------------------------------------------------- weighted sum
+# weighted sum
 
 
 def test_rank_energy_preset_weights_power_heavily():
-    # Weighted sum: combined = α·power_score + β·throughput_score, energy weights α=0.8, β=0.2.
+    # combined = alpha * power_score + beta * throughput_score, with energy weights 0.8 and 0.2.
     a = _cand(total_gpus=1, throughput=100, power_score=1.0, throughput_score=0.0)
     b = _cand(total_gpus=2, throughput=300, power_score=0.6, throughput_score=0.9)
     c = _cand(total_gpus=4, throughput=400, power_score=0.0, throughput_score=1.0)
     ranked = rank_candidates([a, b, c], "energy", alpha=0.8, beta=0.2, top_k=3)
 
-    # By hand: a 0.8·1.0+0.2·0.0=0.80 ; b 0.8·0.6+0.2·0.9=0.66 ; c 0.8·0.0+0.2·1.0=0.20.
+    # a = 0.8, b = 0.48 + 0.18 = 0.66, c = 0.2
     assert a.combined_score == pytest.approx(0.80)
     assert b.combined_score == pytest.approx(0.66)
     assert c.combined_score == pytest.approx(0.20)
@@ -193,57 +181,53 @@ def test_rank_energy_preset_weights_power_heavily():
 
 
 def test_rank_performance_preset_penalizes_extra_gpus():
-    # Same candidates, performance weights α=0.2, β=0.8.
+    # The same candidates with performance weights alpha=0.2, beta=0.8.
     a = _cand(total_gpus=1, throughput=100, power_score=1.0, throughput_score=0.0)
     b = _cand(total_gpus=2, throughput=300, power_score=0.6, throughput_score=0.9)
     c = _cand(total_gpus=4, throughput=400, power_score=0.0, throughput_score=1.0)
     ranked = rank_candidates([a, b, c], "performance", alpha=0.2, beta=0.8, top_k=3)
 
-    # By hand: a 0.2·1.0+0.8·0.0=0.20 ; b 0.2·0.6+0.8·0.9=0.84 ; c 0.2·0.0+0.8·1.0=0.80.
+    # a = 0.2, b = 0.12 + 0.72 = 0.84, c = 0.8
     assert a.combined_score == pytest.approx(0.20)
     assert b.combined_score == pytest.approx(0.84)
     assert c.combined_score == pytest.approx(0.80)
-    # Winner is b, NOT the highest-throughput c: c's larger power_cost costs it the top slot.
+    # b beats the faster c, which loses on power_cost.
     assert [r.total_gpus for r in ranked] == [2, 4, 1]
 
 
 def test_rank_breaks_near_ties_toward_higher_throughput():
-    # Two configs whose scores fall within TIE_EPS=0.01 of each other. balanced α=β=0.5.
-    #   x: 0.5·0.5 + 0.5·0.5 = 0.500 (throughput 100)
-    #   y: 0.5·0.49 + 0.5·0.5 = 0.495 (throughput 500) — 0.005 lower, inside the 0.01 tie band
-    # Raw score orders x above y; the tie-break must promote the higher-throughput y.
+    # With alpha = beta = 0.5, x scores 0.500 and y 0.495, within TIE_EPS = 0.01 of x, so the
+    # tie-break puts y (throughput 500) before x (throughput 100).
     x = _cand(total_gpus=2, throughput=100, power_score=0.5, throughput_score=0.5)
     y = _cand(total_gpus=2, throughput=500, power_score=0.49, throughput_score=0.5)
     ranked = rank_candidates([x, y], "balanced", alpha=0.5, beta=0.5, top_k=2)
 
     assert x.combined_score == pytest.approx(0.500)
     assert y.combined_score == pytest.approx(0.495)
-    assert ranked[0].throughput == 500  # near-tie broken toward throughput, overriding the 0.005 score edge
+    assert ranked[0].throughput == 500  # y wins the near-tie on throughput
 
 
 def test_preset_weights_match_documented_spec():
-    # Contract: presets weight (power, throughput). energy is power-dominant, performance
-    # throughput-dominant, balanced even. Weights per project spec.
+    # Presets are (power weight, throughput weight).
     assert PRESET_WEIGHTS["energy"] == (0.8, 0.2)
     assert PRESET_WEIGHTS["balanced"] == (0.5, 0.5)
     assert PRESET_WEIGHTS["performance"] == (0.2, 0.8)
 
 
-# --------------------------------------------------------------------- feasibility
+# feasibility
 
 
 @pytest.mark.parametrize(
     "gpus_per_node, number_of_nodes, expected",
     [
-        # batch_size is PER-DEVICE: it need not divide the GPU count, so EVERY per-device batch
-        # is feasible (the old ``batch_size % total_gpus`` rule is gone). (3, 1) and (8, 2) would
-        # have been rejected by that rule; now they pass.
+        # batch_size is per device and need not divide the GPU count, so batch 8 is feasible
+        # on every layout, 3 and 16 GPUs included.
         (1, 1, True),  # total 1
         (2, 1, True),  # total 2
         (4, 1, True),  # total 4
         (8, 1, True),  # total 8
-        (3, 1, True),  # total 3  (old rule: 8 % 3 != 0 -> rejected)
-        (8, 2, True),  # total 16 (old rule: 8 % 16 != 0 -> rejected)
+        (3, 1, True),  # total 3
+        (8, 2, True),  # total 16
     ],
 )
 def test_rules_feasibility_admits_any_per_device_batch(gpus_per_node, number_of_nodes, expected):
@@ -261,8 +245,7 @@ def test_rules_feasibility_admits_any_per_device_batch(gpus_per_node, number_of_
 
 
 def test_rules_feasibility_keeps_all_per_device_configs_in_pipeline(workload, context):
-    # Grid [1, 3] with per-device batch 8: rules no longer drops on divisibility (batch is
-    # per-device), so BOTH GPU counts survive to the ranked output (was [1] under the old rule).
+    # Grid [1, 3] with per-device batch 8: the rules checker keeps both GPU counts.
     pred = Prediction(
         gpus_per_node=1,
         number_of_nodes=1,
@@ -280,10 +263,10 @@ def test_rules_feasibility_keeps_all_per_device_configs_in_pipeline(workload, co
     )
     recs = pipeline.recommend(workload, context)
 
-    assert len(recs) == 2  # both per-device configs (1 and 3 GPUs) are feasible now
+    assert len(recs) == 2  # 1 and 3 GPUs
 
 
-# -------------------------------------------------------------- Kavier integration
+# Kavier integration
 
 
 def test_workflow_min_gpu_end_to_end_picks_fewest_gpus(workload, context):
@@ -297,21 +280,20 @@ def test_workflow_min_gpu_end_to_end_picks_fewest_gpus(workload, context):
     )
     recs = pipeline.recommend(workload, context)
 
-    # mistral-7b-v0.1/lora/A100 is a supported Kavier config, so both 1- and 2-GPU
-    # candidates are feasible; min_gpu must pick the fewest → exactly one rec at 1 GPU.
+    # Kavier supports mistral-7b-v0.1/lora/A100, so 1 and 2 GPUs are both feasible and
+    # min_gpu returns one recommendation, on 1 GPU.
     assert len(recs) == 1
     assert recs[0].total_gpus == 1
     assert recs[0].strategy == "min_gpu"
     assert recs[0].metadata["workflow"] == "grid_feasibility_simulate_policy"
-    # Contract: a supported config yields a finite positive throughput (physical rate).
+    # A supported config has a finite, positive throughput.
     assert recs[0].predicted_throughput is not None
     assert math.isfinite(recs[0].predicted_throughput) and recs[0].predicted_throughput > 0
 
 
 def test_kavier_throughput_scales_sublinearly_with_gpus(context):
-    # Weak-scaling law: adding GPUs raises total throughput but communication overhead
-    # keeps it below the ideal N× (no super-linear speedup). Assert the bounds, not the
-    # engine's exact tokens/sec.
+    # More GPUs raise the total throughput, but communication keeps it below N times that of
+    # one GPU.
     predictor = KavierPredictor()
 
     def thr(n):
@@ -327,14 +309,14 @@ def test_kavier_throughput_scales_sublinearly_with_gpus(context):
         return predictor.predict(w, context).predicted_throughput
 
     t1, t2, t4 = thr(1), thr(2), thr(4)
-    assert t1 < t2 < t4  # monotonically increasing with GPU count
-    assert t2 < 2 * t1  # 2 GPUs deliver < 2× a single GPU (sub-linear)
-    assert t4 < 4 * t1  # 4 GPUs deliver < 4× a single GPU (sub-linear)
+    assert t1 < t2 < t4  # rises with GPU count
+    assert t2 < 2 * t1  # sub-linear
+    assert t4 < 4 * t1  # sub-linear
 
 
 def test_kavier_power_per_gpu_within_idle_and_tdp(workload, context):
-    # Per-GPU power must lie in the device envelope [idle, TDP]; oracle read from the
-    # hardware library (75 W idle, 400 W TDP for the A100-SXM4-80GB), independent of Kavier.
+    # Per-GPU power lies in [idle, TDP] from the hardware library (75 W and 400 W for the
+    # A100-SXM4-80GB).
     idle = get_gpu_idle_power(GPU)
     tdp = get_gpu_tdp(GPU)
     pred = KavierPredictor().predict(workload, context)
@@ -343,8 +325,8 @@ def test_kavier_power_per_gpu_within_idle_and_tdp(workload, context):
 
 
 def test_kavier_power_predictor_agrees_with_throughput_engine(workload, context):
-    # KavierPowerPredictor wraps the same engine (WRAPS_THROUGHPUT_ENGINE); the power it
-    # reports must be the exact per-GPU watts the throughput predictor already computed.
+    # KavierPowerPredictor wraps the same engine (WRAPS_THROUGHPUT_ENGINE), so it reports the
+    # per-GPU watts the throughput predictor computed.
     thr_power = KavierPredictor().predict(workload, context).predicted_power
     energy_power = KavierPowerPredictor().predict(workload, context).predicted_power
 
@@ -353,8 +335,8 @@ def test_kavier_power_predictor_agrees_with_throughput_engine(workload, context)
 
 
 def test_kavier_unsupported_model_returns_error_prediction(context):
-    # Contract for an out-of-library model: throughput predictor returns an error
-    # Prediction (not a crash) with no throughput, and the power adapter returns None.
+    # For an unknown model the throughput predictor returns an error Prediction with no
+    # throughput, and the power predictor passes it on with no power.
     bogus = WorkloadSpec(
         llm_model="not-a-real-model",
         fine_tuning_method="lora",
@@ -369,18 +351,19 @@ def test_kavier_unsupported_model_returns_error_prediction(context):
     assert pred.predicted_throughput is None
     assert pred.metadata["error"] == "unsupported_config"
 
-    assert KavierPowerPredictor().predict(bogus, context) is None
+    power = KavierPowerPredictor().predict(bogus, context)
+    assert power is not None and power.predicted_power is None
+    assert power.metadata["error"] == "unsupported_config"
 
 
-# --------------------------------------------------------------------------- tie-breaking
+# tie-breaking
 #
-# The score decides the ranking; these decide what happens when it cannot. A candidate's position
-# must never depend on where the grid happened to enumerate it, so the tie-break has to be a TOTAL
-# order: highest predicted throughput, then fewest GPUs, then smallest batch.
+# Candidates within TIE_EPS of the top score are ordered by highest predicted throughput, then
+# fewest GPUs, then smallest batch. This is a total order, so grid order does not matter.
 
 
 def _tied(**kwargs):
-    """A candidate the scorer cannot separate from its siblings: identical score components."""
+    """A candidate with the same score components as its siblings."""
     return _cand(throughput_score=1.0, power_score=1.0, **kwargs)
 
 
@@ -388,7 +371,7 @@ def test_a_tie_prefers_the_highest_predicted_throughput():
     slow = _tied(total_gpus=4, throughput=100.0)
     fast = _tied(total_gpus=4, throughput=400.0)
 
-    # Offered slowest-first, so insertion order cannot be what produces the answer.
+    # Given slowest first, so the result does not come from input order.
     ranked = rank_candidates([slow, fast], "balanced", alpha=0.5, beta=0.5, top_k=2)
 
     assert [c.throughput for c in ranked] == [400.0, 100.0]
@@ -413,8 +396,8 @@ def test_a_tie_on_throughput_and_gpus_prefers_the_smallest_batch():
 
 
 def test_the_three_levels_apply_in_order():
-    # Throughput outranks GPU count, and GPU count outranks batch size: the winner here is the
-    # fastest even though it asks for the most GPUs and the biggest batch.
+    # Throughput comes before GPU count and GPU count before batch size, so the fastest wins
+    # although it asks for the most GPUs and the biggest batch.
     fastest_but_greedy = _tied(total_gpus=8, throughput=400.0, batch_size=64)
     fewest_gpus = _tied(total_gpus=1, throughput=100.0, batch_size=8)
     middle = _tied(total_gpus=2, throughput=200.0, batch_size=16)
@@ -425,7 +408,7 @@ def test_the_three_levels_apply_in_order():
 
 
 def test_the_tie_break_does_not_depend_on_the_order_the_grid_enumerated():
-    # The determinism property itself: every permutation of the same tied set ranks identically.
+    # Every permutation of the same tied set ranks the same way.
     import itertools
 
     def fresh():
@@ -444,7 +427,7 @@ def test_the_tie_break_does_not_depend_on_the_order_the_grid_enumerated():
 
 
 def test_min_gpu_keeps_its_own_primary_then_shares_the_tie_break():
-    # Fewest GPUs is min-GPU's whole point, so it still leads; the shared tie-break settles the rest.
+    # min_gpu sorts by GPU count first and then by the shared tie-break.
     a = _cand(total_gpus=2, throughput=200.0, batch_size=32)
     b = _cand(total_gpus=2, throughput=200.0, batch_size=8)
     c = _cand(total_gpus=1, throughput=50.0, batch_size=64)

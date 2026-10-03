@@ -1,12 +1,11 @@
-"""Per-model configuration table for the generic sklearn-family trainer.
+"""Per-model table for the generic sklearn-family trainer.
 
-Each entry is a :class:`ModelSpec`: metadata (title, artifact stem, target band) plus
-one ``fit`` function holding the model's genuinely-unique part — its estimator,
-hyperparameter grid, and the artifact keys it contributes. Everything shared
-(load, split, encode, score, save) lives in ``generic_trainer``.
+Each :class:`ModelSpec` holds metadata (title, artifact stem, target band) and a
+``fit`` function with the model's estimator, hyperparameter grid and extra artifact
+keys. The shared steps (load, split, encode, score, save) are in ``generic_trainer``.
 
-Heavy backends (xgboost / lightgbm / catboost) are imported inside their ``fit`` so
-importing this table never co-loads native ML runtimes.
+xgboost, lightgbm and catboost are imported inside their ``fit``, so importing this
+table loads no native ML runtime.
 """
 
 from __future__ import annotations
@@ -50,8 +49,8 @@ def _uncertainty_finalize(ctx: FinalizeCtx) -> dict:
     yr = ctx.y_test[RUNTIME].to_numpy()
     t_corr = float(np.corrcoef(ctx.test_std[:, 0], np.abs(yt - ctx.test_pred[:, 0]))[0, 1])
     r_corr = float(np.corrcoef(ctx.test_std[:, 1], np.abs(yr - ctx.test_pred[:, 1]))[0, 1])
-    print(f"\n📈 Throughput uncertainty-error correlation: {t_corr:.4f}")
-    print(f"📈 Runtime uncertainty-error correlation: {r_corr:.4f}")
+    print(f"\nThroughput uncertainty-error correlation: {t_corr:.4f}")
+    print(f"Runtime uncertainty-error correlation: {r_corr:.4f}")
     return {
         "uncertainty_correlation": t_corr,
         "uncertainty_correlation_by_target": {"throughput": t_corr, "runtime_seconds": r_corr},
@@ -59,14 +58,14 @@ def _uncertainty_finalize(ctx: FinalizeCtx) -> dict:
 
 
 # --------------------------------------------------------------------------- #
-# fit functions — one per model, each near-verbatim from its old train script
+# fit functions, one per model
 # --------------------------------------------------------------------------- #
 
 
 def _fit_xgboost(d: TrainData) -> Fitted:
     from xgboost import XGBRegressor
 
-    print("\n🔍 Hyperparameter tuning with GridSearchCV...")
+    print("\nHyperparameter tuning with GridSearchCV...")
     param_grid = {
         "n_estimators": [1000, 1500, 2000, 2500],
         "max_depth": [8, 10, 12],
@@ -95,9 +94,9 @@ def _fit_xgboost(d: TrainData) -> Fitted:
 def _fit_lightgbm(d: TrainData) -> Fitted:
     from lightgbm import LGBMRegressor
 
-    print("\n🔍 Hyperparameter tuning with GridSearchCV...")
-    # MultiOutputRegressor blocks per-output eval_set, so bound cost by capping
-    # n_estimators rather than early stopping.
+    print("\nHyperparameter tuning with GridSearchCV...")
+    # MultiOutputRegressor cannot pass a per-output eval_set, so the cost is bounded
+    # by capping n_estimators instead of early stopping.
     param_grid = {
         "estimator__n_estimators": [500, 1000],
         "estimator__max_depth": [9, 11],
@@ -127,7 +126,7 @@ def _fit_lightgbm(d: TrainData) -> Fitted:
 def _fit_random_forest(d: TrainData) -> Fitted:
     from sklearn.ensemble import RandomForestRegressor
 
-    print("\n🔍 Hyperparameter tuning with GridSearchCV...")
+    print("\nHyperparameter tuning with GridSearchCV...")
     param_grid = {
         "n_estimators": [1000, 1200, 1500],
         "max_depth": [20, None],
@@ -151,7 +150,7 @@ def _fit_random_forest(d: TrainData) -> Fitted:
 def _fit_svr(d: TrainData) -> Fitted:
     from sklearn.svm import SVR
 
-    print("\n🔍 Hyperparameter tuning with GridSearchCV...")
+    print("\nHyperparameter tuning with GridSearchCV...")
     param_grid = {
         "estimator__svr__C": [1.0, 10.0, 100.0],
         "estimator__svr__epsilon": [0.1, 0.25],
@@ -172,8 +171,8 @@ def _fit_knn(d: TrainData) -> Fitted:
     from sklearn.neighbors import KNeighborsRegressor
     from sklearn.preprocessing import QuantileTransformer
 
-    print("\n🔍 Hyperparameter tuning with GridSearchCV...")
-    # Minkowski only: p=1 → Manhattan, p=2 → Euclidean.
+    print("\nHyperparameter tuning with GridSearchCV...")
+    # Minkowski only: p=1 is Manhattan, p=2 is Euclidean.
     param_grid = {
         "knn__n_neighbors": [4, 6, 8, 10, 12, 16, 20, 28, 36],
         "knn__weights": ["uniform", "distance"],
@@ -190,7 +189,7 @@ def _fit_knn(d: TrainData) -> Fitted:
     grid = _grid_search(pipeline, param_grid, scoring="neg_median_absolute_error", verbose=1)
     grid.fit(d.X_train, d.y_log_train.to_numpy())
 
-    # k-NN is instance-based: refit the best pipeline on train ∪ val (test stays held out).
+    # k-NN is instance-based: refit the best pipeline on train plus val (test stays held out).
     best = clone(grid.best_estimator_)
     X_trainval = pd.concat([d.X_train, d.X_val], axis=0, ignore_index=True)
     y_trainval = pd.concat([d.y_log_train, d.y_log_val], axis=0, ignore_index=True)
@@ -212,7 +211,7 @@ def _tune_catboost_head(
     """Grid-search a single-target CatBoost head; select by validation MAE (log space)."""
     from catboost import CatBoostRegressor
 
-    print(f"\n🔍 Tuning CatBoost head for {target_name} (target column {target_idx})...")
+    print(f"\nTuning CatBoost head for {target_name} (target column {target_idx})...")
     best_score = float("inf")
     best_params = None
     best_model = None
@@ -235,20 +234,20 @@ def _tune_catboost_head(
         print(f"  [{target_name}] combination {i}/{len(param_combinations)} {params} -> val MAE {val_mae:.4f}")
         if val_mae < best_score:
             best_score, best_params, best_model = val_mae, params, model
-            print(f"    ✓ New best {target_name} model!")
+            print(f"    New best {target_name} model!")
 
-    print(f"  🏆 Best {target_name} params: {best_params} (val MAE {best_score:.4f})")
+    print(f"  Best {target_name} params: {best_params} (val MAE {best_score:.4f})")
     return best_model, best_params
 
 
 def _fit_catboost(d: TrainData) -> Fitted:
-    # The picklable wrapper is the shipped package's — one definition, shared with inference.
+    # The picklable wrapper comes from the SDK, so training and inference share one class.
     from coastline.sdk.predictors.performance.data_driven._catboost_model import _DualOutputCatBoost
 
     cat_feature_indices = [i for i, col in enumerate(d.X_train.columns) if col in d.cat_features]
-    print(f"  ✓ Categorical feature indices: {cat_feature_indices}")
+    print(f"  Categorical feature indices: {cat_feature_indices}")
 
-    print("\n🔍 Hyperparameter tuning with manual grid search...")
+    print("\nHyperparameter tuning with manual grid search...")
     param_combinations = [
         {"iterations": 1000, "depth": 6, "learning_rate": 0.01, "l2_leaf_reg": 1},
         {"iterations": 1000, "depth": 8, "learning_rate": 0.03, "l2_leaf_reg": 3},
@@ -283,7 +282,7 @@ def _fit_gaussian_process(d: TrainData) -> Fitted:
     from sklearn.gaussian_process import GaussianProcessRegressor
     from sklearn.gaussian_process.kernels import RBF, ConstantKernel, WhiteKernel
 
-    print("\n🧠 Building Gaussian Process model (kernel: ConstantKernel * RBF + WhiteKernel)...")
+    print("\nBuilding Gaussian Process model (kernel: ConstantKernel * RBF + WhiteKernel)...")
     kernel = ConstantKernel(1.0, constant_value_bounds=(0.1, 10.0)) * RBF(
         length_scale=1.0, length_scale_bounds=(0.1, 10.0)
     ) + WhiteKernel(noise_level=0.1, noise_level_bounds=(1e-5, 1.0))
@@ -302,14 +301,14 @@ def _fit_gaussian_process(d: TrainData) -> Fitted:
         )
 
     model_t, model_r = build_model(), build_model()
-    print("🚀 Training Gaussian Process (scales O(n³))...")
+    print("Training Gaussian Process (scales O(n^3))...")
     model_t.fit(d.X_train, d.y_log_train[THROUGHPUT].to_numpy())
     model_r.fit(d.X_train, d.y_log_train[RUNTIME].to_numpy())
 
     gp_t, scaler_t = model_t.named_steps["gp"], model_t.named_steps["scaler"]
     gp_r, scaler_r = model_r.named_steps["gp"], model_r.named_steps["scaler"]
-    print(f"🔧 Optimized throughput kernel: {gp_t.kernel_}")
-    print(f"🔧 Optimized runtime kernel:    {gp_r.kernel_}")
+    print(f"Optimized throughput kernel: {gp_t.kernel_}")
+    print(f"Optimized runtime kernel:    {gp_r.kernel_}")
 
     def predict(X):
         t_pred, t_std = gp_t.predict(scaler_t.transform(X), return_std=True)
@@ -331,10 +330,10 @@ def _fit_bayesian_ridge(d: TrainData) -> Fitted:
 
     cat_indices = list(range(len(d.cat_features)))
     num_indices = list(range(len(d.cat_features), len(d.cat_features) + len(d.num_features)))
-    print(f"  ✓ Categorical indices: {cat_indices}")
-    print(f"  ✓ Numerical indices: {num_indices}")
+    print(f"  Categorical indices: {cat_indices}")
+    print(f"  Numerical indices: {num_indices}")
 
-    print("\n🧠 Building Bayesian Ridge pipeline (OneHot + StandardScaler + PolynomialFeatures)...")
+    print("\nBuilding Bayesian Ridge pipeline (OneHot + StandardScaler + PolynomialFeatures)...")
     preprocessor = ColumnTransformer(
         [
             ("cat", OneHotEncoder(drop="first", sparse_output=False, handle_unknown="ignore"), cat_indices),
@@ -352,7 +351,7 @@ def _fit_bayesian_ridge(d: TrainData) -> Fitted:
             ]
         )
 
-    print("\n🔍 Hyperparameter tuning with GridSearchCV...")
+    print("\nHyperparameter tuning with GridSearchCV...")
     param_grid = {
         "poly__degree": [1, 2],
         "regressor__alpha_init": [0.1, 1.0, 10.0],
@@ -397,7 +396,7 @@ PERFORMANCE_MODELS: dict[str, ModelSpec] = {
     "xgboost": ModelSpec(
         stem="xgboost",
         title="XGBOOST PREDICTOR TRAINING",
-        ready_message="🚀 XGBoost predictor ready for inference!",
+        ready_message="XGBoost predictor ready for inference!",
         target_range="8-14%",
         target_threshold=14.0,
         encoding=Encoding.LABEL,
@@ -407,7 +406,7 @@ PERFORMANCE_MODELS: dict[str, ModelSpec] = {
     "lightgbm": ModelSpec(
         stem="lightgbm",
         title="LIGHTGBM PREDICTOR TRAINING",
-        ready_message="🚀 LightGBM predictor ready for inference!",
+        ready_message="LightGBM predictor ready for inference!",
         target_range="8-14%",
         target_threshold=14.0,
         encoding=Encoding.LABEL,
@@ -417,7 +416,7 @@ PERFORMANCE_MODELS: dict[str, ModelSpec] = {
     "catboost": ModelSpec(
         stem="catboost",
         title="CATBOOST PREDICTOR TRAINING",
-        ready_message="🚀 CatBoost predictor ready for inference!",
+        ready_message="CatBoost predictor ready for inference!",
         target_range="6-12%",
         target_threshold=12.0,
         encoding=Encoding.RAW,
@@ -427,7 +426,7 @@ PERFORMANCE_MODELS: dict[str, ModelSpec] = {
     "random_forest": ModelSpec(
         stem="random_forest",
         title="RANDOMFOREST PREDICTOR TRAINING",
-        ready_message="🚀 RandomForest predictor ready for inference!",
+        ready_message="RandomForest predictor ready for inference!",
         target_range="8-15%",
         target_threshold=15.0,
         encoding=Encoding.LABEL,
@@ -438,7 +437,7 @@ PERFORMANCE_MODELS: dict[str, ModelSpec] = {
     "svr": ModelSpec(
         stem="svr",
         title="SVR PREDICTOR TRAINING",
-        ready_message="🚀 SVR predictor ready for inference!",
+        ready_message="SVR predictor ready for inference!",
         target_range="10-18%",
         target_threshold=18.0,
         encoding=Encoding.LABEL,
@@ -449,7 +448,7 @@ PERFORMANCE_MODELS: dict[str, ModelSpec] = {
     "knn": ModelSpec(
         stem="knn",
         title="KNN PREDICTOR TRAINING",
-        ready_message="🚀 KNN predictor ready for inference!",
+        ready_message="KNN predictor ready for inference!",
         target_range="<20%",
         target_threshold=20.0,
         target_strict=True,
@@ -461,7 +460,7 @@ PERFORMANCE_MODELS: dict[str, ModelSpec] = {
     "gaussian_process": ModelSpec(
         stem="gaussian_process",
         title="GAUSSIAN PROCESS PREDICTOR TRAINING",
-        ready_message="🚀 Gaussian Process predictor ready for inference with uncertainty!",
+        ready_message="Gaussian Process predictor ready for inference with uncertainty!",
         target_range="12-20%",
         target_threshold=20.0,
         encoding=Encoding.LABEL,
@@ -471,7 +470,7 @@ PERFORMANCE_MODELS: dict[str, ModelSpec] = {
     "bayesian_ridge": ModelSpec(
         stem="bayesian_ridge",
         title="BAYESIAN RIDGE PREDICTOR TRAINING",
-        ready_message="🚀 Bayesian Ridge predictor ready for inference with uncertainty!",
+        ready_message="Bayesian Ridge predictor ready for inference with uncertainty!",
         target_range="15-25%",
         target_threshold=25.0,
         encoding=Encoding.RAW,

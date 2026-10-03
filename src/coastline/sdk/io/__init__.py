@@ -1,1 +1,1 @@
-"""I/O: config/options loaders, JSON/HTML run artifacts, infrastructure."""
+"""I/O: config and option loaders, JSON output, infrastructure config."""

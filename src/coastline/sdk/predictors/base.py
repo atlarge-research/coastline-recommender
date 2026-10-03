@@ -9,15 +9,15 @@ from coastline.sdk.models.workload import WorkloadSpec
 
 
 class BasePredictor(ABC):
-    """Base class for performance predictors."""
+    """Base class for the performance and energy predictors."""
 
     @abstractmethod
     def predict(self, workload: WorkloadSpec, context: SystemContext) -> Optional[Prediction]:
-        """Predict a GPU configuration for a workload.
+        """Predict how a workload performs on its GPU configuration.
 
         Returns a Prediction, or None if the predictor cannot make one.
         """
 
     @abstractmethod
     def get_name(self) -> str:
-        """Get the predictor name."""
+        """Return the predictor name."""

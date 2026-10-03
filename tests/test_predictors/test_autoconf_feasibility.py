@@ -1,35 +1,23 @@
-"""Tests for the AutoConf-based feasibility checker.
+"""Tests for the feasibility checkers in ``sdk/predictors/feasibility/autoconf.py``.
 
-Target: recommender/predictors/feasibility/autoconf.py
+Each checker's ``is_feasible(workload)`` returns ``(bool, dict)``:
 
-The module exposes three feasibility checkers, each with the same
-``is_feasible(workload) -> (bool, dict)`` contract:
+* ``AutoconfFeasibilityChecker`` wraps ADO's AutoGluon validity classifier. It loads the model
+  lazily and returns ``(False, {"error": "autoconf_unavailable"})`` when ``autogluon`` or the ADO
+  artifacts are missing.
+* ``RulesFeasibilityChecker`` checks ``total_gpus >= 1`` and per-device ``batch_size >= 1``. It
+  has no divisibility, memory or OOM check.
+* ``NoOpFeasibilityChecker`` accepts everything.
 
-* ``AutoconfFeasibilityChecker`` — wraps the ADO autoconf AutoGluon validity
-  classifier. The autoconf model is lazy-loaded and depends on the optional
-  ``autogluon`` package plus ADO artifacts; when those are missing it must
-  degrade gracefully (``(False, {"error": "autoconf_unavailable"})``) rather
-  than raise.
-* ``RulesFeasibilityChecker`` — pure-Python divisibility rule
-  (``batch_size`` must be evenly divisible by ``total_gpus``, ``total_gpus``
-  must be >= 1). No external dependency.
-* ``NoOpFeasibilityChecker`` — accepts everything.
-
-Because the real AutoGluon model + ADO artifacts are not guaranteed to be
-present in CI, the "model available" paths of ``AutoconfFeasibilityChecker``
-are exercised by monkeypatching ``_autoconf_modules`` with light fakes that
-mimic ``load_model`` / ``JobConfig`` / ``get_model_prediction_and_metadata``.
-
-Every assertion below is anchored to an independent oracle: the documented
-``is_feasible`` contract, hand-computed divisibility arithmetic, the
-``total_gpus = gpus_per_node × number_of_nodes`` layout law, or a load-once
-invariant — never a value copied back out of the code under test.
-
-No production code is modified by these tests.
+The AutoGluon model and ADO artifacts may be absent in CI, so ``_autoconf_modules`` is
+monkeypatched with fakes of ``load_model``, ``JobConfig`` and ``get_model_prediction_and_metadata``.
 """
 
 from __future__ import annotations
 
+import logging
+
+import pytest
 from pydantic import BaseModel
 
 import coastline.sdk.predictors.feasibility.autoconf as af
@@ -55,17 +43,9 @@ def _workload(batch_size: int = 8, gpus_per_node: int = 8, number_of_nodes: int 
     )
 
 
-# --------------------------------------------------------------------------- #
-# Fakes that stand in for the ADO autoconf modules.
-# --------------------------------------------------------------------------- #
+# Fakes for the ADO autoconf modules.
 class _FakeJobConfig:
-    """Mimics ``autoconf.utils.pydantic_models.JobConfig`` enough for the test.
-
-    The real class is a pydantic model whose ``model_validate`` accepts the
-    dict that ``is_feasible`` builds; here we just record what we were handed
-    so the test can assert the field mapping (workload -> job config) is wired
-    correctly.
-    """
+    """Stand-in for ``autoconf.utils.pydantic_models.JobConfig`` that records the fields it gets."""
 
     def __init__(self, **fields):
         self.fields = fields
@@ -76,15 +56,14 @@ class _FakeJobConfig:
 
 
 class _StrictInt(BaseModel):
-    """A real pydantic model used only to mint a genuine ``ValidationError``."""
+    """Pydantic model whose validation gives a real ``ValidationError``."""
 
     n: int
 
 
 class _RaisingJobConfig:
-    """JobConfig stand-in whose ``model_validate`` raises a real pydantic
-    ``ValidationError`` — what the production JobConfig raises when the grid
-    probes a structurally invalid job layout."""
+    """JobConfig stand-in whose ``model_validate`` raises a pydantic ``ValidationError``, as the
+    real JobConfig does for an invalid job layout."""
 
     @classmethod
     def model_validate(cls, data):
@@ -102,8 +81,8 @@ class _FakePredictor:
 def _make_mods(valid_flag, metadata, *, load_calls=None, predict_calls=None):
     """Build a (load_model, JobConfig, get_model_prediction_and_metadata) triple.
 
-    ``valid_flag`` / ``metadata`` are returned by the prediction fn. Optional
-    lists capture call args so tests can assert lazy-loading / field mapping.
+    The prediction function returns ``valid_flag`` and ``metadata``; ``load_calls`` and
+    ``predict_calls`` record call arguments.
     """
 
     def load_model(model_version):
@@ -119,33 +98,19 @@ def _make_mods(valid_flag, metadata, *, load_calls=None, predict_calls=None):
     return load_model, _FakeJobConfig, get_model_prediction_and_metadata
 
 
-# --------------------------------------------------------------------------- #
-# AutoconfFeasibilityChecker — graceful fallback when autoconf is unavailable.
-# --------------------------------------------------------------------------- #
+# AutoconfFeasibilityChecker: fallback when autoconf is unavailable.
 def test_autoconf_unavailable_is_infeasible_with_error(monkeypatch):
-    """When the autoconf modules cannot be imported, is_feasible returns
-    (False, {"error": "autoconf_unavailable"}) instead of raising.
-
-    Oracle: the documented graceful-degradation contract. Falsifies if the
-    checker instead propagates ImportError or defaults a missing model to
-    feasible=True.
-    """
+    """When the autoconf modules cannot be imported, ``is_feasible`` returns
+    (False, {"error": "autoconf_unavailable"}) and does not raise."""
     monkeypatch.setattr(af, "_autoconf_modules", lambda: None)
     feasible, meta = AutoconfFeasibilityChecker().is_feasible(_workload())
     assert feasible is False
     assert meta == {"error": "autoconf_unavailable"}
 
 
-# --------------------------------------------------------------------------- #
-# AutoconfFeasibilityChecker — model-available paths (via injected fakes).
-# --------------------------------------------------------------------------- #
+# AutoconfFeasibilityChecker: model-available paths, with fakes.
 def test_autoconf_feasible_when_classifier_returns_valid(monkeypatch):
-    """valid_flag == 1 -> feasible, and the classifier metadata is passed
-    straight through.
-
-    Oracle: contract maps the classifier's 1 to True and echoes its metadata.
-    Falsifies if the flag→bool mapping is inverted or metadata is dropped.
-    """
+    """A classifier flag of 1 means feasible, and the classifier metadata is returned unchanged."""
     meta = {"score": 0.91, "min_gpus": 4}
     monkeypatch.setattr(af, "_autoconf_modules", lambda: _make_mods(1, meta))
     feasible, out = AutoconfFeasibilityChecker().is_feasible(_workload())
@@ -154,11 +119,7 @@ def test_autoconf_feasible_when_classifier_returns_valid(monkeypatch):
 
 
 def test_autoconf_infeasible_when_classifier_returns_invalid(monkeypatch):
-    """valid_flag == 0 -> infeasible (e.g. would OOM / exceed GPU budget).
-
-    Oracle: only ``valid_flag == 1`` is feasible, so 0 must map to False while
-    still echoing metadata. Falsifies if any truthy/nonzero flag is accepted.
-    """
+    """A classifier flag of 0 means infeasible, and the metadata is still returned."""
     meta = {"reason": "out_of_memory"}
     monkeypatch.setattr(af, "_autoconf_modules", lambda: _make_mods(0, meta))
     feasible, out = AutoconfFeasibilityChecker().is_feasible(_workload())
@@ -167,12 +128,7 @@ def test_autoconf_infeasible_when_classifier_returns_invalid(monkeypatch):
 
 
 def test_autoconf_none_metadata_normalized_to_empty_dict(monkeypatch):
-    """A feasible verdict with None metadata must surface as (True, {}).
-
-    Oracle: the ``metadata or {}`` normalization in the contract — callers get
-    a dict, never None. Falsifies if the ``or {}`` guard is dropped and None
-    leaks through (a downstream ``meta[...]`` would then blow up).
-    """
+    """A feasible verdict with None metadata comes back as (True, {})."""
     monkeypatch.setattr(af, "_autoconf_modules", lambda: _make_mods(1, None))
     feasible, out = AutoconfFeasibilityChecker().is_feasible(_workload())
     assert feasible is True
@@ -180,16 +136,12 @@ def test_autoconf_none_metadata_normalized_to_empty_dict(monkeypatch):
 
 
 def test_autoconf_maps_workload_fields_into_job_config(monkeypatch):
-    """The workload -> JobConfig field mapping must be correct: the derived total_gpus
-    (gpus_per_node x number_of_nodes) feeds number_gpus, AND the per-device batch is converted
-    to AutoConf's TOTAL/effective batch at the boundary (AutoConf's batch_size is not per-device).
-
-    Oracle: hand-derived layout — 4 GPUs/node x 2 nodes = 8 total GPUs — and effective batch =
-    per_device 16 x 8 GPUs = 128; the remaining fields pass through verbatim.
+    """Workload fields map onto JobConfig: ``number_gpus`` is gpus_per_node x number_of_nodes, and
+    ``batch_size`` is the total batch (per-device batch x GPUs). Other fields pass through unchanged.
     """
     predict_calls: list = []
     monkeypatch.setattr(af, "_autoconf_modules", lambda: _make_mods(1, {}, predict_calls=predict_calls))
-    wl = _workload(batch_size=16, gpus_per_node=4, number_of_nodes=2)  # per-device 16, total = 4*2 = 8
+    wl = _workload(batch_size=16, gpus_per_node=4, number_of_nodes=2)  # per-device batch 16 on 4 x 2 = 8 GPUs
     AutoconfFeasibilityChecker().is_feasible(wl)
 
     assert len(predict_calls) == 1
@@ -199,24 +151,20 @@ def test_autoconf_maps_workload_fields_into_job_config(monkeypatch):
         "method": "full",
         "gpu_model": _GPU,
         "tokens_per_sample": 512,
-        "batch_size": 128,  # per-device 16 -> effective 16 x 8 GPUs (AutoConf batch_size is TOTAL)
+        "batch_size": 128,  # per-device 16 x 8 GPUs; AutoConf's batch_size is the total
         "number_gpus": 8,  # 4 GPUs/node x 2 nodes
     }
 
 
 def test_autoconf_feasibility_model_overrides_llm_model_in_job_config(monkeypatch):
-    """When feasibility_model is set, the OOM check runs against it, not the
-    (possibly anonymized/proxy) llm_model.
-
-    Oracle: contract precedence ``feasibility_model or llm_model``. Only
-    llm_model is canonicalized at ingestion, so the proxy id becomes
-    "anon-model" while feasibility_model is passed through verbatim — the two
-    values are deliberately distinct so a wrong branch is visible.
+    """The JobConfig model name is ``feasibility_model or llm_model``, so a set feasibility_model
+    overrides a proxy llm_model. Both are canonicalized at ingestion ("anon-model" and
+    "mistral-7b-v0.1" here).
     """
     predict_calls: list = []
     monkeypatch.setattr(af, "_autoconf_modules", lambda: _make_mods(1, {}, predict_calls=predict_calls))
     wl = WorkloadSpec(
-        llm_model="proxy/Anon-Model",  # canonicalized -> "anon-model"
+        llm_model="proxy/Anon-Model",  # canonicalized to "anon-model"
         fine_tuning_method="lora",
         gpu_model=_GPU,
         tokens_per_sample=256,
@@ -228,19 +176,13 @@ def test_autoconf_feasibility_model_overrides_llm_model_in_job_config(monkeypatc
     AutoconfFeasibilityChecker().is_feasible(wl)
 
     job_config, _ = predict_calls[0]
-    # model_name is the feasibility_model verbatim (uncanonicalized), NOT "anon-model".
-    assert job_config.fields["model_name"] == "mistralai/Mistral-7B-v0.1"
+    # model_name is the canonical feasibility_model.
+    assert job_config.fields["model_name"] == "mistral-7b-v0.1"
     assert job_config.fields["method"] == "lora"
 
 
 def test_autoconf_loads_model_once_across_multiple_predictions(monkeypatch):
-    """The AutoGluon model is lazy-loaded once and reused for later candidates.
-
-    Oracle: the memoization invariant on ``self._predictor`` — two is_feasible
-    calls on one checker must trigger exactly one load_model. Falsifies if the
-    ``if self._predictor is None`` guard is removed and the (expensive) model
-    is reloaded per candidate.
-    """
+    """The AutoGluon model loads once per checker and is reused for later candidates."""
     load_calls: list = []
     monkeypatch.setattr(af, "_autoconf_modules", lambda: _make_mods(1, {}, load_calls=load_calls))
     checker = AutoconfFeasibilityChecker()
@@ -250,15 +192,8 @@ def test_autoconf_loads_model_once_across_multiple_predictions(monkeypatch):
 
 
 def test_autoconf_invalid_job_config_rejected_before_classifier(monkeypatch):
-    """A structurally invalid JobConfig is a benign reject: (False, error) with
-    an ``invalid_job_config:`` tag, and the classifier is never invoked.
-
-    Oracle: the ValidationError branch is distinct from the generic prediction
-    failure branch — its message is tagged and it short-circuits before
-    prediction. Falsifies if ValidationError isn't caught separately (it would
-    reach the generic handler with an untagged message, or the classifier would
-    still run).
-    """
+    """An invalid JobConfig gives (False, error) with an ``invalid_job_config:`` tag, and the
+    classifier is not called."""
     predict_calls: list = []
 
     def load_model(model_version):
@@ -272,17 +207,11 @@ def test_autoconf_invalid_job_config_rejected_before_classifier(monkeypatch):
     feasible, out = AutoconfFeasibilityChecker().is_feasible(_workload())
     assert feasible is False
     assert out["error"].startswith("invalid_job_config:")
-    assert predict_calls == []  # short-circuited: classifier never consulted
+    assert predict_calls == []  # the classifier was not called
 
 
 def test_autoconf_exception_during_prediction_is_caught(monkeypatch):
-    """If the classifier path raises, is_feasible swallows it and reports the
-    failure as (False, {"error": <msg>}) rather than propagating.
-
-    Oracle: the generic-failure contract — the raised message is surfaced
-    verbatim (untagged, unlike the ValidationError branch). Falsifies if the
-    exception escapes and aborts the grid.
-    """
+    """An exception from the classifier comes back as (False, {"error": <message>}), with no tag."""
 
     def boom(job_config, predictor):
         raise RuntimeError("autogluon exploded")
@@ -294,41 +223,82 @@ def test_autoconf_exception_during_prediction_is_caught(monkeypatch):
     assert out == {"error": "autogluon exploded"}
 
 
-# --------------------------------------------------------------------------- #
-# RulesFeasibilityChecker — per-device sanity guards (no divisibility rule).
-# --------------------------------------------------------------------------- #
+# AutoconfFeasibilityChecker: a GPU outside AutoConf's training data.
+def _extrapolation_warnings(caplog, gpu: str) -> list[str]:
+    """The warnings about ``gpu`` itself (the message also lists the GPUs AutoConf knows)."""
+    return [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING and f"GPU {gpu!r}" in r.getMessage()]
+
+
+@pytest.mark.parametrize("valid_flag", [1, 0])
+def test_a_gpu_autoconf_never_saw_warns_once_and_keeps_the_verdict(monkeypatch, caplog, valid_flag):
+    """H100-SXM is in Kavier's catalog but not in AutoConf's training data. The classifier's verdict
+    is kept, and one warning per GPU name calls it an extrapolation."""
+    monkeypatch.setattr(af, "_autoconf_modules", lambda: _make_mods(valid_flag, {}))
+    monkeypatch.setattr(af, "_WARNED_GPUS", set())
+    monkeypatch.setenv("COASTLINE_NO_AUTOCONF_BATCH", "1")  # check_chunk asks the fake per candidate
+    checker = AutoconfFeasibilityChecker()
+    h100_sxm = _workload().model_copy(update={"gpu_model": "H100-SXM"})
+
+    with caplog.at_level(logging.WARNING, logger=af.__name__):
+        verdicts = [checker.is_feasible(h100_sxm), checker.is_feasible(h100_sxm.model_copy(update={"batch_size": 4}))]
+        verdicts += checker.check_chunk([h100_sxm])
+
+    assert verdicts == [(valid_flag == 1, {})] * 3
+    (message,) = _extrapolation_warnings(caplog, "H100-SXM")
+    assert "extrapolation" in message
+
+
+def test_each_unknown_gpu_gets_its_own_warning(monkeypatch, caplog):
+    monkeypatch.setattr(af, "_autoconf_modules", lambda: _make_mods(1, {}))
+    monkeypatch.setattr(af, "_WARNED_GPUS", set())
+    checker = AutoconfFeasibilityChecker()
+
+    with caplog.at_level(logging.WARNING, logger=af.__name__):
+        for gpu in ("H100-SXM", "L4", "H100-SXM"):
+            checker.is_feasible(_workload().model_copy(update={"gpu_model": gpu}))
+
+    assert len(_extrapolation_warnings(caplog, "H100-SXM")) == 1
+    assert len(_extrapolation_warnings(caplog, "L4")) == 1
+
+
+@pytest.mark.parametrize("gpu", ["NVIDIA-A100-SXM4-80GB", "NVIDIA-A100-80GB-PCIe", "NVIDIA-H100-PCIe", "L40S"])
+def test_a_gpu_in_autoconf_training_data_does_not_warn(monkeypatch, caplog, gpu):
+    monkeypatch.setattr(af, "_autoconf_modules", lambda: _make_mods(1, {}))
+    monkeypatch.setattr(af, "_WARNED_GPUS", set())
+
+    with caplog.at_level(logging.WARNING, logger=af.__name__):
+        AutoconfFeasibilityChecker().is_feasible(_workload().model_copy(update={"gpu_model": gpu}))
+
+    assert not [r for r in caplog.records if "extrapolation" in r.getMessage()]
+
+
+# RulesFeasibilityChecker: per-device sanity guards, no divisibility rule.
 def test_rules_feasible_for_valid_per_device_workload():
-    # Any valid per-device workload is feasible (no divisibility rule); no error dict.
+    # A valid per-device workload is feasible, with empty metadata.
     feasible, meta = RulesFeasibilityChecker().is_feasible(_workload(batch_size=8, gpus_per_node=8, number_of_nodes=1))
     assert feasible is True
     assert meta == {}
 
 
 def test_rules_feasible_when_batch_not_divisible_by_gpus():
-    # batch_size is PER-DEVICE: a per-device batch of 7 on 8 GPUs is feasible (the old
-    # ``7 % 8 != 0`` divisibility rejection is gone).
+    # batch_size is per device, so a batch of 7 on 8 GPUs is feasible.
     feasible, meta = RulesFeasibilityChecker().is_feasible(_workload(batch_size=7, gpus_per_node=8, number_of_nodes=1))
     assert feasible is True
     assert meta == {}
 
 
 def test_rules_per_device_batch_feasible_regardless_of_gpu_count():
-    """batch_size is PER-DEVICE, so it need not divide the GPU count: a per-device batch of 8
-    is feasible on 4 GPUs (1 node) AND on 16 GPUs (4 nodes) — the latter would have been
-    rejected by the old ``8 % 16`` divisibility rule.
-    """
+    """A per-device batch of 8 is feasible on 4 GPUs (1 node) and on 16 GPUs (4 nodes); it need not
+    divide the GPU count."""
     one_node = RulesFeasibilityChecker().is_feasible(_workload(batch_size=8, gpus_per_node=4, number_of_nodes=1))
     four_nodes = RulesFeasibilityChecker().is_feasible(_workload(batch_size=8, gpus_per_node=4, number_of_nodes=4))
     assert one_node[0] is True
     assert four_nodes[0] is True
 
 
-# --------------------------------------------------------------------------- #
-# NoOpFeasibilityChecker — accept everything.
-# --------------------------------------------------------------------------- #
+# NoOpFeasibilityChecker: accepts everything.
 def test_noop_accepts_any_config():
-    """The no-op checker accepts every workload unconditionally (used for tests or when
-    feasibility is disabled)."""
+    """The no-op checker accepts every workload (used in tests or when feasibility is off)."""
     feasible, meta = NoOpFeasibilityChecker().is_feasible(_workload(batch_size=7, gpus_per_node=8, number_of_nodes=1))
     assert feasible is True
     assert meta == {}

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unified benchmarking suite: evaluate all 12 predictors on throughput + latency (MdAPE, ms/100, Within-20%)."""
+"""Benchmark the 12 performance predictors on throughput and step latency (MdAPE, ms/100, within 20%)."""
 
 import argparse
 import json
@@ -17,7 +17,7 @@ import pandas as pd
 
 warnings.filterwarnings("ignore")
 
-# dev/benchmark -> parents[2] == the superproject umbrella (siblings: trace-archive/, kavier/).
+# parents[2] of dev/benchmark is the superproject, which holds trace-archive/ and kavier/.
 BENCHMARKS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = BENCHMARKS_DIR.parents[2]
 KAVIER_SRC = REPO_ROOT / "kavier" / "src"
@@ -35,8 +35,8 @@ from benchmark.metrics import compute_metrics, ms_per_100_predictions, throughpu
 from coastline.sdk.models.context import Constraints, SystemContext  # noqa: E402
 from coastline.sdk.models.workload import WorkloadSpec  # noqa: E402
 
-# Predictors are imported lazily inside per-model subprocesses so native ML backends
-# never co-load — co-loading several segfaults on macOS (duplicate OpenMP runtimes).
+# Predictors are imported inside per-model subprocesses, because loading several native ML
+# backends in one process segfaults on macOS (duplicate OpenMP runtimes).
 
 
 CONTEXT = SystemContext(
@@ -66,8 +66,8 @@ def prepare_ml_data(max_gpus: Optional[int] = None) -> dict:
     )
     full_df = full_df.loc[valid_mask].copy()
 
-    # Deterministic 70/15/15 split — indices must align with load_and_preprocess_data().
-    # Only the test split is benchmarked; train/val are discarded here.
+    # Deterministic 70/15/15 split, aligned with load_and_preprocess_data(). Only the test
+    # split is benchmarked.
     _train, _val, (X_cat_test, X_num_test, y_thr_test, y_rt_test, full_test) = split_data(
         X_cat,
         X_num,
@@ -102,7 +102,7 @@ def prepare_ml_data(max_gpus: Optional[int] = None) -> dict:
 
 
 def evaluate_kavier(ml_data: dict) -> dict:
-    """Evaluate Kavier on the shared test split (live engine only — no CSV fallback; stale fallbacks silently mis-reported MdAPE)."""
+    """Evaluate Kavier on the shared test split; raise if any row fails to simulate."""
     full_test = ml_data["full_test"]
     y_true = np.asarray(ml_data["y_throughput_test"], dtype=np.float64)
 
@@ -158,7 +158,7 @@ def _build_meta(full_test: pd.DataFrame) -> pd.DataFrame:
 
 
 def evaluate_tabpfn_batch(data: dict) -> dict:
-    """Evaluate TabPFN via batch prediction (per-row predict() is ~9s/row; batch is far faster)."""
+    """Evaluate TabPFN with one batch prediction, since predict() per row is too slow."""
     import pickle
 
     model_path = performance_trained_model_path("tabpfn")
@@ -304,7 +304,7 @@ def _fmt_float(x, default: str, fmt: str) -> str:
 
 def _fmt_ms_per_100(ms: Optional[float]) -> str:
     try:
-        x = float(ms)  # type: ignore[arg-type]  # None raises TypeError -> N/A
+        x = float(ms)  # type: ignore[arg-type]  # None raises TypeError and shows as N/A
     except (TypeError, ValueError):
         return "       N/A"
     if not np.isfinite(x):
@@ -351,8 +351,9 @@ def print_results(results: dict):
     print()
 
 
-# Display name -> canonical predictor name (resolved via PolicyFactory, which lazily imports
-# the right module per subprocess). TabPFN uses batch prediction and is handled separately.
+# Display names mapped to PolicyFactory predictor names. PolicyFactory imports a model's module
+# only when it builds the model, inside the worker subprocess. TabPFN is evaluated separately, in
+# one batch.
 _ML_MODELS = {
     "RandomForest": "random_forest",
     "SVR": "svr",
@@ -370,7 +371,7 @@ _RESULT_MARKER = "__BENCH_RESULT__"
 
 
 def _json_default(o):
-    """Keep numpy scalars numeric (not stringified) when serializing worker results."""
+    """json.dumps fallback for worker results: numpy scalars become Python numbers, anything else a str."""
     if isinstance(o, np.floating):
         return float(o)
     if isinstance(o, np.integer):
@@ -474,7 +475,7 @@ def _load_test_data(title: str, max_gpus: Optional[int] = None) -> dict:
     print("\n" + "=" * 60)
     print(f"  {title}")
     print("=" * 60)
-    gpu_note = f", ≤{max_gpus} GPUs" if max_gpus else ""
+    gpu_note = f", <={max_gpus} GPUs" if max_gpus else ""
     print(f"\n  Loading ML test split (seed={SEED}, 15% holdout; shared with Kavier{gpu_note})...")
     ml_data = prepare_ml_data(max_gpus=max_gpus)
     print(f"  Test samples: {len(ml_data['y_throughput_test'])}\n")
@@ -517,7 +518,7 @@ def run_all(
 
 
 def save_results_csv(results: dict, csv_path: Optional[Path] = None):
-    """Save results to CSV in benchmarks/results/."""
+    """Write the results to a CSV under dev/benchmark/results/ (a timestamped name by default)."""
     results_dir = BENCHMARKS_DIR / "results"
     results_dir.mkdir(exist_ok=True)
 
@@ -564,7 +565,7 @@ def run_kavier_only(
     results_csv: Optional[Path] = None,
 ) -> dict:
     """Evaluate only the Kavier physics simulator (same test split as full suite)."""
-    ml_data = _load_test_data("KAVIER ONLY (physics simulator)", max_gpus)
+    ml_data = _load_test_data("Kavier only (physics simulator)", max_gpus)
     results = {"Kavier": _eval_kavier_entry(ml_data)}
     return _finalize(results, results_csv, output_json)
 
@@ -595,7 +596,7 @@ def main():
     parser.add_argument(
         "--exclude-128gpu",
         action="store_true",
-        help="Exclude 128-GPU configurations from evaluation (keeps ≤32 GPUs).",
+        help="Exclude 128-GPU configurations from evaluation (keeps <=32 GPUs).",
     )
     parser.add_argument(
         "--results-csv",
@@ -614,7 +615,7 @@ def main():
 
     args = parser.parse_args()
     if args.one:
-        # Worker mode: library chatter -> stderr, only the marked JSON entry -> stdout.
+        # Worker mode: logs go to stderr, so stdout carries only the marked JSON entry.
         import logging
 
         logging.basicConfig(stream=sys.stderr, level=logging.WARNING)

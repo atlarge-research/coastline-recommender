@@ -3,24 +3,38 @@
 import logging
 from typing import Any, Dict, Optional
 
-# Kavier is installed separately (pip install "kavier>=0.4,<0.5"). We use its
-# PUBLIC training API (kavier.training.performance) rather than the internal sim
-# engine, so a kavier internal refactor can't break us. If kavier is absent,
-# KAVIER_AVAILABLE is False and the predictor surfaces the error at predict time.
+# Kavier is a separate package (version range pinned in pyproject.toml). This module calls only
+# its public training API (kavier.training.performance), so changes to Kavier's internals do not
+# break it. Without Kavier, KAVIER_AVAILABLE is False and predict() returns an error Prediction.
 try:
     from kavier import training as _kavier_training
+    from kavier.sdk.library import GPU_SPEC_LIBRARY as _KAVIER_GPUS
+    from kavier.sdk.library import LLM_SPEC_LIBRARY as _KAVIER_LLMS
+    from kavier.sdk.library import UnknownSpecError
 
     KAVIER_AVAILABLE = True
 except ImportError as e:
     KAVIER_AVAILABLE = False
     _import_error = str(e)
 
+from coastline.sdk.library.hardware import canonical_gpu_name
+from coastline.sdk.library.llm_names import kavier_llm_name
 from coastline.sdk.models.context import SystemContext
 from coastline.sdk.models.recommendation import Prediction
 from coastline.sdk.models.workload import WorkloadSpec
 from coastline.sdk.predictors.base import BasePredictor
 
 logger = logging.getLogger(__name__)
+
+
+def _unsupported_detail(error: KeyError, error_key: str) -> str:
+    """Kavier's own message for an unknown model or GPU (it lists the catalog), else the catalog."""
+    if isinstance(error, UnknownSpecError):
+        return str(error)
+    return (
+        f"Unsupported {error_key}. Kavier knows {len(_KAVIER_LLMS)} models ({', '.join(sorted(_KAVIER_LLMS))}) "
+        f"and {len(_KAVIER_GPUS)} GPUs ({', '.join(sorted(_KAVIER_GPUS))})."
+    )
 
 
 def _error_prediction(workload: WorkloadSpec, total_gpus: int, metadata: Dict[str, Any]) -> Prediction:
@@ -37,17 +51,16 @@ def _error_prediction(workload: WorkloadSpec, total_gpus: int, metadata: Dict[st
 
 
 class KavierPredictor(BasePredictor):
-    """Analytical throughput+power predictor using Kavier's physics simulator.
+    """Analytical throughput and power predictor using Kavier's physics simulator.
 
-    Returns tokens/sec and per-GPU watts for calibrated (model, GPU) pairs, else None.
-    predicted_runtime_seconds is always None here. Kavier *does* compute a total
-    ``train_runtime``, but only when it is given a job size (``total_tokens``, or
-    ``epochs`` x ``dataset_tokens``); the row this predictor builds supplies none,
-    so Kavier returns 0.0 and we report None rather than a fake runtime.
+    Returns tokens/sec and per-GPU watts for models and GPUs in Kavier's catalog.
+    predicted_runtime_seconds is always None: Kavier computes ``train_runtime`` only when given a
+    job size (``total_tokens``, or ``epochs`` x ``dataset_tokens``), and the row built here has
+    none, so Kavier would return 0.0.
     """
 
-    #: Closed-form arithmetic at ~2.6 us per prediction -- a worker dispatch would cost far more
-    #: than the work, so this predictor always runs inline.
+    #: Closed-form arithmetic at ~2.6 us per prediction; a worker dispatch would cost far more
+    #: than the work, so this predictor runs inline.
     EXPENSIVE = False
 
     def __init__(self):
@@ -60,7 +73,7 @@ class KavierPredictor(BasePredictor):
         return "Kavier Physics-Based"
 
     def predict(self, workload: WorkloadSpec, context: SystemContext) -> Optional[Prediction]:
-        """Predict throughput/power. Returns None on invalid inputs; error Prediction for unsupported configs."""
+        """Predict throughput and power: None for invalid inputs, an error Prediction for unsupported configs."""
         if not KAVIER_AVAILABLE:
             logger.debug("Kavier not available, returning error prediction")
             return _error_prediction(
@@ -74,10 +87,8 @@ class KavierPredictor(BasePredictor):
             )
 
         try:
-            # kavier.training.performance derives total GPUs as num_gpus × num_nodes,
-            # so we feed it the per-node count (gpus_per_node) + number_of_nodes —
-            # equivalent to the old direct call's total_gpus (verified identical, single-
-            # and multi-node). total_gpus is still used for validation + metadata.
+            # kavier.training.performance computes total GPUs as num_gpus x num_nodes, so it gets
+            # the per-node count and the node count; total_gpus is used for validation and metadata.
             total_gpus = workload.total_gpus
             num_nodes = workload.number_of_nodes or 1
 
@@ -97,13 +108,14 @@ class KavierPredictor(BasePredictor):
                 f"tokens={workload.tokens_per_sample}, gpus={total_gpus}"
             )
 
-            # num_gpus is PER-NODE (the verb multiplies by num_nodes). Derive it from
-            # the validated total so it is always a positive int even when the workload
-            # left gpus_per_node unset (total // nodes == gpus_per_node for grid candidates).
+            # num_gpus is per node. Derive it from the validated total so it is a positive int even
+            # when gpus_per_node is unset (total // nodes == gpus_per_node for grid candidates).
             per_node = max(1, total_gpus // num_nodes)
             row = {
-                "model": workload.llm_model,
-                "gpu": workload.gpu_model,
+                # The catalog key ('Llama-3-8B', 'llama3.2-3b') for a lowercased name or an HF id;
+                # an unknown name goes through unchanged so Kavier's error names it.
+                "model": kavier_llm_name(workload.llm_model) or workload.llm_model,
+                "gpu": canonical_gpu_name(workload.gpu_model),
                 "method": workload.fine_tuning_method,
                 "seq_len": workload.tokens_per_sample,
                 "batch_size": workload.batch_size,
@@ -114,7 +126,7 @@ class KavierPredictor(BasePredictor):
 
             throughput = result.get("train_tokens_per_second")
             power = result.get("gpu_power_watts")
-            step_time = result.get("step_time_ms")  # not exported by the verb -> None
+            step_time = result.get("step_time_ms")  # the verb does not export it, so None
 
             if throughput is None or throughput <= 0:
                 logger.warning(f"Invalid throughput from Kavier: {throughput}")
@@ -157,11 +169,7 @@ class KavierPredictor(BasePredictor):
                 {
                     "predictor": "kavier",
                     "error": "unsupported_config",
-                    "error_detail": (
-                        f"Unsupported {error_key}. Kavier supports: granite-3-8b, granite-3.3-8b, "
-                        "llama3.2-3b, mistral-7b-v0.1 (models); L40S, NVIDIA-A100-80GB-PCIe, "
-                        "NVIDIA-A100-SXM4-80GB, NVIDIA-H100-PCIe (GPUs); full, gptq-lora, lora (methods)."
-                    ),
+                    "error_detail": _unsupported_detail(e, error_key),
                     "unsupported_key": error_key,
                 },
             )

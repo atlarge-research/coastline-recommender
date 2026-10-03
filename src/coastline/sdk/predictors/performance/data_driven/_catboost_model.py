@@ -1,8 +1,8 @@
-"""The picklable CatBoost wrapper the trained artifact resolves to.
+"""Picklable CatBoost wrapper; the trained catboost pickle holds an instance of this class.
 
-Lives in the shipped package (not the dev trainer) so the committed pickle unpickles without
-the training code on the path. ``sklearn_portfolio`` aliases the artifact's legacy module path
-(``trainer.train_performance_catboost``) to this class when loading the catboost model.
+It lives in the installed package so the bundled pickle loads without the training code.
+``sklearn_portfolio`` maps the module path stored in the pickle
+(``trainer.train_performance_catboost``) to this class when it loads the catboost model.
 """
 
 from __future__ import annotations
@@ -11,8 +11,8 @@ import numpy as np
 
 
 class _DualOutputCatBoost:
-    """Holds one CatBoostRegressor per target; ``predict`` returns columns [throughput, runtime]
-    in log space — the multi-output contract shared with every trainer and the inference path."""
+    """One CatBoostRegressor per target. ``predict`` returns columns [throughput, runtime] in log
+    space, the multi-output layout the trainers and the inference path share."""
 
     def __init__(self, throughput_model, runtime_model):
         self.throughput_model = throughput_model

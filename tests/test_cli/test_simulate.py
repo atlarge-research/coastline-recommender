@@ -1,8 +1,8 @@
-"""`coastline simulate` — the single-config predict verb.
+"""Tests for `coastline simulate`, which predicts one configuration.
 
-Every test pins the analytical Kavier predictor and `--feasibility rules` so the command needs
-neither trained ML artifacts nor AutoConf. Assertions are invariants (identities, signs,
-presence), never a magic engine number: the numbers are Kavier's to change.
+Most tests pin the analytical Kavier predictor and `--feasibility rules`, so the command needs
+neither trained ML models nor AutoConf. Assertions check identities, signs and presence, since
+Kavier's numbers may change.
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ def test_simulate_predicts_throughput_and_power_for_one_config(capsys) -> None:
 
 
 def test_simulate_omits_runtime_and_energy_without_total_tokens(capsys) -> None:
-    """Kavier reports per-step time, not total runtime, so both need a dataset size."""
+    """Kavier reports the time per step, so runtime and energy need a dataset size."""
     result = _run_json(capsys, "--gpus-per-node", "2")
 
     assert result["predicted_runtime_seconds"] is None
@@ -102,9 +102,8 @@ def test_simulate_text_report_names_the_config_and_the_predictions(capsys) -> No
 
 
 def test_simulate_reports_power_for_a_non_kavier_predictor(capsys) -> None:
-    """Regression: only Kavier returns power from the throughput call. Every other predictor
-    needs the dedicated power predictor, the same fallback the grid pipeline uses. Pinning only
-    Kavier here is what hid this."""
+    """Only Kavier returns power with the throughput; other predictors need the separate power
+    predictor, as in the grid pipeline."""
     argv = [a if a != "kavier" else "intelligent" for a in _BASE]
     main([*argv, "--gpus-per-node", "4", "--json"])
     result = json.loads(capsys.readouterr().out)
@@ -116,12 +115,15 @@ def test_simulate_reports_power_for_a_non_kavier_predictor(capsys) -> None:
 
 
 def test_simulate_rejects_an_unknown_predictor_rather_than_silently_defaulting(capsys) -> None:
-    """A typo must not resolve to the `intelligent` default and report its numbers under the
-    typed name. Same validator the facade and batch API use."""
+    """A misspelled predictor exits 2 instead of running the `intelligent` default under the typed
+    name. The facade and batch API use the same validator."""
     argv = [a if a != "kavier" else "catbost" for a in _BASE]
 
-    with pytest.raises(ValueError, match="unknown predictor"):
+    with pytest.raises(SystemExit) as excinfo:
         main(argv)
+
+    assert excinfo.value.code == 2
+    assert "unknown predictor" in capsys.readouterr().err
 
 
 def test_simulate_rejects_a_negative_dataset_size(capsys) -> None:
@@ -132,8 +134,8 @@ def test_simulate_rejects_a_negative_dataset_size(capsys) -> None:
 
 
 def test_simulate_labels_a_historical_runtime_as_not_this_dataset(capsys) -> None:
-    """Without --total-tokens a cache/ML predictor reports the wall clock of the run it matched,
-    for a dataset the caller never declared. That must not read as this job's runtime."""
+    """Without --total-tokens a cache or ML predictor reports the wall-clock time of the run it
+    matched, for a dataset the caller did not declare. The report labels it as such."""
     argv = [a if a != "kavier" else "intelligent" for a in _BASE]
     main([*argv, "--gpus-per-node", "4", "--json"])
     result = json.loads(capsys.readouterr().out)
@@ -141,7 +143,7 @@ def test_simulate_labels_a_historical_runtime_as_not_this_dataset(capsys) -> Non
     if result["predicted_runtime_seconds"] is not None:
         assert result["runtime_source"] == "predictor_history"
         main([*argv, "--gpus-per-node", "4"])
-        assert "NOT this dataset" in capsys.readouterr().out
+        assert "for the dataset of the matched historical run" in capsys.readouterr().out
 
 
 def test_simulate_marks_a_declared_dataset_runtime_as_such(capsys) -> None:
@@ -150,10 +152,9 @@ def test_simulate_marks_a_declared_dataset_runtime_as_such(capsys) -> None:
     assert result["runtime_source"] == "total_tokens"
 
 
-# --- flag spellings -------------------------------------------------------------------------
-# The thesis prints its listings with underscore flags and a TOTAL GPU count; both spellings
-# must reach the same command. `--number_gpus` is NOT `--gpus-per-node`: it is the cluster
-# total, and the per-node layout is derived from the node count.
+# flag spellings
+# The thesis listings use underscore flags and a total GPU count; both spellings run the same
+# command. `--number_gpus` is the cluster total, and the GPUs per node follow from the node count.
 
 _THESIS_LISTING = [
     "simulate",
@@ -192,16 +193,16 @@ _BASE_UNDERSCORE = [
 ]
 
 
-def test_simulate_runs_the_thesis_listing_verbatim(capsys) -> None:
-    """The command as printed in the thesis must run as printed — it used to exit 2.
+def test_simulate_runs_the_thesis_listing_as_printed(capsys) -> None:
+    """The command printed in the thesis runs as printed.
 
-    It pins no predictor and no feasibility checker, so it runs the defaults: where AutoConf is
-    absent the checker reports itself unavailable and the command exits 1. Either way the flags
-    parsed and the report was produced, which is what this verb was failing to do.
+    It pins no predictor or feasibility checker, so it runs the defaults. Without AutoConf the
+    checker reports itself unavailable and the command exits 1; the flags still parse and the
+    report is printed.
     """
     try:
         main(list(_THESIS_LISTING))
-    except SystemExit as excinfo:  # AutoConf unavailable — never an argument error
+    except SystemExit as excinfo:  # AutoConf unavailable; an argument error would exit 2
         assert excinfo.code == 1
 
     out = capsys.readouterr().out
@@ -210,7 +211,7 @@ def test_simulate_runs_the_thesis_listing_verbatim(capsys) -> None:
 
 
 def test_simulate_underscore_and_hyphen_spellings_are_the_same_command(capsys) -> None:
-    """Aliases, not a second code path: 4 total GPUs over the default single node is 4 per node."""
+    """The underscore flags are aliases: 4 total GPUs on the default single node is 4 per node."""
     main([*_BASE, "--gpus-per-node", "4", "--json"])
     hyphenated = json.loads(capsys.readouterr().out)
 
@@ -230,7 +231,7 @@ def test_simulate_divides_total_gpus_over_the_declared_nodes(capsys) -> None:
 
 
 def test_simulate_rejects_a_total_gpu_count_that_does_not_divide_over_the_nodes(capsys) -> None:
-    """A layout with uneven nodes is not a layout; guessing one would silently change the job."""
+    """A total that does not divide evenly over the nodes is rejected; guessing a layout would change the job."""
     with pytest.raises(SystemExit) as excinfo:
         main([*_BASE_UNDERSCORE, "--number_gpus", "8", "--number_nodes", "3"])
 

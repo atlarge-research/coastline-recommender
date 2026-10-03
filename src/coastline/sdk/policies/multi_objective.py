@@ -1,7 +1,8 @@
-"""Multi-objective strategy: grid → feasibility → simulate → weighted policy selection."""
+"""Multi-objective strategy: grid, feasibility and simulation, then weighted selection."""
 
 import logging
-from typing import List, Optional
+from enum import Enum
+from typing import List, Optional, Union
 
 from coastline.sdk.constants import PRESET_TO_POLICY, PRESET_WEIGHTS, Preset, Strategy
 from coastline.sdk.models.context import SystemContext
@@ -13,12 +14,21 @@ from coastline.sdk.predictors.base import BasePredictor
 
 logger = logging.getLogger(__name__)
 
-# The preset vocabulary lives in one home (sdk/constants.py); PolicyPreset is its alias here.
+# Alias of constants.Preset.
 PolicyPreset = Preset
 
 
+def normalize_preset(preset: Union[str, Preset]) -> str:
+    """The preset key for any letter case; ValueError listing the presets for an unknown one."""
+    value = preset.value if isinstance(preset, Enum) else preset
+    key = str(value).strip().lower()
+    if key not in PRESET_WEIGHTS:
+        raise ValueError(f"unknown preset {preset!r}; choose from {list(PRESET_WEIGHTS)}")
+    return key
+
+
 class MultiObjectiveStrategy(BaseStrategy):
-    """Multi-objective strategy via unified grid workflow + preset weights."""
+    """Multi-objective strategy: the grid workflow ranked with preset or custom weights."""
 
     def __init__(
         self,
@@ -36,7 +46,7 @@ class MultiObjectiveStrategy(BaseStrategy):
         self.power_predictor = power_predictor
 
         if alpha is not None and beta is not None:
-            # Normalise by sum so the α:β ratio is preserved; floor negatives to 0, fallback to 0.5/0.5 if both zero.
+            # Clip negatives to 0 and divide by the sum, keeping the alpha:beta ratio; both 0 gives 0.5/0.5.
             self.alpha = max(0.0, alpha)
             self.beta = max(0.0, beta)
             total = self.alpha + self.beta
@@ -54,10 +64,11 @@ class MultiObjectiveStrategy(BaseStrategy):
                 self.alpha, self.beta = 0.5, 0.5
             self.preset: str = "custom"
             selection = "balanced"
-        elif preset is not None and preset in PRESET_WEIGHTS:
-            self.alpha, self.beta = PRESET_WEIGHTS[preset]
-            self.preset = preset
-            selection = PRESET_TO_POLICY[preset]
+        elif preset is not None:
+            # preset=None means balanced; an unknown preset raises.
+            self.preset = normalize_preset(preset)
+            self.alpha, self.beta = PRESET_WEIGHTS[self.preset]
+            selection = PRESET_TO_POLICY[self.preset]
         else:
             self.alpha, self.beta = PRESET_WEIGHTS["balanced"]
             self.preset = "balanced"
@@ -65,7 +76,7 @@ class MultiObjectiveStrategy(BaseStrategy):
 
         strategy_name = f"multi_objective_{self.preset}"
 
-        # "-frontier" preset → frontier (non-dominated) normalization; same axes/weights as the base trio.
+        # A "-frontier" preset normalizes over the non-dominated frontier, with its base preset's weights.
         normalization = "frontier" if str(self.preset).endswith("-frontier") else None
 
         if pipeline is not None:

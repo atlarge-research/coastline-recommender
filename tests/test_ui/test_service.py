@@ -1,25 +1,19 @@
 """Tests for the Coastline FastAPI service (``coastline.ui.app``).
 
-Run from the repo root with::
-
-    PYTHONPATH=coastline:coastline/common:kavier/src \
-    DATA_DIR=./trace-archive .venv/bin/python -m pytest coastline/api/tests -q
-
-These tests exercise the HTTP surface via ``fastapi.testclient.TestClient`` and the
-strategy-config loader in isolation. They never load the trained ML pickles:
-``/api/recommend`` is always invoked with ``prediction_model="kavier"`` (the analytical
-predictor), which is also the model's default. ``PolicyFactory.throughput_predictor``
-maps ``"kavier"`` to ``create_physics_driven()`` with no unpickling, so
-the data-driven artifacts (which segfault on this host) are never touched.
-
-Production code in ``coastline/api/main.py`` is not modified.
+The tests call the HTTP endpoints through ``fastapi.testclient.TestClient`` and the
+strategy-config loader on its own. They load no trained ML pickle (those segfault on some
+hosts): ``/api/recommend`` gets ``prediction_model="kavier"``, the analytical predictor and the
+default, which ``PolicyFactory.throughput_predictor`` maps to ``create_physics_driven()``.
 """
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 from fastapi.testclient import TestClient
 
+import coastline.sdk.predictors.performance.data_driven.ml_common as ml_common
 import coastline.ui.app as main
 from coastline.ui.app import _DEFAULT_STRATEGY_CONFIG, _load_strategy_config, app
 
@@ -56,9 +50,7 @@ def clean_strategy_env(monkeypatch):
         monkeypatch.delenv(key, raising=False)
 
 
-# --------------------------------------------------------------------------- #
 # /api/health
-# --------------------------------------------------------------------------- #
 
 
 def test_health_ok(client):
@@ -69,7 +61,7 @@ def test_health_ok(client):
     assert body["status"] == "healthy"
     # The lifespan ran, so the strategy config must be populated.
     assert body["strategy_config_loaded"] is True
-    # These keys are part of the documented health contract.
+    # The documented keys of the health response.
     assert set(body) >= {
         "success",
         "status",
@@ -90,16 +82,18 @@ def test_options_endpoint_lists_available_inputs(client):
 
 
 def test_version_endpoint_reports_a_version(client):
+    import coastline
+
     resp = client.get("/api/version")
     assert resp.status_code == 200
     body = resp.json()
     assert body["success"] is True and body["name"] == "coastline"
-    assert isinstance(body["version"], str) and body["version"]
+    # The installed package version (distribution coastline-recommender), which clients check.
+    assert body["version"] == coastline.__version__
+    assert client.get("/openapi.json").json()["info"]["version"] == coastline.__version__
 
 
-# --------------------------------------------------------------------------- #
 # RecommendRequest validation (pydantic model, no network)
-# --------------------------------------------------------------------------- #
 
 
 def test_unknown_predictor_is_rejected(client):
@@ -143,11 +137,51 @@ def test_batch_recommend_empty_workloads_is_422(client):
     assert resp.status_code == 422
 
 
-def test_batch_recommend_default_predictor_is_kavier(client):
-    """Omitting ``predictor`` from a batch request must default to 'kavier', not 'intelligent'.
+_BATCH_WORKLOAD = {
+    "llm_model": "mistral-7b-v0.1",
+    "fine_tuning_method": "full",
+    "gpu_model": "NVIDIA-A100-SXM4-80GB",
+    "tokens_per_sample": 1024,
+    "batch_size": 8,
+}
 
-    This guards the surface-alignment requirement: facade, batch API, and CSV endpoint
-    must all default to the same predictor so identical default calls return identical results.
+
+@pytest.mark.parametrize("path", ["/api/recommend/batch", "/api/jobs"])
+@pytest.mark.parametrize(
+    ("max_slowdown", "reason"),
+    [
+        ("0.5", "greater than or equal to 1"),
+        ("0.999", "greater than or equal to 1"),
+        ("1e999", "finite"),
+        ("NaN", "finite"),
+    ],
+)
+def test_batch_max_slowdown_the_library_rejects_is_422(client, path, max_slowdown, reason):
+    # The library needs a finite cap of at least 1; below 1 not even the fastest config meets it,
+    # and every row (or the background job) would fail.
+    raw = '{"workloads": [WORKLOAD], "predictor": "kavier", "max_slowdown": VALUE}'
+    raw = raw.replace("WORKLOAD", str(_BATCH_WORKLOAD).replace("'", '"')).replace("VALUE", max_slowdown)
+
+    resp = client.post(path, content=raw, headers={"content-type": "application/json"})
+
+    assert resp.status_code == 422
+    assert reason in resp.json()["error"]
+
+
+def test_batch_max_slowdown_of_one_is_accepted(client):
+    body = {"workloads": [_BATCH_WORKLOAD], "predictor": "kavier", "max_gpus": 8, "max_slowdown": 1}
+
+    resp = client.post("/api/recommend/batch", json=body)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["results"][0]["feasible"] is True
+
+
+def test_batch_recommend_default_predictor_is_kavier(client):
+    """A batch request without ``predictor`` uses 'kavier'.
+
+    The facade, batch API and CSV endpoint share this default, so the same call gives the same
+    result through each.
     """
     body_no_predictor = {
         "workloads": [
@@ -159,7 +193,7 @@ def test_batch_recommend_default_predictor_is_kavier(client):
                 "batch_size": 8,
             },
         ],
-        # predictor intentionally omitted — must pick up the kavier default
+        # no predictor, so the kavier default applies
         "max_gpus": 8,
     }
     body_explicit_kavier = {**body_no_predictor, "predictor": "kavier"}
@@ -177,7 +211,7 @@ def test_batch_recommend_default_predictor_is_kavier(client):
 
 
 def test_csv_endpoint_default_predictor_is_kavier(client):
-    """Omitting ``predictor`` from a CSV request must default to 'kavier'."""
+    """A CSV request without ``predictor`` uses 'kavier'."""
     csv_in = (
         "llm_model,fine_tuning_method,gpu_model,tokens_per_sample,batch_size\n"
         "mistral-7b-v0.1,full,NVIDIA-A100-SXM4-80GB,1024,8\n"
@@ -221,11 +255,11 @@ def test_recommend_runtime_is_dataset_scaled_and_has_rationale(client):
     assert resp.status_code == 200, resp.text
     payload = resp.json()
     top = payload["recommendation"]
-    # Runtime now follows the engine/facade convention (total_tokens / throughput), so the
-    # web /api/recommend agrees with coastline.recommend instead of diverging.
+    # Runtime follows the engine and facade convention (total_tokens / throughput), so
+    # /api/recommend agrees with coastline.recommend.
     total_tokens = 10000 * 3 * _KAVIER_BODY["tokens_per_sample"]  # dataset_size * epochs * tokens (defaults)
     assert top["predicted_runtime_seconds"] == pytest.approx(total_tokens / top["predicted_throughput"], rel=1e-6)
-    # Facade-parity: the response now carries the one-line rationale.
+    # Like the facade, the response carries the one-line rationale.
     assert isinstance(payload["rationale"], str) and "GPU" in payload["rationale"]
 
 
@@ -264,9 +298,8 @@ def test_async_job_unknown_id_is_404(client):
 
 
 def test_async_job_records_error_when_workload_raises(client, monkeypatch):
-    """A batch whose recommend raises (not a per-row feasible=False, but a hard
-    failure) lands the job in status='error' with the message captured — the worker
-    records the failure on the job rather than crashing the background thread."""
+    """When recommend raises for the whole batch, the job ends in status='error' with the
+    message; the worker records the failure on the job and the background thread keeps running."""
     import time
 
     import coastline
@@ -300,14 +333,12 @@ def test_async_job_records_error_when_workload_raises(client, monkeypatch):
             assert "synthetic recommend failure" in (state["error"] or "")
             assert state["result"] is None
             return
-        assert state["status"] != "done", "expected an error, not a completed job"
+        assert state["status"] != "done", "the job completed; expected an error"
         time.sleep(0.05)
     raise AssertionError("job never reached the error state")
 
 
-# --------------------------------------------------------------------------- #
-# /api/recommend/csv — row-cap (413) and invalid-goal (422) branches
-# --------------------------------------------------------------------------- #
+# /api/recommend/csv: row cap (413) and invalid goal (422)
 
 
 def test_recommend_csv_over_row_cap_is_413(client, monkeypatch):
@@ -323,9 +354,8 @@ def test_recommend_csv_over_row_cap_is_413(client, monkeypatch):
 
 
 def test_recommend_csv_value_error_is_422(client, monkeypatch):
-    """When ``coastline.recommend`` raises a ValueError/TypeError at the batch level
-    (bad shape / unknown knob), the CSV endpoint translates it to 422. Patched to
-    raise so the 422 branch is covered deterministically without ML loading."""
+    """A ValueError or TypeError from ``coastline.recommend`` for the whole batch (bad shape,
+    unknown option) becomes a 422. recommend is patched to raise, so no ML model loads."""
     import coastline
 
     def _raise(*args, **kwargs):
@@ -342,9 +372,8 @@ def test_recommend_csv_value_error_is_422(client, monkeypatch):
 
 
 def test_recommend_csv_invalid_goal_is_isolated_not_500(client):
-    """An unknown goal is isolated per-row by the facade (feasible=False + the goal
-    error in the row), so the endpoint returns 200 with a failed row — it does NOT
-    500 or silently drop the row. This pins the documented isolation contract."""
+    """The facade handles an unknown goal per row (feasible=False and the goal error in the row),
+    so the endpoint returns 200 and keeps the failed row."""
     csv_in = (
         "llm_model,fine_tuning_method,gpu_model,tokens_per_sample,batch_size\n"
         "mistral-7b-v0.1,full,NVIDIA-A100-SXM4-80GB,1024,8\n"
@@ -361,14 +390,12 @@ def test_recommend_csv_invalid_goal_is_isolated_not_500(client):
     assert "False" in payload["csv"]  # feasible=False column
 
 
-# --------------------------------------------------------------------------- #
-# /api/recommend/batch — over the 200-workload cap (422)
-# --------------------------------------------------------------------------- #
+# /api/recommend/batch: over the 200-workload cap (422)
 
 
 def test_recommend_batch_over_workload_cap_is_422(client):
-    """More than COASTLINE_MAX_BATCH_WORKLOADS (default 200) workloads trips the
-    pydantic max_length on the request body -> 422 (never reaching the recommender)."""
+    """More than COASTLINE_MAX_BATCH_WORKLOADS (default 200) workloads fails the pydantic
+    max_length on the request body with 422, before the recommender runs."""
     one = {
         "llm_model": "mistral-7b-v0.1",
         "fine_tuning_method": "full",
@@ -381,9 +408,7 @@ def test_recommend_batch_over_workload_cap_is_422(client):
     assert resp.status_code == 422
 
 
-# --------------------------------------------------------------------------- #
 # /api/recommend happy path (Kavier-only: no ML pickle loading)
-# --------------------------------------------------------------------------- #
 
 
 def test_recommend_kavier_returns_candidates(client):
@@ -400,7 +425,7 @@ def test_recommend_kavier_returns_candidates(client):
     assert payload["recommendation"] == candidates[0]
 
     top = payload["recommendation"]
-    # Serialized candidate contract from _serialize_candidate.
+    # Keys written by _serialize_candidate.
     assert set(top) >= {
         "rank",
         "total_gpus",
@@ -421,14 +446,29 @@ def test_recommend_kavier_returns_candidates(client):
 
 
 def test_recommend_unknown_gpu_returns_404_not_500(client):
-    """POST /api/recommend with an unknown gpu_model must return 404, not 500.
+    """POST /api/recommend with an unknown gpu_model returns 404.
 
-    Regression for UnsupportedGPUError (a RecommenderSystemError subclass) not
-    being caught by the handler's ValueError/RuntimeError arms, so it fell through
-    to the generic except-Exception->500 branch instead of the intended 404."""
+    UnsupportedGPUError is a RecommenderSystemError, outside the handler's ValueError and
+    RuntimeError branches; without its own branch it would reach the generic 500."""
     body = {**_KAVIER_BODY, "gpu_model": "NOT-A-REAL-GPU-XYZ"}
     resp = client.post("/api/recommend", json=body)
     assert resp.status_code == 404, f"Unknown GPU should be 404, got {resp.status_code}: {resp.text}"
+
+
+def test_recommend_with_a_model_the_install_lacks_returns_404_with_the_reason(client, monkeypatch, tmp_path, caplog):
+    """The dashboard lists every model, and the wheel leaves several model files out. Picking one
+    of those answers 404 with the message that says where to get the files, and logs no error."""
+    monkeypatch.setattr(ml_common, "PORTFOLIO_DIR", tmp_path)
+    monkeypatch.setattr(ml_common, "_BUNDLED_PORTFOLIO_DIR", tmp_path)
+    body = {**_KAVIER_BODY, "fine_tuning_method": "lora", "prediction_model": "knn"}
+
+    with caplog.at_level(logging.WARNING):
+        resp = client.post("/api/recommend", json=body)
+
+    assert resp.status_code == 404, resp.text
+    assert resp.json()["detail"].startswith("the knn model is not in this install.")
+    assert "PORTFOLIO_DIR" in resp.json()["detail"]
+    assert [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR] == []
 
 
 def test_recommend_min_gpu_strategy_kavier(client):
@@ -444,21 +484,19 @@ def test_recommend_min_gpu_strategy_kavier(client):
     assert len(payload["candidates"]) >= 1
 
 
-# --------------------------------------------------------------------------- #
 # _load_strategy_config fallback order
-# --------------------------------------------------------------------------- #
 
 
 def test_load_strategy_config_uses_repo_experiment_yaml(clean_strategy_env):
-    """With no env override, the shared resolver returns the repo's experiment.yaml — the one
-    canonical recommendation-policy config (there is no separate default.yaml/config.yaml)."""
+    """Without an env override the shared resolver returns the repo's experiment.yaml, the
+    recommendation-policy config."""
     from coastline.sdk.io import run_config
 
     experiment = run_config._CANONICAL_CONFIG
     assert experiment.is_file(), f"expected {experiment} to exist"
 
     config = _load_strategy_config()
-    # experiment.yaml declares multi_objective/balanced with an explicit predictors block.
+    # experiment.yaml declares multi_objective/balanced and a predictors block.
     assert config["strategy"]["name"] == "multi_objective"
     assert config["strategy"]["preset"] == "balanced"
     assert config["predictors"]["performance"] == "intelligent"
@@ -485,33 +523,29 @@ def test_load_strategy_config_builtin_default_when_no_files(tmp_path, monkeypatc
     assert config["strategy"]["name"] == "multi_objective"
 
 
-# ---------------------------------------------------------------------------
-# Infrastructure (component F) — sysadmin cap + UI feed + enforcement
-# ---------------------------------------------------------------------------
+# Infrastructure (component F): sysadmin cap, UI feed and enforcement
 
 
 def test_infrastructure_endpoint_serves_cluster_cap():
     """GET /api/infrastructure returns the sysadmin-declared cap.
 
-    Assert invariants rather than the sysadmin's exact numbers (which change when
-    the cluster is re-sized): a cluster can never advertise more GPUs than its
-    nodes × per-node capacity can physically hold, and the GPU the recommend/queue
-    tests drive (A100-SXM4-80GB) must be in the advertised catalog or those tests
-    would be exercising a GPU the cluster claims not to have.
+    The numbers change when the cluster is resized, so the test checks invariants: the total
+    fits in nodes x GPUs per node, and the A100-SXM4-80GB that the recommend and queue tests use
+    is in the catalog.
     """
     with TestClient(main.app) as client:
         resp = client.get("/api/infrastructure")
         assert resp.status_code == 200
         data = resp.json()
         assert data["success"] is True
-        # Physical capacity invariant: total budget fits in nodes × GPUs/node.
+        # The total budget fits in nodes x GPUs per node.
         assert data["total_gpus"] <= data["max_nodes"] * data["max_gpus_per_node"]
         # The queue/recommend tests all pin this GPU; it must be a real cluster type.
         assert "NVIDIA-A100-SXM4-80GB" in data["gpu_models"]
 
 
 def test_recommend_rejects_request_beyond_cluster_cap():
-    """A request beyond the advertised GPU cap is rejected with 400 (not silently capped)."""
+    """A request beyond the advertised GPU cap is rejected with 400 instead of being capped."""
     with TestClient(main.app) as client:
         infra = client.get("/api/infrastructure").json()
         too_many = infra["total_gpus"] + 1
@@ -532,9 +566,7 @@ def test_recommend_rejects_request_beyond_cluster_cap():
         assert "exceeds" in (resp.json().get("detail", "") or "").lower()
 
 
-# ---------------------------------------------------------------------------
-# Workload queue + admin (component I — FIFO scheduler harness)
-# ---------------------------------------------------------------------------
+# Workload queue and admin (component I, the FIFO scheduler harness)
 from coastline.ui import workload_queue as _wq  # noqa: E402
 
 
@@ -567,8 +599,8 @@ def test_queue_rejects_request_beyond_cluster_cap(_clear_queue):
 
 def test_admin_run_returns_per_job_and_total_metrics(_clear_queue):
     with TestClient(main.app) as client:
-        # Two 4-GPU jobs. The advertised cluster is 32 GPUs (>= 8), so both co-run
-        # from t=0 and the makespan is exactly the longer job's duration.
+        # Two 4-GPU jobs on the 32-GPU cluster run together from t=0, so the makespan is the
+        # longer job's duration.
         client.post("/api/queue", json={"num_gpus": 4, "predicted_duration_s": 10.0})
         client.post("/api/queue", json={"num_gpus": 4, "predicted_duration_s": 5.0})
         r = client.post("/api/admin/run")
@@ -576,12 +608,12 @@ def test_admin_run_returns_per_job_and_total_metrics(_clear_queue):
         data = r.json()
         assert data["totals"]["n_jobs"] == 2
         assert len(data["jobs"]) == 2
-        # Both fit simultaneously -> makespan = max(10, 5) = 10.
+        # Both fit at once: makespan = max(10, 5) = 10.
         assert data["totals"]["makespan_s"] == pytest.approx(10.0)
-        # Energy is scheduling-independent (sum over jobs). Neither job carried a
-        # Kavier power, so each uses the 350 W/GPU fallback. By hand:
-        #   (350*4*10 + 350*4*5) W·s = 14000 + 7000 = 21000 W·s
-        #   21000 / 3_600_000 = 0.0058333.. kWh
+        # Energy is the sum over jobs, whatever the schedule. Neither job has a Kavier power,
+        # so both use the 350 W/GPU fallback:
+        #   (350*4*10 + 350*4*5) J = 14000 + 7000 = 21000 J
+        #   21000 / 3_600_000 = 0.0058333 kWh
         assert data["totals"]["total_energy_kwh"] == pytest.approx(21000 / 3_600_000.0, rel=1e-9)
 
 
@@ -602,7 +634,7 @@ def test_admin_import_csv_accepts_operation_simulator_schema(_clear_queue):
         assert r.json()["imported"] == 2
         jobs = client.get("/api/queue").json()["jobs"]
         assert len(jobs) == 2
-        # duration_ms=5000 -> predicted_duration_s=5.0
+        # duration_ms=5000 gives predicted_duration_s=5.0
         assert any(abs(j["predicted_duration_s"] - 5.0) < 1e-6 for j in jobs)
 
 
@@ -614,9 +646,7 @@ def test_admin_import_rejects_malformed_csv(_clear_queue):
         assert "missing" in r.json().get("detail", "").lower()
 
 
-# ---------------------------------------------------------------------------
-# Kavier-power wiring for queue jobs + defensive oversized-job guard
-# ---------------------------------------------------------------------------
+# Kavier power for queue jobs and the oversized-job guard
 
 
 def test_queue_add_with_full_workload_config_attaches_kavier_power(_clear_queue):
@@ -640,7 +670,7 @@ def test_queue_add_with_full_workload_config_attaches_kavier_power(_clear_queue)
         job = r.json()["job"]
         p = job["predicted_power_watts_per_gpu"]
         assert p is not None, "Kavier per-GPU power should be populated"
-        # Loose physical bound: idle (~75 W) ≤ per-GPU draw ≤ TDP (~500 W).
+        # Loose physical bound: idle (about 75 W) <= per-GPU draw <= TDP (about 500 W).
         assert 50 <= p <= 500, f"unexpected per-GPU power {p}"
 
 
@@ -653,13 +683,13 @@ def test_queue_add_without_workload_config_uses_simulator_fallback(_clear_queue)
         assert r.status_code == 200
         assert r.json()["job"]["predicted_power_watts_per_gpu"] is None
         run = client.post("/api/admin/run").json()
-        # Fallback: 2 GPU × 350 W × 10 s = 7000 J -> 7000 / 3.6M kWh.
+        # Fallback: 2 GPUs x 350 W x 10 s = 7000 J = 7000 / 3.6e6 kWh.
         assert run["totals"]["total_energy_kwh"] == pytest.approx(7000 / 3_600_000.0, rel=1e-3)
 
 
 def test_admin_run_uses_kavier_power_when_present(_clear_queue):
     """Kavier per-GPU power on a job overrides the cluster-average constant in
-    the total-energy summary — energy = power × num_gpus × duration."""
+    the total-energy summary: energy = power x num_gpus x duration."""
     with TestClient(main.app) as client:
         client.post(
             "/api/queue",
@@ -711,9 +741,8 @@ def test_predict_runs_kavier_in_a_subprocess(client):
     assert payload["success"] is True
     results = payload["results"]
     assert len(results) == 1
-    # kavier is analytical (no pickle) -> available, and the worker only reports
-    # available=True after asserting predicted_throughput > 0, so a finite positive
-    # throughput must be present for this supported (model, GPU, method).
+    # kavier needs no pickle, so it is available; the worker reports available=True only after
+    # checking predicted_throughput > 0.
     assert results[0]["available"] is True
     assert results[0]["predicted_throughput"] > 0
     # Runtime is derived as total_tokens / throughput; cross-check the two reported
@@ -725,9 +754,8 @@ def test_predict_runs_kavier_in_a_subprocess(client):
 
 
 def test_queue_add_with_explicit_power_override_skips_kavier(_clear_queue):
-    """``predicted_power_watts_per_gpu`` in the request takes precedence over the
-    Kavier lookup (so a CSV-imported job's power, or a synthetic test value, is
-    honoured verbatim)."""
+    """``predicted_power_watts_per_gpu`` in the request takes precedence over the Kavier lookup,
+    so a power from a CSV import or a test is kept as given."""
     with TestClient(main.app) as client:
         r = client.post(
             "/api/queue",
@@ -745,10 +773,9 @@ def test_queue_add_with_explicit_power_override_skips_kavier(_clear_queue):
         assert r.json()["job"]["predicted_power_watts_per_gpu"] == 123.0
 
 
-def test_simulate_fifo_skips_oversized_jobs_defensively():
-    """A job needing more GPUs than the cluster has would block strict FIFO
-    forever; simulate_fifo defensively drops it and keeps the rest of the queue
-    schedulable."""
+def test_simulate_fifo_skips_oversized_jobs():
+    """simulate_fifo drops a job that needs more GPUs than the cluster has, since it would block
+    strict FIFO forever, and schedules the rest."""
     from coastline.ui import workload_queue as wq
 
     jobs = [
@@ -761,13 +788,11 @@ def test_simulate_fifo_skips_oversized_jobs_defensively():
 
 
 def test_simulate_fifo_head_of_line_blocking_exact_schedule():
-    """Two 4-GPU jobs on a 4-GPU cluster cannot co-run: strict FIFO serialises
-    them and the second waits for the first. Pin the exact deterministic
-    timeline so a regression in the head-of-line dispatch math is caught.
+    """Two 4-GPU jobs on a 4-GPU cluster cannot run together, so strict FIFO runs them in turn:
 
-      j1: arrival 0, dur 10  -> [0, 10], wait 0
-      j2: arrival 0, dur 5   -> [10, 15], wait 10  (blocked behind j1)
-      makespan = 15, avg_wait = (0 + 10) / 2 = 5, avg_jct = (10 + 15) / 2 = 12.5
+    j1: arrival 0, duration 10, runs [0, 10], waits 0
+    j2: arrival 0, duration 5, runs [10, 15], waits 10 (behind j1)
+    makespan = 15, avg_wait = (0 + 10) / 2 = 5, avg_jct = (10 + 15) / 2 = 12.5
     """
     from coastline.ui import workload_queue as wq
 
@@ -811,7 +836,7 @@ def test_admin_import_accepts_power_column_in_csv(_clear_queue):
     csv_text = (
         "submission_time,num_gpus,duration_s,power_watts_per_gpu\n"
         "0,2,10,400\n"
-        "5,1,5,\n"  # blank power → None (fallback)
+        "5,1,5,\n"  # blank power gives None (fallback)
     )
     with TestClient(main.app) as client:
         r = client.post("/api/admin/import", json={"csv": csv_text})
@@ -824,9 +849,7 @@ def test_admin_import_accepts_power_column_in_csv(_clear_queue):
         assert len(bare) == 1
 
 
-# ---------------------------------------------------------------------------
-# QueueAddRequest schema — Kavier-duration path
-# ---------------------------------------------------------------------------
+# QueueAddRequest schema: the Kavier duration path
 
 
 def test_queue_add_request_dataset_size_accepted_and_required_positive():
@@ -841,33 +864,27 @@ def test_queue_add_request_dataset_size_accepted_and_required_positive():
 
 
 def test_queue_add_request_predicted_duration_is_optional():
-    """Relaxed so a complete workload config can drive Kavier-duration prediction
-    without the caller having to supply a placeholder number."""
+    """predicted_duration_s is optional, so a complete workload config can have Kavier predict
+    the duration without a placeholder number."""
     from coastline.ui.app import QueueAddRequest
 
     req = QueueAddRequest(num_gpus=1)
     assert req.predicted_duration_s is None
 
 
-# ---------------------------------------------------------------------------
-# _kavier_predict — unified helper returning (power, duration)
-# ---------------------------------------------------------------------------
+# _kavier_predict: one helper returning (power, duration)
 
 
 def test_kavier_predict_power_is_bounded_and_independent_of_duration_inputs():
-    """Per-GPU power is a function of the workload + hardware only. Kavier is a
-    black-box analytical engine, so we assert the physical envelope and an
-    invariance property rather than pinning its exact watts (a snapshot).
+    """Per-GPU power depends on the workload and hardware alone.
 
-    * dataset_size / training_epochs are *duration-only* inputs; adding them must
-      leave the per-GPU power unchanged (the power leg never reads them).
-    * power must sit in the A100's physical envelope: idle (~50 W) .. SXM4 TDP
-      (400 W). This rejects a per-cluster-vs-per-GPU or a W-vs-mW unit regression
-      even though the exact value is engine-internal.
+    dataset_size and training_epochs affect only the duration, so adding them leaves the power
+    unchanged. The power lies in a loose A100 range (50 W idle to 500 W, above the 400 W SXM4
+    TDP), which catches cluster power or a W/mW mix-up without pinning Kavier's exact watts.
     """
     from coastline.ui.app import _kavier_predict
 
-    base = _kavier_predict(  # only the 5 base fields -> power, but no duration
+    base = _kavier_predict(  # the 5 base fields alone give power but no duration
         model="mistral-7b-v0.1",
         method="lora",
         gpu_model="NVIDIA-A100-SXM4-80GB",
@@ -875,7 +892,7 @@ def test_kavier_predict_power_is_bounded_and_independent_of_duration_inputs():
         batch_size=8,
         num_gpus=4,
     )
-    full = _kavier_predict(  # + duration inputs
+    full = _kavier_predict(  # plus the duration inputs
         model="mistral-7b-v0.1",
         method="lora",
         gpu_model="NVIDIA-A100-SXM4-80GB",
@@ -885,21 +902,20 @@ def test_kavier_predict_power_is_bounded_and_independent_of_duration_inputs():
         training_epochs=3,
         num_gpus=4,
     )
-    # Invariance: duration inputs do not perturb the power leg.
+    # The duration inputs leave the power unchanged.
     assert base.power_watts_per_gpu == pytest.approx(full.power_watts_per_gpu, rel=1e-9)
-    # Physical envelope for one A100 GPU (idle .. TDP), not a magic snapshot.
+    # Loose range for one A100 GPU, from idle to above TDP.
     assert 50.0 <= full.power_watts_per_gpu <= 500.0
-    # Duration requires dataset_size + epochs; the base-only call cannot produce one.
+    # A duration needs dataset_size and epochs, which the base-only call lacks.
     assert base.duration_seconds is None
     assert full.duration_seconds is not None and full.duration_seconds > 0
 
 
 def test_kavier_predict_duration_scales_linearly_with_epochs_and_dataset():
-    """Duration = dataset_size × training_epochs × tokens_per_sample / throughput,
-    and throughput depends only on (model, gpu, method, tokens, batch, num_gpus) —
-    never on dataset_size or training_epochs. So the two multiplicative token
-    factors scale duration *exactly* linearly. This pins the runtime formula's
-    units without snapshotting Kavier's raw throughput.
+    """Duration = dataset_size x training_epochs x tokens_per_sample / throughput.
+
+    The throughput depends on (model, gpu, method, tokens, batch, num_gpus) alone, so the
+    duration is linear in dataset_size and in training_epochs, whatever Kavier's throughput.
     """
     from coastline.ui.app import _kavier_predict
 
@@ -917,14 +933,14 @@ def test_kavier_predict_duration_scales_linearly_with_epochs_and_dataset():
 
     base = dur(10000, 3)
     assert base is not None and base > 0
-    # 2× epochs (throughput unchanged) -> exactly 2× total tokens -> 2× duration.
+    # Twice the epochs (same throughput) gives twice the tokens and twice the duration.
     assert dur(10000, 6) == pytest.approx(2.0 * base, rel=1e-9)
-    # 3× dataset_size -> exactly 3× duration, same reasoning.
+    # Three times the dataset_size gives three times the duration.
     assert dur(30000, 3) == pytest.approx(3.0 * base, rel=1e-9)
 
 
 def test_kavier_predict_returns_empty_when_base_field_missing():
-    """Missing any of the 5 base fields → both outputs None, no exception."""
+    """With any of the 5 base fields missing, both outputs are None and nothing raises."""
     from coastline.ui.app import _kavier_predict
 
     est = _kavier_predict(
@@ -940,8 +956,7 @@ def test_kavier_predict_returns_empty_when_base_field_missing():
 
 
 def test_kavier_predict_returns_empty_for_unsupported_model():
-    """A model Kavier doesn't have in its library returns the empty estimate,
-    not an exception."""
+    """A model missing from Kavier's library gives the empty estimate and does not raise."""
     from coastline.ui.app import _kavier_predict
 
     est = _kavier_predict(
@@ -958,17 +973,15 @@ def test_kavier_predict_returns_empty_for_unsupported_model():
     assert est.duration_seconds is None
 
 
-# ---------------------------------------------------------------------------
-# /api/queue — Kavier-duration overwrite + user/Kavier resolution + 422
-# ---------------------------------------------------------------------------
+# /api/queue: Kavier duration, user duration, and 422
 
 
 def test_queue_add_with_complete_config_overwrites_duration_with_kavier(_clear_queue):
-    """Full workload config → Kavier wins; the wrong user-supplied duration is
-    overwritten and the response advertises duration_source == 'kavier'."""
+    """With a full workload config Kavier's duration replaces the user-supplied one and the
+    response reports duration_source == 'kavier'."""
     body = {
         "num_gpus": 4,
-        "predicted_duration_s": 1.0,  # deliberately wrong
+        "predicted_duration_s": 1.0,  # a wrong duration
         "llm_model": "mistral-7b-v0.1",
         "fine_tuning_method": "lora",
         "gpu_model": "NVIDIA-A100-SXM4-80GB",
@@ -988,8 +1001,8 @@ def test_queue_add_with_complete_config_overwrites_duration_with_kavier(_clear_q
 
 
 def test_queue_add_without_complete_config_keeps_user_duration(_clear_queue):
-    """Without a complete config the user-supplied duration is honoured
-    verbatim and duration_source == 'user'."""
+    """Without a complete config the user-supplied duration is kept as given and
+    duration_source == 'user'."""
     with TestClient(main.app) as client:
         r = client.post("/api/queue", json={"num_gpus": 2, "predicted_duration_s": 30.0})
         assert r.status_code == 200, r.text
@@ -1005,9 +1018,7 @@ def test_queue_add_rejects_when_neither_duration_nor_config(_clear_queue):
         assert r.status_code == 422, r.text
 
 
-# ---------------------------------------------------------------------------
-# QueueJob — optional Kavier-config fields
-# ---------------------------------------------------------------------------
+# QueueJob: optional Kavier-config fields
 
 
 def test_queue_job_accepts_optional_kavier_config_fields():
@@ -1038,16 +1049,14 @@ def test_queue_job_accepts_optional_kavier_config_fields():
 
 
 def test_queue_add_persists_workload_config_fields_on_queuejob(_clear_queue):
-    """The /api/queue handler should store the user-supplied workload-config
-    fields on the QueueJob, not just consume them for the Kavier lookup. A
-    subsequent GET /api/queue returning gpu_model: null after the caller
-    supplied one would be surprising."""
+    """The /api/queue handler stores the user-supplied workload-config fields on the QueueJob as
+    well as using them for the Kavier lookup, so GET /api/queue returns them."""
     with TestClient(main.app) as client:
         client.post(
             "/api/queue",
             json={
                 "num_gpus": 4,
-                "predicted_duration_s": 60.0,  # bare config so user wins
+                "predicted_duration_s": 60.0,
                 "llm_model": "mistral-7b-v0.1",
                 "fine_tuning_method": "lora",
                 "gpu_model": "NVIDIA-A100-SXM4-80GB",
@@ -1070,9 +1079,8 @@ def test_queue_add_persists_workload_config_fields_on_queuejob(_clear_queue):
 
 
 def test_parse_csv_skips_zero_in_gt_zero_fields():
-    """A literal '0' in tokens_per_sample/dataset_size/epochs would otherwise
-    trip the gt=0 Pydantic constraint and 500 the whole import. _maybe_int
-    treats non-positive integers as missing so the row imports cleanly."""
+    """_maybe_int reads a non-positive tokens_per_sample, dataset_size or epochs as missing, so a
+    '0' does not fail the gt=0 Pydantic constraint and turn the whole import into a 500."""
     from coastline.ui.workload_queue import parse_csv
 
     csv_text = "submission_time,num_gpus,duration_s,tokens_per_sample,dataset_size,num_train_epochs\n0,1,5,0,0,0\n"
@@ -1084,9 +1092,7 @@ def test_parse_csv_skips_zero_in_gt_zero_fields():
     assert j.training_epochs is None
 
 
-# ---------------------------------------------------------------------------
-# parse_csv — standard trace column aliases
-# ---------------------------------------------------------------------------
+# parse_csv: standard trace column aliases
 
 
 def test_parse_csv_accepts_wt2_aliases():
@@ -1117,8 +1123,8 @@ def test_parse_csv_accepts_wt2_aliases():
 
 
 def test_parse_csv_skips_rows_with_blank_or_unparseable_duration():
-    """Rows with an empty duration_ms (jobs that never completed) are silently
-    skipped by the importer rather than 400-ing the whole batch."""
+    """The importer skips rows with an empty or unreadable duration_ms (jobs that never completed)
+    and imports the rest instead of returning 400."""
     from coastline.ui.workload_queue import parse_csv
 
     csv_text = (
@@ -1133,15 +1139,11 @@ def test_parse_csv_skips_rows_with_blank_or_unparseable_duration():
     assert [j.predicted_duration_s for j in jobs] == [5.0, 3.0]
 
 
-# ---------------------------------------------------------------------------
-# /api/admin/import — Kavier power on imported jobs + predict_durations flag
-# ---------------------------------------------------------------------------
+# /api/admin/import: Kavier power on imported jobs and the predict_durations flag
 
 
 def test_admin_import_attaches_kavier_power_to_supported_rows(_clear_queue):
-    """Closes the prior gap where bulk-imported jobs never had Kavier power
-    populated, even when the row's workload config was complete. After import
-    the queued job carries a per-GPU power."""
+    """An imported row with a complete workload config gets a Kavier per-GPU power."""
     csv_text = (
         "submission_time,num_gpus,duration_ms,model_name,method,gpu_model,"
         "tokens_per_sample,batch_size\n"
@@ -1157,14 +1159,13 @@ def test_admin_import_attaches_kavier_power_to_supported_rows(_clear_queue):
 
 
 def test_admin_import_predict_durations_overrides_csv_durations(_clear_queue):
-    """With predict_durations=true the importer replaces CSV durations on rows
-    whose workload config is complete, and leaves rows that don't qualify
-    alone (e.g. an unsupported model). The response also carries a count of
-    how many rows were Kavier-substituted."""
+    """With predict_durations=true the importer replaces the CSV duration of rows with a complete
+    workload config and keeps it for the others (here an unsupported model). The response counts
+    the replaced rows."""
     csv_text = (
         "submission_time,num_gpus,duration_ms,model_name,method,gpu_model,"
         "tokens_per_sample,batch_size,dataset_size,num_train_epochs\n"
-        # Supported: should get Kavier duration, NOT 1 ms.
+        # Supported: gets a Kavier duration in place of 1 ms.
         "0,1,1,mistral-7b-v0.1,lora,NVIDIA-A100-SXM4-80GB,1024,8,10000,3\n"
         # Unsupported model: should keep the 7000 ms CSV duration.
         "1,1,7000,not-a-real-model,lora,NVIDIA-A100-SXM4-80GB,1024,8,10000,3\n"
@@ -1188,10 +1189,8 @@ def test_admin_import_predict_durations_overrides_csv_durations(_clear_queue):
         assert unsupported["predicted_duration_s"] == pytest.approx(7.0)
 
 
-# ---------------------------------------------------------------------------
-# Cluster timeline (the Exp2/Exp4 figure data) — build_cluster_timeline + the
-# `timeline` block carried on /api/admin/run.
-# ---------------------------------------------------------------------------
+# Cluster timeline (the Exp2/Exp4 figure data): build_cluster_timeline and the
+# `timeline` block of /api/admin/run.
 
 
 def test_build_cluster_timeline_concurrent_jobs():
@@ -1273,8 +1272,8 @@ def test_admin_run_includes_cluster_timeline(_clear_queue):
 
 
 def test_admin_run_empty_queue_omits_timeline():
-    """No jobs → the early-return empty-run response carries no `timeline`
-    (the dashboard guards on `totals` before drawing)."""
+    """With no jobs the empty-run response has no `timeline` (the dashboard checks `totals`
+    before drawing)."""
     _wq.clear_jobs()
     with TestClient(main.app) as client:
         data = client.post("/api/admin/run").json()

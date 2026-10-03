@@ -1,8 +1,8 @@
-"""Phase-5 unification: both recommend surfaces share one goal/predictor vocabulary.
+"""Both recommend entry points share one goal and predictor vocabulary.
 
-``coastline.recommend(batch, ...) -> DataFrame`` and ``Coastline(...).recommend(wl, ...) -> objects``
-now take the same ``goal`` and ``predictor`` words, accept the same WorkloadSpec field-name keys,
-and reject the same typos.
+``coastline.recommend(batch, ...)``, which returns a DataFrame, and ``Coastline(...).recommend(wl, ...)``,
+which returns objects, take the same ``goal`` and ``predictor`` names, accept the WorkloadSpec field
+names as keys and reject the same typos.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import pytest
 import coastline
 from coastline.sdk.recommend.facade import Coastline
 
-# A minimal in-library workload in the WorkloadSpec field-name spelling that BOTH surfaces accept.
+# A known workload, keyed by WorkloadSpec field names.
 _WL = {
     "llm_model": "mistral-7b-v0.1",
     "fine_tuning_method": "lora",
@@ -28,8 +28,7 @@ def _facade() -> Coastline:
 
 
 def test_predictor_is_one_normalized_knob():
-    # `predictor` is the single spelling, positional or keyword, and normalizes case. Oracle:
-    # the stored key — all three forms must resolve to the same estimator.
+    # Positional or keyword, in any letter case, the predictor resolves to "kavier".
     assert (
         Coastline(predictor="kavier").predictor
         == Coastline(predictor="Kavier").predictor
@@ -48,10 +47,8 @@ def test_predictor_is_one_normalized_knob():
     ],
 )
 def test_goal_is_pure_sugar_for_explicit_strategy_preset(goal, strategy, preset):
-    # (strategy, preset) is hand-derived from the goal spec here, NOT read from the resolver under
-    # test. On the same grid, goal=g must pick exactly what passing that explicit pair picks. If
-    # goal_to_strategy_preset mapped a goal to the wrong pair, by_goal would diverge from this
-    # independent hand-written reference and the test goes red.
+    # The (strategy, preset) pairs are written out here. On the same grid, goal=g picks what
+    # its pair picks.
     c = _facade()
     by_goal = [(r.total_gpus, r.metadata["batch_size"]) for r in c.recommend(_WL, goal=goal, max_gpus=16)]
     kw = {"strategy": strategy, "max_gpus": 16}
@@ -62,9 +59,7 @@ def test_goal_is_pure_sugar_for_explicit_strategy_preset(goal, strategy, preset)
 
 
 def test_both_surfaces_accept_the_workloadspec_field_names():
-    # The one field-name vocabulary {llm_model, fine_tuning_method, gpu_model, ...} must work on
-    # BOTH surfaces — synonyms are gone, so field names are the only accepted spelling. Oracle: a
-    # feasible pick comes back from field-name-keyed input on each surface.
+    # Input keyed by WorkloadSpec field names gives a feasible pick on both entry points.
     frame = coastline.recommend([dict(_WL)], goal="balanced", predictor="kavier", feasibility="rules")
     objs = _facade().recommend(dict(_WL), goal="balanced")
     assert bool(frame.iloc[0]["feasible"]) and objs
@@ -75,9 +70,8 @@ def test_both_surfaces_accept_the_workloadspec_field_names():
     [({"goal": "no-such-goal"}, "unknown goal"), ({"predictor": "gpt5"}, "unknown predictor")],
 )
 def test_batch_isolates_unknown_goal_or_predictor_as_a_failed_row(bad, marker):
-    # The batch surface's contract is per-row isolation: a bad goal/predictor does not crash the
-    # call and is never silently defaulted — it yields one feasible=False row carrying the error.
-    # Oracle: count 1, the error names the problem, and no config is fabricated for the failed row.
+    # The batch API fails the row: one feasible=False row, with an error naming the problem
+    # and no config.
     frame = coastline.recommend([dict(_WL)], feasibility="rules", **bad)
     assert len(frame) == 1
     row = frame.iloc[0]
@@ -87,9 +81,8 @@ def test_batch_isolates_unknown_goal_or_predictor_as_a_failed_row(bad, marker):
 
 
 @pytest.mark.parametrize("bad", [{"goal": "no-such-goal"}, {"predictor": "gpt5"}])
-def test_facade_raises_loudly_on_unknown_goal_or_predictor(bad):
-    # The single-workload facade has no per-row batch to isolate into, so it fails loudly: the
-    # predictor is validated at construction, the goal at call time — both raise, not silently default.
+def test_facade_raises_on_unknown_goal_or_predictor(bad):
+    # The facade raises: the predictor is checked at construction, the goal at call time.
     with pytest.raises(ValueError):
         if "predictor" in bad:
             Coastline(**bad)

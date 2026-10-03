@@ -11,9 +11,8 @@
 .DS_Store
 *.egg-info
 **/runs
-# build outputs
+# Build outputs
 dist
 site
-# large artifacts (not in the wheel; the [ml] path mounts them instead)
+# Mounted at run time (docker-compose.yml)
 models
-# NOTE: docs/ is kept — Dockerfile.docs needs it.

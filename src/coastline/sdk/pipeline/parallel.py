@@ -1,27 +1,24 @@
 """Per-stage parallel execution over grid candidates.
 
-The pipeline runs its stages one after another with a barrier between them: each stage may split
-its candidates across worker processes and join before the next one starts. Ranking is a whole-set
-reduction (min-max over the feasible set, then a sort) and stays sequential — splitting it would
-need a merge costing more than the sort it replaces.
+The pipeline runs its stages in sequence. A stage may split its candidates across worker
+processes and joins them before the next stage starts. Ranking (min-max over the feasible set,
+then a sort) runs in one process, since splitting it would need a merge that costs more than
+the sort.
 
-In practice only two things fork: the simulation stage when its predictor is a data-driven model
-(2-53 ms a prediction), and the feasibility stage when its classifier cannot be batched. A batched
-classifier decides a whole chunk in one call, which beats forking by so much that forking on top of
-it is a wash — so it does not.
+Two stages fork: simulation when the predictor is a data-driven model, and feasibility when its
+classifier cannot be batched. A batched classifier judges a whole chunk in one call, and forking
+on top of that gains nothing.
 
-Two properties are load-bearing:
+Chunks are contiguous and results are joined in chunk order, so every candidate keeps its
+sequential position. ``rank_candidates`` can fall back to grid order on ties, so a reordering
+could change which config wins.
 
-* **Order.** Chunks are contiguous and results are concatenated in chunk order, so a candidate's
-  position is identical to the sequential path. ``rank_candidates`` breaks exact score ties by
-  grid insertion order, so any reordering would silently change which config wins.
-* **Worth it.** A stage forks only when its per-candidate work dominates the cost of shipping the
-  candidate to a worker. The AutoConf feasibility classifier (~3.3 ms/candidate) qualifies; the
-  divisibility ``rules`` backend and the analytical Kavier predictor (~2.6 us) do not — for those
-  the dispatch would cost more than the work, so they always run inline.
+A stage forks only when its per-candidate work outweighs sending the candidate to a worker. The
+AutoConf classifier does. The ``rules`` backend (two integer comparisons) and the analytical
+Kavier predictor do not and always run in this process.
 
-Processes, not threads: the GIL makes threads useless for the native predictors, and the ML
-backends are not safe to co-load in one interpreter anyway.
+Workers are processes because threads gain nothing for the native predictors under the GIL, and
+the ML backends cannot safely be loaded together in one interpreter.
 """
 
 from __future__ import annotations
@@ -42,34 +39,17 @@ T = TypeVar("T")
 RUNTIME_SECTION = "runtime"
 WORKERS_KEY = "parallel_workers"
 
-#: The CLI's default. The SDK default is 1: a library call must not silently move a caller's
-#: work into subprocesses, where monkeypatched modules and in-process globals do not follow.
+#: Default worker count of CLI commands. The SDK default is 1: a library call keeps the caller's
+#: work in its process, where the caller's monkeypatches and globals apply.
 DEFAULT_CLI_WORKERS = 4
 
-# How many candidates a stage needs before splitting it across processes wins. These are two
-# very different regimes, both measured on this machine:
-#
-# * A stage that costs per CANDIDATE -- the ML predictors (2-77 ms each), or the AutoConf
-#   classifier when batching is unavailable (~4.9 ms each) -- pays for a fork almost immediately:
-#   a handful of candidates already outweighs the ~1 ms of pickling a chunk.
-# * A stage that has already been BATCHED into one vectorised call is never worth forking, at any
-#   size. Splitting it pays the batched call's fixed cost k times over, and what is left per
-#   candidate is small enough that shipping the candidate to a worker cancels the gain exactly.
-#   Measured on the AutoConf gate at 840 / 3,360 / 7,680 / 15,360 candidates: 1.02x / 1.04x /
-#   1.03x / 1.03x at 4 workers -- flat, across an 18x range of grid sizes. On a small grid it is
-#   worse than flat: a 405-row trace with an 18-candidate grid went from 16.1 s sequential to
-#   20.4 s at 2 workers and 24.8 s at 8.
-#   The same gate with batching unavailable (an unmeasured model version, or the opt-out) is back
-#   in the per-candidate regime at ~4.9 ms a candidate, and there forking pays properly: 3.11x at
-#   840 candidates, 3.17x at 3,360.
+# Fewest candidates for which a stage is split across processes. A stage that pays per candidate
+# (an ML predictor, or AutoConf without batching) gains from forking after a few candidates. A
+# stage batched into one call never gains, since each chunk pays the call's fixed cost again.
 MIN_ITEMS_PER_ROW_STAGE = 8
 
-# Starting the pool is not free: a worker re-pays its model load before it can answer anything --
-# 0.57 s for catboost, 1.4-1.6 s for xgboost/lightgbm/knn/svr/random_forest, 2.3 s for the neural
-# net, and ~1.65 s for the AutoGluon feasibility model. Against per-call costs of 0.8-53 ms that
-# is a break-even of roughly 350-1,000 candidates for a worker that only ever serves one grid. The
-# pool is reused for the whole run, so a trace amortises it over every job, but the FIRST stage to
-# fork pays it alone -- so a cold pool has to see a much bigger stage before it is worth starting.
+# A new worker loads its model before it can answer. The pool is reused for the whole run, but the
+# first stage to fork pays that start-up alone, so starting a pool needs a larger stage.
 MIN_ITEMS_TO_START_A_POOL = 512
 
 
@@ -86,11 +66,10 @@ def pool_is_warm() -> bool:
 
 
 def plan_chunks(n_items: int, workers: int, min_items: int = MIN_ITEMS_PER_ROW_STAGE) -> int:
-    """How many chunks to split ``n_items`` into — 1 means "run inline".
+    """Number of chunks to split ``n_items`` into; 1 means run in this process.
 
-    ``min_items`` is the point where forking starts to pay for this stage; below it the dispatch
-    costs more than the work, so the stage runs in the calling process. While the pool is still
-    cold the bar is higher, because this stage would also be paying for every worker's model load.
+    Below ``min_items`` the dispatch costs more than the work. Before the pool exists the bar is
+    MIN_ITEMS_TO_START_A_POOL, since this stage would also pay for every worker's model load.
     """
     if not pool_is_warm():
         min_items = max(min_items, MIN_ITEMS_TO_START_A_POOL)
@@ -114,33 +93,30 @@ def chunk(items: Sequence[T], n_chunks: int) -> list[list[T]]:
 
 
 # --------------------------------------------------------------------------------------------
-# The pool: one per process, reused across every job and every stage.
+# The pool: one per process, shared by every job and stage.
 #
-# Each worker re-pays the AutoGluon feasibility model load (~1.65 s) once. A pool created per
-# recommendation would re-pay it per job, which on a 400-row trace costs far more than the fork
-# saves — so the pool is a module-level singleton, replaced only when the worker count changes
-# and otherwise left to the interpreter to reap.
+# Each worker loads the AutoGluon feasibility model once. A pool per recommendation would pay that
+# load for every job, which costs more than forking saves. The pool is replaced only when the
+# worker count changes; otherwise the interpreter cleans it up at exit.
 # --------------------------------------------------------------------------------------------
 
 
 class WorkerPoolFailure(RuntimeError):
-    """A worker process died. Its own type so the per-row isolation layers can let it through.
+    """A stage failed in a worker and again in this process.
 
-    ``batch_api.recommend`` and ``trace.recommend._recommend_row`` both wrap a row in
-    ``except Exception`` to stop one bad workload sinking a batch. A dead pool is not a bad
-    workload, and laundering it into "this predictor could not handle this job" would write a
-    plausible CSV that quietly is not the answer.
+    Its own type, so the per-row error handling of ``batch_api.recommend`` and
+    ``trace.recommend._recommend_row`` can tell a broken pool from a bad workload.
     """
 
 
 _POOL: Optional[ProcessPoolExecutor] = None
 _POOL_WORKERS = 0
-# Guards the check-shutdown-create sequence below. The pool is a module global reached from
-# FastAPI's threadpool as well as from a plain CLI run, so two callers could otherwise each
-# create one, or one could tear down the pool the other is still feeding.
+# Guards the check, shutdown and create steps below. The pool is a module global used from
+# FastAPI's threadpool as well as from a CLI run, so two callers could otherwise each create one,
+# or one could shut down the pool the other is still using.
 _POOL_LOCK = threading.Lock()
-# Set when a pool dies: the stage that died is recovered inline, and nothing forks again in this
-# process. Re-creating a pool that has just died tends to buy the same death at more cost.
+# Set when a pool dies. The failed stage is rerun in this process and nothing forks again, since
+# a new pool would likely die the same way.
 _FORKING_DISABLED = False
 
 
@@ -194,8 +170,8 @@ def map_chunks(
     """Run ``worker`` over ``payloads`` in the shared pool and concatenate results in order.
 
     ``worker`` must be a module-level function (the pool spawns, so it is pickled by name) taking
-    one payload and returning a list. A dead worker is a hard failure: the caller is told to re-run
-    sequentially rather than silently getting a different answer.
+    one payload and returning a list. If a worker dies, the chunks are rerun in this process;
+    WorkerPoolFailure is raised if that fails too.
     """
     pool = get_pool(workers)
     if pool is None:
@@ -203,11 +179,9 @@ def map_chunks(
     try:
         chunk_results = list(pool.map(worker, payloads))
     except BrokenProcessPool:
-        # Recover by doing the work here. Raising instead would be honest but useless: both
-        # callers wrap a row in `except Exception`, so the failure would be laundered into
-        # "this predictor could not handle this job" and the run would finish with a plausible
-        # CSV that is not the answer. Running the same chunks in this process gives exactly the
-        # sequential result, which is the guarantee the fork exists to preserve.
+        # Redo the work here. Both callers catch Exception per row, so a raised error would be
+        # reported as "this predictor could not handle this job". Running the same chunks in
+        # this process gives the sequential result.
         _retire_pool(pool)
         logger.warning(
             "a worker process died during the %s stage; finishing this stage in-process and "
@@ -216,7 +190,7 @@ def map_chunks(
         )
         try:
             return [item for payload in payloads for item in worker(payload)]
-        except Exception as inline_exc:  # the work itself is broken, not just the pool
+        except Exception as inline_exc:  # the work fails in this process too
             raise WorkerPoolFailure(
                 f"the {stage} stage failed in a worker and again in-process: {inline_exc}"
             ) from inline_exc
@@ -224,9 +198,8 @@ def map_chunks(
 
 
 # --------------------------------------------------------------------------------------------
-# Worker-side state. A spawned worker cannot receive the checker or the predictors themselves
-# (a loaded AutoGluon model is not picklable), so it rebuilds them from the config it is sent and
-# keeps them for the life of the process, keyed by that config.
+# Worker-side state. A loaded AutoGluon model cannot be pickled, so a worker rebuilds the checker
+# and predictors from the config it receives and keeps them for its lifetime, keyed by config.
 # --------------------------------------------------------------------------------------------
 
 _WORKER_CHECKERS: dict[str, Any] = {}
@@ -286,16 +259,15 @@ def run_feasibility(
     workloads: Sequence[Any],
     workers: int,
 ) -> list[Any]:
-    """Feasibility verdicts for every candidate, in order, forked when that is worth it.
+    """Feasibility verdicts for every candidate, in order, forked when that pays off.
 
-    Falls back to the inline path whenever forking cannot pay: a cheap backend, too few
-    candidates, one worker, or no predictor config to rebuild the checker from in the worker.
+    Runs in this process for a cheap or batching checker, too few candidates, one worker, or no
+    predictor config for the workers to rebuild the checker from.
     """
     from coastline.sdk.pipeline.feasibility import evaluate_chunk, is_expensive
 
-    # A checker that batches has already collapsed its per-candidate cost to the point where
-    # splitting it is a wash at every grid size measured, so it simply never forks. The same
-    # checker without batching is back in the per-candidate regime, where forking pays.
+    # A batching checker gained nothing from forking at any measured grid size (see
+    # MIN_ITEMS_PER_ROW_STAGE), so it never forks; the same checker without batching does.
     worth_forking = bool(predictor_config) and is_expensive(checker) and not _batches(checker)
     n_chunks = plan_chunks(len(workloads), workers, MIN_ITEMS_PER_ROW_STAGE) if worth_forking else 1
     if n_chunks <= 1:
@@ -322,11 +294,10 @@ def run_simulation(
     context: Any,
     workers: int,
 ) -> list[Any]:
-    """Predictions for every feasible candidate, in order, forked when that is worth it.
+    """Predictions for every feasible candidate, in order, forked when that pays off.
 
-    Only the data-driven models earn a fork: at 2-77 ms per prediction the dispatch is noise
-    beside the work. The analytical Kavier predictor (2.6 us) and the cache (4.6 us) are orders
-    of magnitude cheaper than the dispatch itself, so they always run inline.
+    Only the data-driven models fork, since a prediction costs far more than its dispatch. Kavier
+    and the cache cost far less than a dispatch and always run in this process.
     """
     from coastline.sdk.pipeline.workflow import simulate_chunk
 

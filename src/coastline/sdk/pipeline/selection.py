@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Optional
 
-# The closed-set vocabulary lives in one home (sdk/constants.py); re-exported here for callers.
+# Defined in sdk/constants.py and re-exported for callers.
 from coastline.sdk.constants import (  # noqa: F401
     PRESET_TO_POLICY,
     PRESET_WEIGHTS,
@@ -30,21 +30,19 @@ class EvaluatedCandidate:
     dominated: bool = False  # set by normalize_candidates in frontier mode; dominated configs are skipped at ranking
 
 
-#: How close two scores must be to count as tied. The weighted sum is min-max normalised over the
-#: feasible set, so several candidates routinely land within a hair of the top -- and an exact
-#: equality test would leave those decided by grid enumeration order.
+#: Score difference within which two candidates count as tied. The weighted sum is min-max
+#: normalized over the feasible set, so several candidates often land very close to the top; an
+#: exact comparison would leave their order to the grid enumeration.
 TIE_EPS = 0.01
 
 
 def tie_break_key(candidate: "EvaluatedCandidate") -> tuple:
-    """A total order over candidates the scorer cannot separate.
+    """Sort key for candidates the score cannot separate.
 
-    The score decides the ranking; this decides what happens when it cannot. Highest predicted
-    throughput first, then the fewest GPUs, then the smallest batch -- prefer the fastest, and
-    among equally fast configurations the one that asks least of the cluster. The last two terms
-    are not a preference, they are what makes this a TOTAL order: without them two candidates the
-    earlier terms cannot separate would be left in grid enumeration order, which is exactly the
-    kind of positional dependence that makes a result irreproducible.
+    Highest predicted throughput first, then the fewest GPUs, then the smallest batch: the
+    fastest configuration and, among equally fast ones, the one that uses the least of the
+    cluster. The node count and GPUs per node make the order total, so grid enumeration order
+    never decides.
     """
     return (
         -candidate.throughput,
@@ -63,25 +61,23 @@ def rank_candidates(
     beta: float = 0.5,
     top_k: int = 3,
 ) -> List[EvaluatedCandidate]:
-    """Sort feasible candidates by policy; energy/balanced/performance all use the same
-    weighted-sum scorer (α=power, β=time)."""
+    """Sort feasible candidates by policy. The energy, balanced and performance policies share
+    one weighted-sum score (alpha weights power, beta weights time)."""
     if not candidates:
         return []
 
     pool = [c for c in candidates if not c.dominated] or candidates  # drop dominated candidates before ranking
 
     if policy == SelectionPolicy.MIN_GPU:
-        # Fewest GPUs is this policy's whole point, so it leads; the shared tie-break settles
-        # everything under it (and its own first term, throughput, is what used to be here).
+        # Fewest GPUs first, then the shared tie-break.
         ranked = sorted(pool, key=lambda c: (c.total_gpus, *tie_break_key(c)))
         return ranked[: max(1, min(top_k, len(ranked)))]
 
     for c in pool:
         c.combined_score = alpha * c.power_score + beta * c.throughput_score
     ranked = sorted(pool, key=lambda c: c.combined_score, reverse=True)
-    # Candidates within TIE_EPS of the top score are treated as tied and ordered by the shared
-    # tie-break: highest throughput, fewest GPUs, smallest batch. Without it a flat score band
-    # collapses to whatever order the grid happened to enumerate.
+    # Candidates within TIE_EPS of the top score count as tied and are ordered by the shared
+    # tie-break (highest throughput, fewest GPUs, smallest batch).
     if ranked:
         top = ranked[0].combined_score
         leaders = [c for c in ranked if c.combined_score >= top - TIE_EPS]
@@ -91,12 +87,12 @@ def rank_candidates(
 
 
 def _power_cost(c: "EvaluatedCandidate") -> float:
-    """Total instantaneous power (W) = per-GPU watts × GPU count. Lower is better."""
+    """Total power [W]: per-GPU watts x GPU count. Lower is better."""
     return c.power * c.total_gpus
 
 
 def _time_cost(c: "EvaluatedCandidate") -> float:
-    """Runtime proxy = 1/throughput (work is config-invariant so cancels in min-max). Lower is better."""
+    """Runtime proxy: 1/throughput (the work is the same for all configs and cancels). Lower is better."""
     return (1.0 / c.throughput) if c.throughput > 0 else float("inf")
 
 
@@ -104,10 +100,10 @@ def normalize_candidates(
     candidates: List["EvaluatedCandidate"],
     mode: NormalizationMode = NormalizationMode.GRID,
 ) -> None:
-    """Populate throughput_score and power_score in [0,1] (higher=better).
+    """Set throughput_score and power_score in [0, 1], where higher is better.
 
-    Axes: power = per-GPU watts × total_gpus; time = 1/throughput (work cancels).
-    mode: ``grid`` = min-max over all feasible; ``frontier`` = drop dominated first.
+    Axes: power = per-GPU watts x total_gpus; time = 1/throughput (the work cancels).
+    mode ``grid``: min-max over all feasible candidates; ``frontier``: drop dominated ones first.
     """
     if not candidates:
         return

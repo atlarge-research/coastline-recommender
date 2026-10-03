@@ -1,6 +1,6 @@
-# Benchmark Service
+# Predictor benchmark
 
-Predictor benchmark suite comparing throughput and latency across all performance predictors.
+Compares the throughput and step-latency accuracy, and the prediction time, of the performance predictors.
 
 ## Run
 
@@ -16,4 +16,4 @@ PYTHONPATH=dev uv run python -m benchmark.main --kavier-only
 PYTHONPATH=dev uv run python -m benchmark.main --exclude-128gpu
 ```
 
-Results are written to `benchmark/results/` (e.g. `<timestamp>-results.csv`).
+Results are written to `dev/benchmark/results/` (by default `<timestamp>-results.csv`).

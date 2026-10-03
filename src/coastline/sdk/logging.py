@@ -11,14 +11,18 @@ def setup_logging(
     format_string: str = "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     date_format: str = "%Y-%m-%d %H:%M:%S",
 ) -> None:
-    """Configure the root logger and quiet noisy third-party loggers."""
+    """Configure the root logger and quiet noisy third-party loggers.
+
+    Records go to stderr, so stdout carries only a command's output (for example the
+    recommendation JSON of ``coastline recommend-job --config``).
+    """
     numeric_level = getattr(logging, level.upper(), logging.INFO)
 
     logging.basicConfig(
         level=numeric_level,
         format=format_string,
         datefmt=date_format,
-        stream=sys.stdout,
+        stream=sys.stderr,
         force=True,
     )
 

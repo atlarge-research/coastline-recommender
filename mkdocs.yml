@@ -1,23 +1,17 @@
 site_name: Coastline
-site_description: Recommender system for LLM fine-tuning workloads
-site_author: Radu Nicolae · AtLarge Research
+site_description: A context-aware recommender system for fine-tuning LLMs
+site_author: Radu Nicolae, Daniele Lotito, Alexandru Iosup
+site_url: https://atlarge-research.github.io/coastline-recommender/
 repo_url: https://github.com/atlarge-research/coastline-recommender
 repo_name: atlarge-research/coastline-recommender
-copyright: Coastline
+copyright: MIT License
 docs_dir: docs
 site_dir: site
 
-# Pages kept in docs/ for authoring but intentionally out of the published site.
-exclude_docs: |
-  guides/getting-started.md
-
 nav:
-  - Introduction: index.md
-  - Overview:
-      - Concepts: overview/concepts.md
-  - Guides:
-      - Installation: guides/installation.md
-      - CLI usage: guides/cli.md
+  - Coastline: index.md
+  - Usage: usage.md
+  - How a recommendation is made: recommendation.md
 
 theme:
   name: material
@@ -25,60 +19,30 @@ theme:
     - media: "(prefers-color-scheme: light)"
       scheme: default
       primary: teal
-      accent: amber
       toggle:
         icon: material/weather-night
         name: Switch to dark mode
     - media: "(prefers-color-scheme: dark)"
       scheme: slate
       primary: teal
-      accent: amber
       toggle:
         icon: material/weather-sunny
         name: Switch to light mode
   features:
-    - navigation.instant
-    - navigation.tracking
     - navigation.sections
-    - navigation.top
-    - navigation.footer
-    - toc.follow
     - content.code.copy
-    - content.code.annotate
-    - search.highlight
-    - search.suggest
   icon:
     repo: fontawesome/brands/github
 
 markdown_extensions:
-  - admonition
-  - attr_list
-  - md_in_html
-  - tables
   - footnotes
+  - tables
   - toc:
       permalink: true
-  - pymdownx.details
-  - pymdownx.highlight:
-      anchor_linenums: true
-  - pymdownx.inlinehilite
-  - pymdownx.snippets
-  - pymdownx.tabbed:
-      alternate_style: true
-  - pymdownx.arithmatex:
-      generic: true
-  - pymdownx.superfences:
-      custom_fences:
-        - name: mermaid
-          class: mermaid
-          format: !!python/name:pymdownx.superfences.fence_code_format
-
-extra_css:
-  - assets/extra.css
-
-extra_javascript:
-  - assets/mathjax.js
-  - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.snippets:
+      check_paths: true
 
 plugins:
   - search

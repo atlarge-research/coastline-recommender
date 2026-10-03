@@ -1,4 +1,4 @@
-"""Recommendation-quality harness: top-1 hit rate, regret, and Spearman rho vs. measured throughput."""
+"""Recommendation quality against measured throughput: top-1 hit rate, regret and Spearman rho."""
 
 from __future__ import annotations
 
@@ -83,7 +83,7 @@ def main() -> None:
     logging.disable(logging.WARNING)
     df = _load_trace()
     n_workloads = sum(len(g.drop_duplicates(subset=_CONFIG_KEYS)) >= 2 for _, g in df.groupby(_WORKLOAD_KEYS))
-    print(f"Recommendation quality over {len(df)} measured configs · {n_workloads} workloads (>=2 configs each)\n")
+    print(f"Recommendation quality over {len(df)} measured configs | {n_workloads} workloads (>=2 configs each)\n")
     res = pd.DataFrame([evaluate_predictor(df, k) for k in ("kavier", "cache", "intelligent")])
     pd.set_option("display.width", 200)
     print(res.round(4).to_string(index=False))

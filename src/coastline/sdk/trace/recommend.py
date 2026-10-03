@@ -1,25 +1,20 @@
 """Recommend a config for every job in a fine-tuning trace.
 
-Replaces the GPU layout columns and appends:
-- ``metadata.estimated_throughput_<method>`` — always written; the predicted
-  tokens/sec under the recommended config.
-- ``metadata.estimated_duration_<method>`` — written only when ``tot_tokens_col``
-  resolves to a non-null value for the row.
+Replaces the GPU layout columns and adds:
+- ``metadata.estimated_throughput_<method>``: predicted tokens/s under the recommended config,
+  always written.
+- ``metadata.estimated_duration_<method>``: written when the row's total token count is known.
+  With ``setup_time_col`` it is ``setup_time + tot_tokens / estimated_throughput``, otherwise
+  ``tot_tokens / estimated_throughput``.
 
-  When ``setup_time_col`` is also provided:
-    ``estimated_duration = setup_time + tot_tokens_col / estimated_throughput``
-  Otherwise (legacy):
-    ``estimated_duration = tot_tokens_col / estimated_throughput``
-
-``tot_tokens_col`` holds the config-independent total token count for the job
-(e.g. ``metadata.output.extrapolated_num_tokens``).
-``setup_time_col`` holds the per-job setup overhead
-(e.g. ``metadata.output.setup_time``), which is added back so the estimated
-duration matches the identity from ``add_auxiliary_information.py``:
+``tot_tokens_col`` holds the job's config-independent total token count (for example
+``metadata.output.extrapolated_num_tokens``). ``setup_time_col`` holds the per-job setup time
+(for example ``metadata.output.setup_time``); adding it back matches the identity in
+``add_auxiliary_information.py``:
   extrapolated_duration = setup_time + extrapolated_num_tokens / tps
 
-With ``--visual`` it also renders the operational cluster timeline (the recommended
-configs FIFO-scheduled — GPUs in use + jobs queued over time) to a PDF.
+With ``--visual`` the CLI also draws the cluster timeline of the recommended configs (FIFO
+schedule: GPUs in use and jobs queued over time) to a PDF.
 """
 
 from __future__ import annotations
@@ -32,39 +27,42 @@ import pandas as pd
 import coastline
 from coastline.sdk.constants import DEFAULT_BATCH_SIZES, FeasibilityMode
 from coastline.sdk.io.infrastructure import resolve_cluster_caps
+from coastline.sdk.policies import normalize_predictor
 from coastline.sdk.recommend.engine import StrategyCache
 
 logger = logging.getLogger(__name__)
 
-# --- trace schema column names (the one home; also imported by trace.to_runs) ---
+# Trace column names (also used by trace.to_runs).
 _MODEL = "metadata.model_name"
 _METHOD = "metadata.method"
 _GPU = "resources.gpu_model"
-_TOKENS = "metadata.tokens_per_sample"  # the int the user wants; nominal seq length is fine here
+_TOKENS = "metadata.tokens_per_sample"  # nominal sequence length
 _BATCH = "metadata.batch_size"
-_GPN = "resources.num_gpus_per_node"  # GPUs per node, never the cluster total
+_GPN = "resources.num_gpus_per_node"  # GPUs in each node of the job
 _NODES = "resources.num_nodes"
-# ground-truth work (config-independent): tokens the job actually processed
-# These are used ONLY for the fallback path (_unchanged) and legacy _job_total_tokens.
+# Measured outputs, used by _unchanged and by the legacy path of _job_total_tokens.
 _ACT_TPS = "metadata.output.train_tokens_per_second"
 _ACT_RUNTIME = "metadata.train_runtime"
-# observed job duration — the fallback when no recommendation can be made
+# observed job duration, used when no recommendation can be made
 _ACT_DURATION = "metadata.output.extrapolated_duration"
 
-# per-device batch provenance. Kavier's batch_size is PER-DEVICE (it multiplies by total GPUs
-# internally); metadata.batch_size is the TOTAL effective batch (= per_device × gpn × nodes).
-# VV needs the recommendation written to per_device_train_batch_size, with metadata.batch_size
-# recomputed from it. A trace is in "per-device mode" when either column is present.
+# Kavier's batch_size is per device (it multiplies by the GPU count itself); metadata.batch_size
+# is the total effective batch (per_device x gpn x nodes). VV reads the recommendation from
+# per_device_train_batch_size, and metadata.batch_size is recomputed from it. A trace is in
+# per-device mode when either of these columns is present.
 _REC_PER_DEVICE = "per_device_train_batch_size"  # write target for the recommended per-device batch
 _ORIG_PER_DEVICE = "metadata.orig_per_device_train_batch_size"  # seed fallback (original per-device)
 _PER_DEVICE_COLS = (_REC_PER_DEVICE, _ORIG_PER_DEVICE)
 
 _NO_TOT_TOKENS = None  # sentinel: tot_tokens_col not provided
 
+# Read with row[...] for every row, so a trace without one of them cannot be recommended at all.
+_IDENTITY_COLS = (_MODEL, _METHOD, _GPU)
+
 # coastline predictor keys for the trace's method names
 _METHOD_TO_PREDICTOR = {"kavier": "kavier", "tabpfn": "tabpfn", "xgb": "xgboost", "xgboost": "xgboost"}
 
-# reader-first output layout: the columns a human scans for, in this order
+# Output columns shown first, in this order.
 _FRONT_COLS = [
     "metadata.submission_time_issue_85_rescaled",
     _MODEL,
@@ -77,12 +75,11 @@ _FRONT_COLS = [
 
 
 def _tidy_columns(df: pd.DataFrame, throughput_col: str, duration_col: Optional[str]) -> pd.DataFrame:
-    """Put the decision columns first, then keep every other input column unchanged.
+    """Put the decision columns first and keep every other input column unchanged.
 
-    The recommender mutates only the columns it owns (the resource layout + the estimate
-    columns); every other input column — including flat launcher args like ``model_name_or_path``,
-    ``learning_rate``, ``optim`` — passes through verbatim, so a recommended row stays a complete,
-    launchable job spec (the workload-generator replayer needs the full original config).
+    Only the layout and estimate columns change. The others, including launcher arguments such as
+    ``model_name_or_path``, ``learning_rate`` and ``optim``, pass through as they are, so a
+    recommended row is still a complete job spec for the workload-generator replayer.
     """
     priority = [throughput_col]
     if duration_col:
@@ -101,17 +98,15 @@ def _as_int(value: Any) -> Optional[int]:
 def _job_total_tokens(row: pd.Series, tot_tokens_col: Optional[str]) -> Optional[float]:
     """Config-independent total token count for the job.
 
-    When ``tot_tokens_col`` is provided, reads that column directly — the caller is
-    responsible for pre-computing the value (e.g. max_seq_length × batch × steps).
-
-    Legacy fallback (``tot_tokens_col`` is None): derives the value from the measured
-    run outputs ``metadata.output.train_tokens_per_second × metadata.train_runtime``.
-    This requires output data and should not be used for forward predictions on new jobs.
+    With ``tot_tokens_col``, the value of that column, precomputed by the caller (for example
+    max_seq_length x batch x steps). Without it (legacy), the measured
+    ``metadata.output.train_tokens_per_second x metadata.train_runtime``, which needs output data
+    and does not suit predictions for new jobs.
     """
     if tot_tokens_col is not None:
         v = pd.to_numeric(row.get(tot_tokens_col), errors="coerce")
         return float(v) if pd.notna(v) and v > 0 else None
-    # legacy path — output columns required
+    # legacy path: needs the output columns
     tps = pd.to_numeric(row.get(_ACT_TPS), errors="coerce")
     rt = pd.to_numeric(row.get(_ACT_RUNTIME), errors="coerce")
     if pd.notna(tps) and pd.notna(rt) and tps > 0 and rt > 0:
@@ -125,6 +120,7 @@ def _kavier_can_predict(
     feasibility: str,
     max_gpus: int,
     strategy_cache: Optional[StrategyCache] = None,
+    gpus_per_node: Optional[int] = None,
 ) -> bool:
     """True when the kavier physics path yields a feasible config with a throughput."""
     try:
@@ -136,6 +132,7 @@ def _kavier_can_predict(
             top_k=1,
             feasibility=feasibility,
             strategy_cache=strategy_cache,
+            max_gpus_per_node=gpus_per_node,
         )
         if out.empty or not bool(out.iloc[0]["feasible"]):
             return False
@@ -149,9 +146,27 @@ def _infeasible_note(max_gpus: int, feasibility: str) -> str:
     cause = (
         "every config would run out of GPU memory (autoconf OOM check)"
         if feasibility == FeasibilityMode.AUTOCONF
-        else "no config passes the divisibility rules"
+        else "no config passes the structural feasibility guards"
     )
     return f"infeasible within {max_gpus} GPUs: {cause}"
+
+
+def _engine_error(out: pd.DataFrame) -> Optional[str]:
+    """The error text of the engine's top row, or None when it gives none."""
+    error = None if out.empty else out.iloc[0].get("error")
+    return error if isinstance(error, str) and error.strip() else None
+
+
+def _failure_note(out: pd.DataFrame, max_gpus: int, feasibility: str) -> str:
+    """Why the engine gave no recommendation for a row.
+
+    The infeasible note when no config in the grid passed the feasibility check (the engine's
+    "no feasible ..." errors), else the engine's own error, for example an unknown model.
+    """
+    error = _engine_error(out)
+    if error is None or "no feasible" in error:
+        return _infeasible_note(max_gpus, feasibility)
+    return f"no recommendation: {error}"
 
 
 def _observed_duration(row: pd.Series) -> Optional[float]:
@@ -164,19 +179,18 @@ def _observed_duration(row: pd.Series) -> Optional[float]:
 
 
 def _unchanged(keep: dict[str, Any], row: pd.Series, reason: str) -> dict[str, Any]:
-    """The job appears in the trace UNCHANGED: original config + observed duration.
+    """Keep the job with its original config and observed duration.
 
-    This keeps unrecommendable jobs in the cluster replay (the scheduler still
-    received them) instead of silently dropping them from the timeline.
+    Jobs without a recommendation stay in the cluster replay, since the scheduler received them.
     """
     keep["thr"] = None
     keep["dur"] = _observed_duration(row)
     tail = (
         "job kept unchanged (original config + observed duration)"
         if keep["dur"] is not None
-        else "job kept with the original config but NO observed duration — it will be missing from the timeline"
+        else "job kept with the original config but no observed duration, so it is missing from the timeline"
     )
-    keep["note"] = f"{reason} — {tail}"
+    keep["note"] = f"{reason} - {tail}"
     return keep
 
 
@@ -193,30 +207,21 @@ def _recommend_row(
     per_device_mode: bool = False,
     strategy_cache: Optional[StrategyCache] = None,
     workers: int = 1,
+    gpus_per_node: Optional[int] = None,
 ) -> dict[str, Any]:
-    """Recommend a layout for one trace row; fall back to the original layout on any failure.
+    """Recommend a layout for one trace row; keep the original layout on any failure.
 
-    ``max_gpus`` is the cluster GPU budget (from infrastructure.yaml or ``--cluster-gpus``): every
-    job is optimised within the SAME cluster ceiling, never past it, and never keyed off the job's
-    own submitted footprint (a trace never carries cluster size).
+    ``max_gpus`` is the cluster GPU budget and ``gpus_per_node`` the cluster's node width (from
+    infrastructure.yaml or the CLI flags); every job is optimized within them, whatever its own
+    footprint. ``tokens_col`` is the sequence-length column given to the predictor. The duration
+    uses ``tot_tokens_col`` (the legacy tps x runtime when None) plus ``setup_time_col`` if given.
 
-    ``tokens_col`` is the sequence-length column fed to the physics/ML predictor.
-    ``tot_tokens_col`` is the pre-computed total-token-count column used to compute
-    the duration estimate.  When None, duration is not computed (throughput only).
-    ``setup_time_col`` is an optional column holding per-job setup overhead.  When
-    provided, the duration formula is:
-        estimated_duration = setup_time + tot_tokens / throughput
-    matching the ``add_auxiliary_information.py`` identity exactly.
-
-    The returned dict carries:
-    - ``thr``:  predicted throughput (tok/s) under the recommended config, or None on failure.
-    - ``dur``:  estimated duration (s), or None when tot_tokens_col is absent/null.
-               Falls back to the legacy tps×runtime path only when tot_tokens_col is None.
-    - ``note``: None on full success; otherwise the reason the row was kept unchanged.
+    Returns a dict with the layout and batch keys, ``thr`` (predicted throughput [tokens/s], None
+    on failure), ``dur`` (estimated duration [s], None without a total token count) and ``note``
+    (None on success, else why the row was kept unchanged).
     """
-    # In per-device mode the recommendation is keyed off the real per-device batch and written
-    # back to per_device_train_batch_size. An UNCHANGED (non-recommended) row is left as-is: its
-    # original per_device and metadata.batch_size are preserved verbatim, never recomputed.
+    # In per-device mode the recommendation starts from the per-device batch and is written to
+    # per_device_train_batch_size. A row kept unchanged keeps its per-device and total batch.
     seed_pd = _as_int(row.get(_REC_PER_DEVICE)) or _as_int(row.get(_ORIG_PER_DEVICE))
     keep = {
         "nodes": row.get(_NODES),
@@ -231,8 +236,8 @@ def _recommend_row(
     gpn, nodes = _as_int(row.get(_GPN)), _as_int(row.get(_NODES))
     if not (tokens and batch and gpn and nodes):
         return _unchanged(keep, row, "no recommendation: missing/invalid workload fields")
-    # Kavier's batch_size is per-device; in per-device mode seed with the per-device value
-    # (the full DEFAULT_BATCH_SIZES sweep below overrides the seed anyway).
+    # Kavier's batch_size is per device, so per-device mode seeds with the per-device value (the
+    # DEFAULT_BATCH_SIZES sweep below replaces the seed).
     seed_batch = seed_pd if (per_device_mode and seed_pd) else batch
     wl = {
         "llm_model": str(row[_MODEL]),
@@ -245,13 +250,13 @@ def _recommend_row(
     def kavier_hint() -> str:
         if predictor == "kavier":
             return ""
-        if _kavier_can_predict(wl, goal, feasibility, max_gpus, strategy_cache):
-            return " — kavier CAN handle this workload: rerun with --method kavier"
+        if _kavier_can_predict(wl, goal, feasibility, max_gpus, strategy_cache, gpus_per_node):
+            return " - kavier can handle this workload: rerun with --method kavier"
         return ""
 
     try:
-        # Per-device mode sweeps the FULL per-device grid so the recommendation can move the
-        # per-device batch freely; legacy mode keeps the batch-API neighbourhood around the seed.
+        # Per-device mode sweeps all of DEFAULT_BATCH_SIZES; legacy mode uses the batch API's
+        # neighbours of the seed.
         sweep = {"batch_sizes": list(DEFAULT_BATCH_SIZES)} if per_device_mode else {}
         out = coastline.recommend(
             [wl],
@@ -263,15 +268,17 @@ def _recommend_row(
             lookup=lookup,
             strategy_cache=strategy_cache,
             workers=workers,
+            max_gpus_per_node=gpus_per_node,
             **sweep,
         )
         if out.empty or not bool(out.iloc[0]["feasible"]):
             hint = kavier_hint()
-            reason = (
-                f"'{predictor}' could not predict this workload{hint}"
-                if hint
-                else _infeasible_note(max_gpus, feasibility)
-            )
+            if hint:
+                error = _engine_error(out)
+                detail = f": {error}" if error else ""
+                reason = f"'{predictor}' could not predict this workload{detail}{hint}"
+            else:
+                reason = _failure_note(out, max_gpus, feasibility)
             return _unchanged(keep, row, reason)
         top = out.iloc[0]
         thr = top["throughput_tok_s"]
@@ -289,27 +296,26 @@ def _recommend_row(
         else:
             dur = None
         if dur is None and tot_tokens_col is not None:
-            # col was provided but this row has no value — warn but still write throughput
+            # column given but empty for this row: warn and still write the throughput
             logger.warning(
-                "row (%s): tot_tokens_col '%s' is null — throughput written, duration skipped",
+                "row (%s): tot_tokens_col '%s' is null - throughput written, duration skipped",
                 row.get(_MODEL, "?"),
                 tot_tokens_col,
             )
         elif dur is None and tot_tokens_col is None:
             # legacy path: no output data available
             logger.warning(
-                "row (%s): no tot_tokens_col and no measured tps/runtime — throughput written, duration skipped",
+                "row (%s): no tot_tokens_col and no measured tps/runtime - throughput written, duration skipped",
                 row.get(_MODEL, "?"),
             )
         rec_gpn = int(top["gpus_per_node"])
         rec_nodes = int(top["number_of_nodes"])
         rec_pd = _as_int(top["batch_size"])  # the engine treats batch_size as per-device
         if per_device_mode and rec_pd is None:
-            # never reinterpret the total batch as per-device — keep the row unchanged instead
-            return _unchanged(keep, row, f"'{predictor}' returned no batch size — kept unchanged")
-        # metadata.batch_size is the TOTAL effective batch. In per-device mode recompute it from
-        # the recommended per-device batch (invariant: total = per_device × gpn × nodes); in
-        # legacy mode keep the engine's recommended value.
+            # the total batch is not a per-device batch, so keep the row unchanged
+            return _unchanged(keep, row, f"'{predictor}' returned no batch size - kept unchanged")
+        # metadata.batch_size is the total effective batch. Per-device mode recomputes it as
+        # per_device x gpn x nodes; legacy mode keeps the engine's value.
         total_batch = (rec_pd * rec_gpn * rec_nodes) if per_device_mode else (rec_pd or batch)
         return {
             "nodes": rec_nodes,
@@ -320,7 +326,7 @@ def _recommend_row(
             "dur": dur,
             "note": None,
         }
-    except Exception as exc:  # one bad row must not sink the whole trace
+    except Exception as exc:  # one bad row does not stop the trace
         return _unchanged(keep, row, f"'{predictor}' failed ({type(exc).__name__}){kavier_hint()}")
 
 
@@ -339,49 +345,45 @@ def recommend_trace(
     setup_time_col: Optional[str] = None,
     workers: int = 1,
 ) -> pd.DataFrame:
-    """Recommend a layout per trace row, write the recommended-trace CSV, and return the DataFrame.
+    """Recommend a layout per trace row, write the recommended-trace CSV and return the DataFrame.
 
-    ``feasibility="autoconf"`` (default) runs the real AutoConf OOM check — it
-    fail-closes if AutoConf (the ``coastline[autoconf]`` extra) is
-    not installed (use ``COASTLINE_ALLOW_RULES_FALLBACK=1`` to suppress).  Pass
-    ``feasibility="rules"`` to use the divisibility-only path (no OOM check,
-    works on any install).
+    feasibility: ``"autoconf"`` (default) runs the AutoConf OOM check and raises if AutoConf (the
+        ``coastline[autoconf]`` extra) is missing, unless ``COASTLINE_ALLOW_RULES_FALLBACK=1``.
+        ``"rules"`` only checks for a positive GPU count and a per-device batch of at least 1.
+    lookup: measured-runs CSV (flat sfttrainer schema) for the ``cache`` and ``intelligent``
+        methods, or ``"default"`` for the small bundled lookup DB.
+    cluster_gpus, node_gpus: the GPU budget every job is optimized within (default:
+        ``infrastructure.yaml``). The cluster size is not read from the trace.
+    workers: processes per pipeline stage (1 runs in this process). The CLI takes it from
+        ``--workers`` or ``runtime.parallel_workers``.
+    tokens_col: the predictors' ``tokens_per_sample`` column (default
+        ``metadata.tokens_per_sample``), for example ``metadata.estimated_max_seq_length`` for the
+        real, shorter sequence length.
+    tot_tokens_col: each job's precomputed, config-independent total token count (for example
+        ``metadata.output.extrapolated_num_tokens``).
+    setup_time_col: each job's setup time (for example ``metadata.output.setup_time``).
 
-    ``lookup`` points the ``cache``/``intelligent`` methods at a measured-runs CSV
-    (flat sfttrainer schema), or ``"default"`` for the small bundled lookup DB.
-
-    ``cluster_gpus`` / ``node_gpus`` bound every job to the cluster: they resolve (with
-    ``infrastructure.yaml`` as the default) to the GPU budget each job is optimised within, so no
-    recommendation ever exceeds the cluster. The cluster size is never taken from the trace.
-
-    ``workers`` forks each pipeline stage's candidates across that many processes (1 =
-    sequential). The CLI resolves it from ``--workers`` or ``runtime.parallel_workers``.
-
-    ``tokens_col`` overrides the default ``metadata.tokens_per_sample`` column used as the
-    ``tokens_per_sample`` input to the physics/ML predictors. Override with e.g.
-    ``metadata.estimated_max_seq_length`` to feed the actual (shrunk) sequence length
-    instead of the nominal dataset max.
-
-    ``tot_tokens_col`` is the column holding the pre-computed config-independent total
-    token count for each job (e.g. ``metadata.output.extrapolated_num_tokens``).
-    ``setup_time_col`` is the column holding per-job setup overhead
-    (e.g. ``metadata.output.setup_time``).  When both are provided, the duration
-    formula is ``setup_time + tot_tokens / throughput``, matching the identity in
-    ``add_auxiliary_information.py``.  When only ``tot_tokens_col`` is given, the
-    legacy ``tot_tokens / throughput`` formula is used.  When neither is provided,
-    ``train_tokens_per_second × train_runtime`` is the fallback (requires output data).
-    In all cases ``metadata.estimated_throughput_<method>`` is always written.
+    The duration is ``setup_time + tot_tokens / throughput`` with both columns (the identity in
+    ``add_auxiliary_information.py``), ``tot_tokens / throughput`` with only ``tot_tokens_col``,
+    and the measured ``train_tokens_per_second x train_runtime`` without ``tot_tokens_col``
+    (needs output data). ``metadata.estimated_throughput_<method>`` is always written.
     """
-    total_gpus, _, _ = resolve_cluster_caps(cluster_gpus, node_gpus)
-    predictor = _METHOD_TO_PREDICTOR.get(method.lower(), method.lower())
+    # A wrong mode or method affects every row, so it raises here.
+    if feasibility not in {mode.value for mode in FeasibilityMode}:
+        raise ValueError(
+            f"unknown feasibility mode {feasibility!r}: expected one of {[mode.value for mode in FeasibilityMode]}"
+        )
+    predictor = normalize_predictor(_METHOD_TO_PREDICTOR.get(method.lower(), method.lower()))
+    total_gpus, gpus_per_node, _ = resolve_cluster_caps(cluster_gpus, node_gpus)
     df = pd.read_csv(input_csv, low_memory=False)
-    # Per-device mode when the trace carries a per-device batch column: recommend on the
-    # per-device batch and patch per_device_train_batch_size (VV's target) rather than the
-    # total-effective metadata.batch_size.
+    missing = [col for col in _IDENTITY_COLS if col not in df.columns]
+    if missing:
+        raise ValueError(f"{input_csv} is missing the trace column(s) {', '.join(missing)}")
+    # Per-device mode when the trace has a per-device batch column: recommend on the per-device
+    # batch and write per_device_train_batch_size, which VV reads.
     per_device_mode = any(c in df.columns for c in _PER_DEVICE_COLS)
-    # One strategy per distinct config instead of one per row: build_config derives
-    # grid.batch_sizes from the row's own batch size in legacy mode, so the cache keys on the
-    # config rather than hoisting a single strategy (which would be wrong there).
+    # One strategy per distinct config. In legacy mode build_config derives grid.batch_sizes from
+    # each row's batch size, so a single shared strategy would be wrong.
     strategy_cache = StrategyCache()
     recs = [
         _recommend_row(
@@ -397,6 +399,7 @@ def recommend_trace(
             per_device_mode=per_device_mode,
             strategy_cache=strategy_cache,
             workers=workers,
+            gpus_per_node=gpus_per_node,
         )
         for _, row in df.iterrows()
     ]
@@ -414,16 +417,15 @@ def recommend_trace(
     df[_GPN] = [r["gpn"] for r in recs]
     df[_BATCH] = [r["batch"] for r in recs]
     if per_device_mode:
-        # VV's patch target: the recommended per-device batch. metadata.batch_size above was
-        # already recomputed as per_device × gpn × nodes for recommended rows (invariant holds).
+        # The recommended per-device batch, which VV reads. metadata.batch_size above is already
+        # per_device x gpn x nodes for recommended rows.
         df[_REC_PER_DEVICE] = [r["per_device"] for r in recs]
     df[thr_col] = [r["thr"] for r in recs]
     df[dur_col] = [r["dur"] for r in recs]
     df["metadata.recommendation_note"] = [r["note"] for r in recs]
 
-    # Trace-linked uid: prefix successfully-recommended rows with the method name so the patched
-    # row is traceable to its source (VV convention "{METHOD}:{orig_uid}"); kept-unchanged rows
-    # (r["note"] set) retain the original uid.
+    # Recommended rows get the uid "{METHOD}:{orig_uid}" (the VV convention), which links them to
+    # the source row; rows kept unchanged (r["note"] set) keep their uid.
     _uid = "metadata.uid"
     if _uid in df.columns:
         prefix = f"{method.upper()}:"

@@ -10,6 +10,7 @@ import yaml
 
 from coastline.sdk.constants import EnergyBackend, SelectionPolicy, Strategy
 from coastline.sdk.io.run_config import builtin_default_config
+from coastline.sdk.io.sample_data import default_run_database_path
 from coastline.sdk.pipeline.feasibility import create_feasibility_checker
 from coastline.sdk.pipeline.workflow import GridWorkflowPipeline
 from coastline.sdk.policies.base import BaseStrategy
@@ -28,11 +29,11 @@ from coastline.sdk.predictors.performance.retrieval.cache_predictor import Retri
 
 logger = logging.getLogger(__name__)
 
-# The coastline repo root (src/coastline/sdk/policies/ -> parents[4]); holds config/.
+# The repo root (parents[4] of this file), which holds config/.
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 
-# Fallback when no config path given and no YAML found on disk — the one built-in default,
-# sourced from the bundled default_experiment.yaml (not a second hardcoded copy).
+# Used when no config path is given and no config file is found; read from the bundled
+# default_experiment.yaml.
 _BUILTIN_DEFAULT_CONFIG: dict = builtin_default_config()
 
 
@@ -41,15 +42,15 @@ class PolicyFactory:
 
     @staticmethod
     def _default_config_candidates() -> list:
-        """The one canonical config to try when none is supplied (env-overridable). Shared with
-        the CLI and UI so every door resolves to the same experiment.yaml."""
+        """The config file to try when none is given (EXPERIMENT_CONFIG overrides it). The CLI and
+        UI resolve the same experiment.yaml."""
         from coastline.sdk.io.run_config import default_experiment_path
 
         return [default_experiment_path()]
 
     @staticmethod
     def load_config(config_path: Optional[str] = None) -> dict:
-        # Explicit path: behave exactly as before (load it, errors propagate).
+        # A given path is loaded as is; errors propagate.
         if config_path is not None:
             with open(config_path, "r") as f:
                 config = yaml.safe_load(f)
@@ -101,21 +102,15 @@ class PolicyFactory:
 
     @staticmethod
     def _lookup_path(predictor_config: dict) -> Optional[Path]:
-        """Resolve ``predictors.lookup``: a measured-runs CSV path, or the literal
-        ``default`` for the repo's default lookup DB (jittered sfttrainer sample in
-        config/coastline_functionality/). None = the RetrievalPredictor's own
-        resolution ($DATA_DIR, then the bundled sample)."""
+        """Resolve ``predictors.lookup``: a measured-runs CSV path, or ``default`` for the small
+        lookup DB shipped in the package (a jittered sfttrainer sample), which also works from an
+        installed wheel. None leaves the choice to RetrievalPredictor ($DATA_DIR, then the
+        bundled sample)."""
         lookup = predictor_config.get("lookup")
         if not lookup:
             return None
         if str(lookup).strip().lower() == "default":
-            default = _REPO_ROOT / "config" / "coastline_functionality" / "run_database.csv"
-            if not default.exists():
-                raise FileNotFoundError(
-                    "the default run database (config/coastline_functionality/run_database.csv) "
-                    "is only available in a repo checkout — pass an explicit lookup CSV path"
-                )
-            return default
+            return default_run_database_path()
         path = Path(lookup)
         if not path.exists():
             raise FileNotFoundError(f"lookup CSV not found: {path}")
@@ -133,20 +128,22 @@ class PolicyFactory:
 
     @staticmethod
     def _resolve_simulation_predictor(name: str):
-        """The simulation model used on a cache miss (or directly as ``performance: <name>``):
-        Kavier physics or a named ML model. Never resolves to ``intelligent``/``cache`` — a
-        fallback that itself cached would nest a second lookup."""
-        if name in ("kavier", "physics", "physics_driven"):
+        """The model used on a cache miss: Kavier physics or a named ML model. ``intelligent`` and
+        ``cache`` are rejected, since they would nest a second lookup. Names are case-insensitive;
+        an unknown name raises ValueError listing the options, as for ``predictors.performance``."""
+        key = str(name).strip().lower()
+        if key in ("kavier", *_PREDICTOR_ALIASES):
             return create_physics_driven()
-        named = _build_named_ml_predictor(name)
+        named = _build_named_ml_predictor(key)
         if named is not None:
             return named
-        logger.warning("Unknown fallback model '%s'; using kavier", name)
-        return create_physics_driven()
+        raise ValueError(f"unknown fallback predictor {name!r}; choose from {['kavier', *_NAMED_ML_PREDICTORS]}")
 
     @staticmethod
     def throughput_predictor(predictor_config: dict):
-        performance_type = predictor_config.get("performance", "intelligent")
+        # Any letter case resolves; an unknown name raises instead of running another model.
+        # A missing or null key keeps the documented 'intelligent' default.
+        performance_type = normalize_predictor(predictor_config.get("performance") or "intelligent")
         lookup = PolicyFactory._lookup_path(predictor_config)
         if performance_type == "cache":
             return PolicyFactory._retrieval_predictor(predictor_config, lookup)
@@ -154,22 +151,17 @@ class PolicyFactory:
             return PolicyFactory._intelligent_throughput_predictor(predictor_config, lookup)
         if performance_type in ("kavier", "physics", "physics_driven"):
             return create_physics_driven()
-        # a specific data-driven model selected by name (catboost, xgboost, …)
-        named = _build_named_ml_predictor(performance_type)
-        if named is not None:
-            return named
-        logger.warning("Unknown predictor '%s'; using intelligent default", performance_type)
-        return PolicyFactory._intelligent_throughput_predictor(predictor_config, lookup)
+        # The remaining valid names are the data-driven models (catboost, xgboost, ...).
+        return _build_named_ml_predictor(performance_type)
 
     @staticmethod
     def _intelligent_throughput_predictor(predictor_config: dict, lookup: Optional[Path] = None):
-        # "intelligent" = an exact cache match (a real measured past run) when one exists for this
-        # configuration, else simulate with `fallback` (Kavier by default, or any model by name).
-        # A cache miss yields no prediction, so the composite falls through to the fallback per
-        # configuration.
+        # "intelligent": a measured past run when the cache has an exact match for the
+        # configuration, else the `fallback` model (Kavier by default, or any model by name).
         from coastline.sdk.predictors.performance.composite import CacheThenSimulatePredictor
 
-        fallback = predictor_config.get("fallback", "kavier")
+        # A missing or blank key keeps the Kavier default.
+        fallback = predictor_config.get("fallback") or "kavier"
         return CacheThenSimulatePredictor(
             cache=PolicyFactory._retrieval_predictor(predictor_config, lookup),
             fallback=PolicyFactory._resolve_simulation_predictor(fallback),
@@ -195,8 +187,8 @@ class PolicyFactory:
             throughput_predictor=throughput,
             power_predictor=power,
             feasibility_checker=feasibility,
-            # Built from this very predictors block, so a worker rebuilding from it gets the
-            # same objects and the stages may fork.
+            # Built from this predictors block, so workers can rebuild the same components and
+            # the stages may fork.
             components_from_config=True,
         )
         return MinGPUStrategy(pipeline=pipeline)
@@ -219,27 +211,25 @@ class PolicyFactory:
             alpha = strategy_config.get("alpha")
             beta = strategy_config.get("beta")
 
-        # One-sided weight: derive complement so it isn't silently dropped in favour of the preset.
+        # Only one weight given: derive the other as 1 - weight, so the preset does not replace it.
         if alpha is not None and beta is None:
             beta = max(0.0, 1.0 - float(alpha))
             logger.warning(
-                "multi_objective: only alpha=%s was set; deriving beta=%s (=1-alpha). "
-                "Set both to control the split explicitly.",
+                "multi_objective: only alpha=%s was set; deriving beta=%s (=1-alpha). Set both to choose the split.",
                 alpha,
                 beta,
             )
         elif beta is not None and alpha is None:
             alpha = max(0.0, 1.0 - float(beta))
             logger.warning(
-                "multi_objective: only beta=%s was set; deriving alpha=%s (=1-beta). "
-                "Set both to control the split explicitly.",
+                "multi_objective: only beta=%s was set; deriving alpha=%s (=1-beta). Set both to choose the split.",
                 beta,
                 alpha,
             )
 
         weights_set = alpha is not None and beta is not None
 
-        # Explicit alpha/beta wins over any preset; warn so the author knows the preset was dropped.
+        # Given alpha and beta override any preset; warn that the preset is ignored.
         effective_preset = preset if preset is not None else yaml_preset
         if weights_set and effective_preset is not None:
             logger.warning(
@@ -251,7 +241,7 @@ class PolicyFactory:
             )
             preset = None
 
-        # Only fall back to a preset when no weights were supplied.
+        # Use a preset only when no weights were given.
         if preset is None and not weights_set:
             preset = strategy_config.get("preset", "balanced")
 
@@ -268,9 +258,9 @@ class PolicyFactory:
 
 @dataclass(frozen=True)
 class _DedicatedModel:
-    """A named model with its own predictor class — a distinct runtime (tabpfn,
-    deep_learning) or a return_std path (gaussian_process, bayesian_ridge). Imported
-    lazily so an unused ML runtime is never pulled in."""
+    """A named model with its own predictor class: a separate runtime (tabpfn, deep_learning)
+    or a return_std path (gaussian_process, bayesian_ridge). Imported lazily, so unused ML
+    runtimes are not loaded."""
 
     module: str
     cls: str
@@ -282,10 +272,10 @@ class _DedicatedModel:
         return getattr(module, self.cls)()
 
 
-# Every data-driven predictor, keyed by public name. The six portfolio models share
-# SklearnPortfolioPredictor and differ ONLY in this table (the metadata hyperparameters
-# they surface + whether categoricals are native); the rest keep their own class.
-# Module-level so list_predictor_names() can advertise them without importing any ML runtime.
+# Every data-driven predictor by public name. The six portfolio models share
+# SklearnPortfolioPredictor and differ only in this table (the hyperparameters reported in
+# metadata and whether categoricals are native); the others have their own class. Defined at
+# module level so list_predictor_names() needs no ML runtime.
 _GRADIENT_BOOSTING = Const("algorithm", "gradient_boosting")
 _NAMED_ML_PREDICTORS: dict[str, Union[PortfolioModel, _DedicatedModel]] = {
     "catboost": PortfolioModel(
@@ -347,9 +337,8 @@ _PREDICTOR_ALIASES: frozenset[str] = frozenset({"physics", "physics_driven"})
 
 
 def normalize_predictor(name: str) -> str:
-    """Lowercase a public predictor spelling to its key and validate it, so a typo fails loudly
-    (listing the options) rather than silently falling back to the default. The single validator
-    shared by the facade and the batch API."""
+    """Lowercase a predictor name and validate it; an unknown name raises ValueError listing the
+    options. Used by the facade and the batch API."""
     key = str(name).strip().lower()
     if key not in set(list_predictor_names()) | _PREDICTOR_ALIASES:
         raise ValueError(f"unknown predictor {name!r}; choose from {list(list_predictor_names())}")
@@ -357,7 +346,7 @@ def normalize_predictor(name: str) -> str:
 
 
 def _build_named_ml_predictor(name: str):
-    """Construct a data-driven predictor by name, or None if unknown. Lazy import avoids pulling all ML runtimes."""
+    """Build a data-driven predictor by name, or None if unknown. Imports only that model's runtime."""
     spec = _NAMED_ML_PREDICTORS.get(name)
     if spec is None:
         return None

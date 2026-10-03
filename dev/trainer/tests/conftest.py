@@ -1,10 +1,7 @@
-"""Shared fixtures / helpers for the trainer unit tests.
+"""Fixtures and helpers for the trainer unit tests.
 
-These tests exercise the *pure* logic in the trainer's ``common`` module (feature
-engineering, splitting, target transforms, conditional artifact save) using
-small synthetic frames. They deliberately do NOT load the large real model
-pickles — unpickling the XGBoost artifacts can segfault on host — nor do they
-train any model, so the suite stays fast and deterministic.
+The tests run on small synthetic frames. They load no real model pickles
+(unpickling the XGBoost artifacts can segfault on the host) and train no models.
 """
 
 from __future__ import annotations
@@ -15,20 +12,17 @@ import pytest
 
 from .. import common as C
 
-# A couple of keys that are known to exist in Kavier's spec libraries
-# (verified against kavier/src/library/{llm,gpu}.py). Used to assert the
-# feature-parity augmentation actually pulls real specs rather than NaN.
+# Names present in Kavier's spec libraries, used to check that real spec values get attached.
 KNOWN_LLM = "mistral-7b-v0.1"
 KNOWN_GPU = "NVIDIA-A100-SXM4-80GB"
 
 
 def make_synthetic_options(n: int = 200, seed: int = 0) -> pd.DataFrame:
-    """Build a synthetic stand-in for the curated training CSV.
+    """Synthetic stand-in for the curated training CSV.
 
-    Columns mirror the curated CSV schema that ``load_and_preprocess_data``
-    reads: the two targets, the base categorical/numeric inputs, plus a few
-    raw columns the engineering step consumes (``model_name``, ``torch_dtype``,
-    ``enable_roce``, ``is_valid``).
+    It has the columns ``load_and_preprocess_data`` reads: the two targets, the
+    base inputs, and the raw columns used in feature engineering (``model_name``,
+    ``torch_dtype``, ``enable_roce``, ``is_valid``).
     """
     rng = np.random.default_rng(seed)
     models = [KNOWN_LLM, "granite-3.1-3b-a800m-instruct", "mixtral-8x7b-instruct-v0.1"]
@@ -63,8 +57,7 @@ def synthetic_options() -> pd.DataFrame:
 
 @pytest.fixture()
 def patched_data_path(tmp_path, monkeypatch, synthetic_options):
-    """Point ``common.DATA_PATH`` at a synthetic CSV so the real (large) curated
-    file is never required for the load/preprocess tests."""
+    """Point ``common.DATA_PATH`` at a synthetic CSV so the load tests do not need the real curated file."""
     csv = tmp_path / "synthetic_options.csv"
     synthetic_options.to_csv(csv, index=False)
     monkeypatch.setattr(C, "DATA_PATH", csv)
@@ -72,10 +65,9 @@ def patched_data_path(tmp_path, monkeypatch, synthetic_options):
 
 
 class StubWorkload:
-    """Duck-typed stand-in for ``coastline_common`` WorkloadSpec.
+    """Duck-typed stand-in for ``WorkloadSpec``.
 
-    ``workload_to_ml_feature_row`` only uses attribute access, so we avoid
-    importing/constructing the real Pydantic model to keep the unit isolated.
+    ``workload_to_ml_feature_row`` only reads attributes, so the Pydantic model is not needed.
     """
 
     def __init__(
@@ -98,8 +90,8 @@ class StubWorkload:
         self.gpus_per_node = gpus_per_node
         self.tokens_per_sample = tokens_per_sample
         self.batch_size = batch_size
-        # Optional attributes are accessed via getattr(..., None); only set
-        # them when requested so we can test the "missing attribute" branch.
+        # The optional attributes are read with getattr(..., None); leaving them
+        # unset tests the missing-attribute branch.
         if set_optional:
             self.torch_dtype = torch_dtype
             self.enable_roce = enable_roce

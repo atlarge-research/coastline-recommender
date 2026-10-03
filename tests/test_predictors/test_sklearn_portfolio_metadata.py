@@ -1,16 +1,10 @@
-"""Characterization tests for the sklearn-style portfolio predictors' metadata contract.
+"""Tests for the metadata of the six featv3 portfolio predictors (catboost, xgboost, lightgbm,
+random_forest, svr, knn).
 
-The six featv3 portfolio models (catboost, xgboost, lightgbm, random_forest, svr, knn)
-share one inference path; their ONLY per-model difference is the ``metadata`` dict
-``predict()`` stamps. These tests pin that dict EXACTLY (keys, values, and order) for
-each model, driving the real ``_load`` + ``predict`` through a FAKE pickle (no native
-runtime, no real artifact) so they run in the default suite — the real-pickle contract
-lives in ``test_ml_predictors.py`` (``-m ml_isolated``, own process).
-
-They are written to survive the collapse of the six per-model classes into one generic
-``SklearnPortfolioPredictor``: construction goes through the production resolver
-(``_build_named_ml_predictor``), and the metadata oracle is the documented dict, not an
-implementation detail — so the same file is green before and after the refactor.
+They share one inference path and differ only in the ``metadata`` dict ``predict()`` writes.
+The tests check that dict's keys, values and order for each model, running the real ``_load``
+and ``predict`` on a fake pickle, so no native runtime or real model file is needed. The tests
+with real model files are in ``test_ml_predictors.py`` (``-m ml_isolated``).
 """
 
 import pickle
@@ -27,8 +21,8 @@ _MISSING = object()
 
 
 class _FakeModel:
-    """Returns a fixed log-space prediction, ignoring X. Two targets -> (throughput,
-    runtime) dual output; one target -> throughput only (runtime None)."""
+    """Returns a fixed log-space prediction and ignores X. Two targets give (throughput, runtime);
+    one target gives throughput only (runtime None)."""
 
     def __init__(self, values):
         self._values = values
@@ -72,10 +66,10 @@ def _fake_artifacts(best_params, *, dual=True, oob_score=_MISSING):
 
 
 def _predict(monkeypatch, tmp_path, name, artifacts, workload, context):
-    """Build the named predictor via the production resolver and drive its real
-    _load + predict against a faked pickle."""
-    # catboost's _load aliases a legacy dev-trainer module for the pickle; pre-register
-    # both keys through monkeypatch so the alias is a no-op AND is restored (no sys.modules leak).
+    """Build the named predictor with the production resolver, with ``pickle.load`` faked to
+    return ``artifacts``."""
+    # catboost's _load aliases a legacy dev-trainer module for the pickle. Registering both keys
+    # through monkeypatch makes the alias a no-op and restores sys.modules afterwards.
     monkeypatch.setitem(sys.modules, "trainer", types.ModuleType("trainer"))
     shim = types.ModuleType("trainer.train_performance_catboost")
     shim._DualOutputCatBoost = object
@@ -105,7 +99,7 @@ _FULL_PARAMS = {
     "knn__p": 2,
 }
 
-# name -> (expected metadata dict for a dual-output prediction, oob_score to inject).
+# name: (expected metadata for a dual-output prediction, oob_score to inject).
 _EXPECTED = {
     "xgboost": (
         {
@@ -190,7 +184,7 @@ def test_metadata_dict_is_exact_including_order(monkeypatch, tmp_path, name, kno
     assert predictor.get_name() == name
     p = predictor.predict(known_workload, a100_context)
     assert p is not None
-    # Exact dict AND key order (downstream JSON serialization depends on order).
+    # The dict and its key order (downstream JSON serialization depends on order).
     assert list(p.metadata.items()) == list(expected_metadata.items())
     # finalize_ml_prediction copies the GPU layout off the WorkloadSpec: 8 * 2 = 16.
     assert (p.gpus_per_node, p.number_of_nodes, p.total_gpus) == (8, 2, 16)

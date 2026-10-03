@@ -1,7 +1,7 @@
-"""Run one predictor in an isolated process.
+"""Run one predictor in a separate process.
 
-Several native ML runtimes (catboost + xgboost + lightgbm + torch) in one process crash
-on macOS; a subprocess per model keeps exactly one native runtime per process.
+Several native ML runtimes (catboost, xgboost, lightgbm, torch) in one process crash on macOS,
+so each model runs in its own subprocess.
 """
 
 from __future__ import annotations
@@ -49,9 +49,8 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
         return {**entry, "available": False}
 
     throughput = float(pred.predicted_throughput)
-    # EST. TIME: derive from predicted throughput + total_tokens (same as recommender) so
-    # it's apples-to-apples across predictors; a predictor's own predicted_runtime_seconds
-    # refers to a different historical dataset size.
+    # Runtime from throughput and total_tokens, as in the recommender, so all predictors use the
+    # same dataset size; a predictor's own predicted_runtime_seconds is for a historical run.
     if throughput > 0 and total_tokens > 0:
         runtime = total_tokens / throughput
     elif pred.predicted_runtime_seconds:
@@ -76,9 +75,8 @@ def run_one(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 if __name__ == "__main__":
-    # CLI: read one JSON payload on stdin, emit the JSON result on stdout.
-    # Library/import chatter (e.g. the MPS banner) is sent to stderr so it can't
-    # corrupt the JSON on stdout.
+    # Read one JSON payload from stdin and write the JSON result to stdout. Library output
+    # (e.g. the MPS banner) goes to stderr so it cannot corrupt the JSON.
     import json
     import sys
 

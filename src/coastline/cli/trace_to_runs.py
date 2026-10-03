@@ -1,10 +1,10 @@
-"""`coastline utils trace-to-runs` — convert a fine-tuning trace CSV to the flat measured-runs schema."""
+"""`coastline utils trace-to-runs`: convert a fine-tuning trace CSV to the flat measured-runs schema."""
 
 from __future__ import annotations
 
 from typing import Optional, Sequence
 
-from coastline.cli._shared import FriendlyParser
+from coastline.cli._shared import FriendlyParser, report_errors
 
 
 def _build_parser() -> FriendlyParser:
@@ -21,10 +21,12 @@ def _build_parser() -> FriendlyParser:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
-    args = _build_parser().parse_args(argv)
+    parser = _build_parser()
+    args = parser.parse_args(argv)
     from coastline.sdk.trace.to_runs import trace_to_runs
 
-    df = trace_to_runs(args.input, args.output)
+    with report_errors(parser):
+        df = trace_to_runs(args.input, args.output)
     valid = int(df["is_valid"].sum()) if "is_valid" in df.columns else len(df)
     print(f"wrote {args.output}: {len(df)} rows ({valid} valid) in the flat measured-runs schema")
 

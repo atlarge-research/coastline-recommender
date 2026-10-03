@@ -1,54 +1,64 @@
 # Coastline
 
-Coastline is the first scientific instrument for context-, policy-, and objective-aware recommendations of LLM
-fine-tuning workloads.
+Coastline is a context-aware recommender system for fine-tuning LLMs[^msc]. It accounts for infrastructure
+constraints, workload demands, and user objectives, and recommends best-fit configurations as part of an LLM
+fine-tuning ecosystem.
 
-!!! note
-    The documentation is currently under construction.
+LLM fine-tuning workloads are complex and, until now, unpredictable, making it difficult to estimate computational
+demands. For each workload, Coastline derives a grid of possible configurations from the tunable parameters (the
+number of GPUs and the batch size), filters out infeasible configurations, predicts the throughput and power of
+each feasible configuration, and ranks them by the user's goal.
 
-## Features
+Built with PriorLabs-TabPFN. See [TabPFN](#tabpfn).
 
-[//]: # (TODO: Update links)
+## Install
 
-1. Supports a [multi-objective](todo_link) recommendation policy;
-2. Supports a [min-GPU](todo_link) recommendation policy;
-3. Recommends feasible configurations, using [IBM AutoConf](todo_link);
-4. Makes [multi-objective recommendations](todo_link) using a [diverse set of simulation models]();
-5. Can simulate [performance](todo_link) and [energy](todo_link);
-6. Interfaces for everybody: [programmatic interface](todo_link), [graphical interface](),
-   and [command line interface]();
-7. Integrated with [IBM ado](https://research.ibm.com/blog/ado-accelerated-discovery-orchestrator-experiments) as a plugin experiment, via the [programmatic interface](6_specifications.md).
-
-!!! tip
-    Coastline is an open-source project and we encourage you to explore our [GitHub repository](https://github.com/atlarge-research/coastline-recommender).
-    We welcome contributions, feedback, and suggestions from the community.
-    If you encounter any issues or have ideas for improvements, please feel free to open an issue or submit a pull request.
-
-## Installation
-
-Coastline requires Python >=3.11.
-Install Coastline using `pip`:
-
-```console
-pip install coastline-recommender
+```bash
+pip install coastline-recommender          # Kavier, AutoConf, the CLI, and the dashboard
+pip install "coastline-recommender[ml]"    # adds the data-driven predictors
+coastline --help
 ```
 
-## In this documentation
+Python 3.11 to 3.13. The import name is `coastline`.
 
-[//]: # (TOOD: Update TOC)
+## Pages
 
-In this documentation, you will learn how to install, configure, and use Coastline.
-In this documentation you will find:
+* [Usage](usage.md): the CLI, the Python API, and the dashboard.
+* [How a recommendation is made](recommendation.md): grid, feasibility, prediction, and ranking.
 
-1. Getting started — install Coastline and make your first recommendation.
-2. [Setting up an experiment](3_experiment.md) — the config folder, file by file.
-3. [Recommendation policies](4_recommendation_policies.md) — min-GPU and multi-objective.
-4. [Simulation models](5_simulation_models.md) — the performance, energy, and feasibility predictors.
-5. [Feasibility checker](6_feasibility_checker.md) — IBM AutoConf.
-6. [Specifications](6_specifications.md) — the CLI, configuration, and SDK reference.
-7. [Terminology](7_terminology.md) — one canonical term per thing.
+## IBM ado
 
+Coastline is integrated with IBM ado, an accelerated discovery orchestrator, as a plug-in. The plug-in exposes two
+experiments on recommending LLM fine-tuning workloads, one using the multi-objective recommender and the other
+using the min-GPU recommender. It uses the public SDK of Coastline, the same entry point as the CLI and the
+dashboard. Source:
+[github.com/Radu-Nicolae/ado-coastline](https://github.com/Radu-Nicolae/ado-coastline/tree/coastline-plugin/plugins/custom_experiments/coastline).
 
-!!! info
-    Coastline is jointly backed by [AtLarge Research Group](https://www.atlarge-research.com/) and [IBM Research](https://research.ibm.com/).
-    Main contributors: [Radu Nicolae](https://radu-nicolae.com) and [Daniele Lotito](https://danielelotito.github.io/dl-codespace/).
+## TabPFN
+
+Built with PriorLabs-TabPFN.
+
+The `tabpfn` predictor and the model file `portfolio/tabpfn.pkl` contain TabPFN v2
+weights. TabPFN is a Tabular Prior-Fitted Network, a transformer-style model pre-trained on synthetic tabular
+tasks[^tabpfn]. The weights are licensed under the Prior Labs License v1.2; a copy is in
+[LICENSE-TabPFN.txt](https://github.com/atlarge-research/coastline-recommender/blob/main/LICENSE-TabPFN.txt).
+
+## Cite
+
+```bibtex
+@software{coastline,
+  author = {Nicolae, Radu and Lotito, Daniele and Iosup, Alexandru},
+  title  = {Coastline: Exploring the impact of multi-objective, context-aware recommenders on performance and
+            sustainability of datacenters under LLM fine-tuning workloads},
+  year   = {2026},
+  url    = {https://github.com/atlarge-research/coastline-recommender}
+}
+```
+
+The metadata is in [`CITATION.cff`](https://github.com/atlarge-research/coastline-recommender/blob/main/CITATION.cff).
+
+[^msc]: R. Nicolae, D. Lotito, A. Iosup. *Coastline: Exploring the impact of multi-objective, context-aware
+    recommenders on performance and sustainability of datacenters under LLM fine-tuning workloads.* MSc thesis,
+    Vrije Universiteit Amsterdam, 2026.
+[^tabpfn]: N. Hollmann et al. *Accurate predictions on small data with a tabular foundation model.* Nature 637,
+    319-326, 2025. [doi:10.1038/s41586-024-08328-6](https://doi.org/10.1038/s41586-024-08328-6).

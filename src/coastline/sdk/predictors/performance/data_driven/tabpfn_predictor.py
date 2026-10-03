@@ -2,8 +2,9 @@
 
 import logging
 import pickle
+import warnings
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
@@ -13,9 +14,12 @@ from coastline.sdk.models.recommendation import Prediction  # noqa: F401  (retur
 from coastline.sdk.models.workload import WorkloadSpec
 from coastline.sdk.predictors.base import BasePredictor
 from coastline.sdk.predictors.performance.data_driven.ml_common import (
+    ModelNotShippedError,
     feature_row_has_unknown_specs,
     finalize_ml_prediction,
     get_feature_lists,
+    model_error_prediction,
+    model_not_shipped_error,
     performance_trained_model_path,
     workload_to_ml_feature_row,
 )
@@ -24,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 
 def _patch_tabpfn_sklearn_imputers(obj, _seen: set[int] | None = None) -> None:
-    """Backfill attrs on pickled TabPFN/sklearn preprocessors (sklearn 1.8+ vs older pickles)."""
+    """Add attributes that sklearn 1.8+ expects to the imputers inside older TabPFN pickles."""
     if _seen is None:
         _seen = set()
     oid = id(obj)
@@ -55,7 +59,7 @@ class _TabPFNEnsemblePreprocessorStub:
 
 
 def _tabpfn_regressor_compat(model) -> None:
-    """Backfill attrs missing when unpickling TabPFN across library versions."""
+    """Add attributes that are missing when a TabPFN pickle is loaded by another library version."""
     if isinstance(model, dict) and "throughput" in model:
         for key in ("throughput", "runtime"):
             if key in model and model[key] is not None:
@@ -74,22 +78,50 @@ def _tabpfn_regressor_compat(model) -> None:
         executor.ensemble_preprocessor = _TabPFNEnsemblePreprocessorStub()
 
 
+def _load_pickle(path: Path) -> Any:
+    """Unpickle ``path``, with one log line for a scikit-learn version mismatch.
+
+    scikit-learn warns once per estimator class when the pickle was written by another version
+    (the bundled tabpfn.pkl by 1.8.0). Those warnings become one INFO line with both versions;
+    any other warning is passed on.
+    """
+    try:
+        from sklearn.exceptions import InconsistentVersionWarning
+    except ImportError:  # no scikit-learn, so no version check to quiet
+        with open(path, "rb") as f:
+            return pickle.load(f)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always", InconsistentVersionWarning)
+        with open(path, "rb") as f:
+            model = pickle.load(f)
+    skew = [w.message for w in caught if isinstance(w.message, InconsistentVersionWarning)]
+    for w in caught:
+        if not isinstance(w.message, InconsistentVersionWarning):
+            warnings.warn_explicit(w.message, w.category, w.filename, w.lineno, source=w.source)
+    if skew:
+        logger.info(
+            "%s was written by scikit-learn %s; this install has scikit-learn %s",
+            path,
+            ", ".join(sorted({w.original_sklearn_version for w in skew})),
+            skew[0].current_sklearn_version,
+        )
+    return model
+
+
 DEFAULT_MODEL_PATH = performance_trained_model_path("tabpfn")
 
 
 class TabPFNPredictor(BasePredictor):
-    """TabPFN predictor; passes raw string+numeric features (no encoding needed).
+    """TabPFN predictor; takes the raw string and numeric features without encoding.
 
-    Class-level cache memoizes predictions by (model_path, feature-row): the grid is
-    re-scored per job and policy arm so most rows repeat. TabPFN forward pass dominates cost.
+    A class-level cache keys predictions by (model_path, feature row). The grid is re-scored per
+    job and policy arm, so most rows repeat, and the TabPFN forward pass dominates the cost.
     """
 
-    #: Never fork this one, and not because it is cheap -- it is by far the most expensive model
-    #: in the portfolio. One uncached prediction costs ~495 s (a 166 MB artifact and an ~8-member
-    #: transformer ensemble on CPU), and the only thing that makes it usable at all is
-    #: ``_prediction_cache`` below: a repeated configuration comes back in ~1.4 ms, a ~360,000x
-    #: speedup. That cache is per process, so sharding a grid across workers would destroy every
-    #: hit and have each worker pay ~519 s to become ready. Keep it in one long-lived process.
+    #: False so this model is never forked, although it is the most expensive one in the portfolio.
+    #: A repeated configuration comes from the per-process ``_prediction_cache``, so forking would
+    #: lose every hit and make each worker warm the cache again. Keep it in one long-lived process.
     EXPENSIVE = False
 
     _prediction_cache: dict = {}
@@ -102,29 +134,35 @@ class TabPFNPredictor(BasePredictor):
         self._model = None
 
     def _load(self):
-        """Lazy-load model from disk."""
+        """Lazy-load the model from disk."""
         if self._model is not None:
             return
 
         if not self.model_path.exists():
-            raise FileNotFoundError(
-                f"TabPFN model not found at {self.model_path}. Train it first: python -m trainer.main --model tabpfn"
-            )
+            raise model_not_shipped_error("tabpfn", self.model_path)
 
-        with open(self.model_path, "rb") as f:
-            self._model = pickle.load(f)
+        self._model = _load_pickle(self.model_path)
 
         logger.info(f"TabPFN model loaded from {self.model_path}")
 
     def predict(self, workload: WorkloadSpec, context: SystemContext) -> Optional[Prediction]:
-        """Predict throughput for a workload, or None if the model can't load."""
+        """Predict throughput for a workload, or None for a model or GPU missing from Kavier's library.
+
+        A model file that cannot be loaded, or holds no model, gives a Prediction with no numbers
+        and the reason in ``metadata['error_detail']``. A missing model file raises
+        ModelNotShippedError.
+        """
         try:
             self._load()
-        except Exception as e:  # missing/corrupt pickle, version skew, compat shims, etc.
+        except ModelNotShippedError:
+            raise
+        except Exception as e:  # corrupt pickle, version skew, compat shims, etc.
             logger.warning(str(e))
-            return None
+            return model_error_prediction(
+                workload, model_name="tabpfn", detail=f"model artifact could not be loaded: {self.model_path} ({e})"
+            )
 
-        # Extract model from pickle dict (handles both old and new formats)
+        # The pickle holds either a dict with a "model" key or the model itself.
         if isinstance(self._model, dict) and "model" in self._model:
             model = self._model["model"]
         else:
@@ -132,7 +170,9 @@ class TabPFNPredictor(BasePredictor):
 
         if model is None:
             logger.warning("TabPFN predictor artifacts are incomplete")
-            return None
+            return model_error_prediction(
+                workload, model_name="tabpfn", detail=f"model artifact is incomplete: {self.model_path}"
+            )
 
         cat_cols, num_feats = get_feature_lists()
         row = workload_to_ml_feature_row(workload)
@@ -148,15 +188,15 @@ class TabPFNPredictor(BasePredictor):
             if col in num_feats:
                 X_array[:, i] = X_array[:, i].astype(np.float64)
 
-        # Memoize by (model, feature-row): the candidate grid is re-scored for
-        # every job and every policy arm, so most of these are exact repeats.
+        # Cache by (model path, feature row): the candidate grid is re-scored for every job and
+        # every policy arm, so most rows are exact repeats.
         ckey = (str(self.model_path), tuple(X_array[0].tolist()))
         _cached = type(self)._prediction_cache.get(ckey)
         if _cached is not None:
             throughput, runtime_seconds = _cached
-        # Handle both old (single model) and new (dict with dual models) formats
+        # The model is a dict of throughput and runtime models, or a single model.
         elif isinstance(model, dict) and "throughput" in model:
-            # New format: separate models for throughput and runtime
+            # Separate models for throughput and runtime
             _tabpfn_regressor_compat(model["throughput"])
             _tabpfn_regressor_compat(model["runtime"])
             y_log_throughput = model["throughput"].predict(X_array)
@@ -165,7 +205,7 @@ class TabPFNPredictor(BasePredictor):
             runtime_seconds = float(np.expm1(y_log_runtime[0]))
             type(self)._prediction_cache[ckey] = (throughput, runtime_seconds)
         else:
-            # Old format: single model (may have multi-output)
+            # A single model, possibly multi-output
             _tabpfn_regressor_compat(model)
             y_log_pred = model.predict(X_array)
             if np.ndim(y_log_pred) > 1:

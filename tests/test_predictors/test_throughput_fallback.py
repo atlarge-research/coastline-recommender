@@ -1,8 +1,7 @@
-"""The 'intelligent' throughput predictor is a cache->physics cascade: it returns
-an exact cache match (a measured past run) when one exists, else the Kavier
-analytical predictor. These tests pin the cascade contract with independent
-oracles (a value we planted in a controlled cache; the physics-vs-cache
-provenance recorded in metadata) and the factory's name->predictor-class map.
+"""Tests for the 'intelligent' throughput predictor and the lookup cache behind it.
+
+'intelligent' returns an exact cache match (a measured past run) when there is one, else the
+Kavier estimate. The file also checks the factory's map from name to predictor class.
 """
 
 import math
@@ -44,8 +43,8 @@ def _context():
 
 
 def _cache_row(batch_size: int, throughput: float, runtime: float) -> dict:
-    """One RetrievalPredictor-indexable run. number_gpus is the PER-NODE count
-    (it is hashed as gpus_per_node), so 1 node x 4 gpus matches _workload()."""
+    """One run the RetrievalPredictor can index. ``number_gpus`` is the per-node count (hashed as
+    gpus_per_node), so 1 node x 4 GPUs matches ``_workload()``."""
     return {
         "model_name": _MODEL,
         "method": "lora",
@@ -66,11 +65,8 @@ def _cache_over(tmp_path, rows: list[dict]) -> RetrievalPredictor:
 
 
 def test_intelligent_returns_the_recorded_cache_value_on_an_exact_hit(tmp_path):
-    # Oracle: the cache is the deployment's memory of a measured run. We plant a
-    # run for exactly _workload()'s config with a distinctive throughput 4242.0
-    # tokens/s that the physics engine would never coincidentally emit. On an
-    # exact hit the cascade must surface THAT recorded number verbatim, proving
-    # the cache short-circuits before physics is consulted.
+    # The cache holds a run for _workload()'s config with throughput 4242.0 tokens/s, a value
+    # Kavier does not produce for it. An exact hit returns that recorded number.
     cache = _cache_over(tmp_path, [_cache_row(batch_size=8, throughput=4242.0, runtime=600.0)])
     physics = create_physics_driven()
     intelligent = CacheThenSimulatePredictor(cache=cache, fallback=physics)
@@ -78,32 +74,28 @@ def test_intelligent_returns_the_recorded_cache_value_on_an_exact_hit(tmp_path):
     out = intelligent.predict(_workload(batch_size=8), _context())
 
     assert out.predicted_throughput == pytest.approx(4242.0)
-    # Cross-check that this is genuinely cache-over-physics, not a coincidence:
-    # physics alone on the same supported config yields a different number.
+    # Kavier alone gives a different number for the same config.
     physics_out = physics.predict(_workload(batch_size=8), _context())
     assert physics_out.predicted_throughput != pytest.approx(4242.0)
 
 
 def test_intelligent_falls_through_to_physics_on_a_cache_miss(tmp_path):
-    # Oracle: the cache holds a run for batch_size=999 only, so _workload()'s
-    # batch_size=8 config MISSES. A miss must not return None nor the wrong
-    # cached row; it must yield the Kavier physics estimate. We assert the
-    # provenance (metadata predictor == "kavier") plus a finite positive
-    # throughput -- the contract of the fallback branch.
+    # The cache holds a run for batch_size=999 only, so batch_size=8 misses and the result is the
+    # Kavier estimate: metadata predictor "kavier" and a finite positive throughput.
     cache = _cache_over(tmp_path, [_cache_row(batch_size=999, throughput=4242.0, runtime=600.0)])
     intelligent = CacheThenSimulatePredictor(cache=cache, fallback=create_physics_driven())
 
     out = intelligent.predict(_workload(batch_size=8), _context())
 
     assert out is not None
-    assert out.metadata.get("predictor") == "kavier"  # came from physics, not the cache
+    assert out.metadata.get("predictor") == "kavier"  # from Kavier
     assert out.predicted_throughput > 0 and math.isfinite(out.predicted_throughput)
-    # And it is emphatically NOT the mismatched cache row.
+    # The cached row for the other config is not used.
     assert out.predicted_throughput != pytest.approx(4242.0)
 
 
 def _row_with_custom_cols() -> dict:
-    """An indexable run whose throughput/duration live under NON-default headers (tps/dur)."""
+    """An indexable run with throughput and duration under custom headers (tps, dur)."""
     return {
         "model_name": _MODEL,
         "method": "lora",
@@ -112,16 +104,14 @@ def _row_with_custom_cols() -> dict:
         "number_gpus": 4,
         "tokens_per_sample": 1024,
         "batch_size": 8,
-        "tps": 3131.0,  # throughput under a custom header, not dataset_tokens_per_second
-        "dur": 720.0,  # duration under a custom header, not train_runtime
+        "tps": 3131.0,  # throughput, in place of dataset_tokens_per_second
+        "dur": 720.0,  # duration, in place of train_runtime
     }
 
 
 def test_lookup_reads_configurable_throughput_and_runtime_columns(tmp_path):
-    # D: a lookup CSV may store throughput/duration under any headers; naming them via
-    # throughput_col / runtime_col must still produce an exact hit reading THOSE columns.
-    # Oracle: the distinctive 3131.0 planted under "tps" comes back verbatim — proving the
-    # predictor read "tps", not the default column (which is absent here, so a wrong read raises).
+    # A lookup CSV may use any headers for throughput and duration; throughput_col and runtime_col
+    # name them. The default columns are absent here, so reading them would raise.
     csv = tmp_path / "custom_cols.csv"
     pd.DataFrame([_row_with_custom_cols()]).to_csv(csv, index=False)
     cache = RetrievalPredictor(dataset_path=csv, throughput_col="tps", runtime_col="dur")
@@ -134,9 +124,8 @@ def test_lookup_reads_configurable_throughput_and_runtime_columns(tmp_path):
 
 
 def test_lookup_column_keys_thread_through_the_policy_factory(tmp_path):
-    # The predictors.lookup_throughput_col / lookup_runtime_col config keys must reach the
-    # RetrievalPredictor. Oracle: the built predictor reports the custom columns AND a hit
-    # returns the value planted under them.
+    # The predictors.lookup_throughput_col and lookup_runtime_col config keys reach the
+    # RetrievalPredictor, and a hit returns the value stored under them.
     csv = tmp_path / "custom_cols.csv"
     pd.DataFrame([_row_with_custom_cols()]).to_csv(csv, index=False)
     cache = PolicyFactory.throughput_predictor(
@@ -153,9 +142,8 @@ def test_lookup_column_keys_thread_through_the_policy_factory(tmp_path):
 
 
 def test_lookup_missing_named_column_raises_clear_error(tmp_path):
-    # A typo'd lookup_throughput_col / lookup_runtime_col (the named column is absent from the
-    # CSV) must fail loudly, naming the missing column — not surface as an opaque KeyError deeper
-    # in indexing. The CSV here has the DEFAULT columns but not "tps"/"dur".
+    # A lookup_throughput_col or lookup_runtime_col missing from the CSV raises a ValueError that
+    # names the column. This CSV has the default columns but not "tps" or "dur".
     csv = tmp_path / "wrong_cols.csv"
     pd.DataFrame([_cache_row(batch_size=8, throughput=100.0, runtime=60.0)]).to_csv(csv, index=False)
     with pytest.raises(ValueError, match="tps"):
@@ -170,19 +158,22 @@ def test_lookup_missing_named_column_raises_clear_error(tmp_path):
         ("physics", "KavierPredictor"),
         ("physics_driven", "KavierPredictor"),
         ("cache", "RetrievalPredictor"),
-        # "intelligent" is the cache->physics cascade
+        # "intelligent" is the cache-then-Kavier cascade
         ("intelligent", "CacheThenSimulatePredictor"),
-        # named ML models must reach the ML branch, not collapse to the composite or
-        # to CatBoost. The six portfolio models share SklearnPortfolioPredictor (they
-        # stay distinguishable by get_name; see test_config_predictor_selection); the
-        # distinct-runtime models keep their own class.
+        # Named ML models get their own predictor. The six portfolio models share
+        # SklearnPortfolioPredictor and differ by get_name; tabpfn and deep_learning keep their
+        # own class.
         ("xgboost", "SklearnPortfolioPredictor"),
         ("tabpfn", "TabPFNPredictor"),
         ("deep_learning", "DeepLearningPredictor"),
-        # an unknown name falls back to the intelligent default (policies L117-118)
-        ("totally-not-a-real-predictor", "CacheThenSimulatePredictor"),
     ],
 )
 def test_factory_resolves_each_name_to_its_own_predictor_class(name, expected_cls):
     pred = PolicyFactory.throughput_predictor({"performance": name})
     assert type(pred).__name__ == expected_cls, f"{name} -> {type(pred).__name__}"
+
+
+def test_factory_rejects_an_unknown_name():
+    # An unknown name raises.
+    with pytest.raises(ValueError, match="unknown predictor"):
+        PolicyFactory.throughput_predictor({"performance": "totally-not-a-real-predictor"})

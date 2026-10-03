@@ -1,8 +1,8 @@
-"""`coastline explain` — the score-breakdown verb.
+"""Tests for `coastline explain`, which prints the score breakdown of the ranked candidates.
 
-Pins Kavier + `--feasibility rules` like the other CLI tests. The assertions check that what is
-rendered agrees with what the policy actually computed (the weighted sum, the ordering, the
-min_gpu special case), never a specific engine number.
+Runs pin Kavier and `--feasibility rules`, like the other CLI tests. The assertions check that the
+printed table agrees with what the policy computed (the weighted sum, the ordering, the min_gpu
+case) and do not depend on Kavier's numbers.
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ def test_explain_shows_the_weighted_sum_the_policy_evaluated(capsys) -> None:
     out = capsys.readouterr().out
 
     assert "alpha=0.50 power, beta=0.50 time" in out
-    # The printed arithmetic must actually add up: alpha*power + beta*time == combined.
+    # The printed terms add up: alpha*power + beta*time == combined.
     match = re.search(
         r"score\s+([\d.]+) x ([\d.]+) \(power\) \+ ([\d.]+) x ([\d.]+) \(time\) = ([\d.]+)",
         out,
@@ -117,8 +117,7 @@ def test_explain_states_why_the_winner_won(capsys) -> None:
 
 
 def test_explain_rejects_a_misspelled_preset(capsys) -> None:
-    """Unvalidated, a typo falls through the strategy's unconditional balanced fallback and
-    explains a policy the user did not ask for."""
+    """A misspelled preset is a usage error (exit 2)."""
     with pytest.raises(SystemExit) as excinfo:
         main([*_BASE, "--preset", "perfomance"])
 
@@ -126,8 +125,8 @@ def test_explain_rejects_a_misspelled_preset(capsys) -> None:
 
 
 def test_explain_discloses_the_throughput_tie_break(capsys) -> None:
-    """selection.py reorders the top 0.01 band by throughput, so `combined` can legitimately read
-    non-monotonically. Unexplained, that looks like a ranking bug."""
+    """selection.py orders candidates within 0.01 of the top score by throughput, so the
+    `combined` column can be out of order; the output then names the tie-break."""
     main([*_BASE, "--preset", "performance", "--top-k", "5"])
     out = capsys.readouterr().out
 
