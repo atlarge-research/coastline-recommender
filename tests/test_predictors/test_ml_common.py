@@ -1,14 +1,9 @@
-"""Unit tests for shared ML inference helpers in ``ml_common``.
-
-Focus: ``finalize_ml_prediction`` is the guard that turns a raw model output into a
-``Prediction``. Its contract (from the docstring):
-  * throughput missing (None) or non-finite (NaN/inf) -> return None entirely
-    (NOT clamped to 0 -- clamping would let garbage flow into downstream scoring)
-  * negative-but-finite throughput -> clamped to 0.0
-  * non-finite / negative runtime -> None / 0.0 respectively
-  * total_gpus derived as gpus_per_node * number_of_nodes
-Each assertion below carries an independent oracle (a hand value or the stated contract
-branch) so it can only pass for the correct behavior.
+"""Tests for ``finalize_ml_prediction`` in ``ml_common``, which turns a raw model output into a
+``Prediction``:
+  * a missing (None) or non-finite throughput gives None, so bad values do not reach scoring;
+  * a negative finite throughput is clamped to 0.0;
+  * a non-finite runtime becomes None and a negative one 0.0;
+  * total_gpus is gpus_per_node x number_of_nodes.
 """
 
 import pytest
@@ -32,24 +27,17 @@ def _wl(gpus_per_node=4, number_of_nodes=2):
 class TestFinalizeMlPrediction:
     @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf"), None])
     def test_missing_or_non_finite_throughput_returns_none(self, bad):
-        # Contract: a missing (None) or non-finite (NaN/+-inf) throughput must abort the
-        # whole Prediction. Falsification: if the code instead did throughput=max(bad,0)
-        # it would emit a Prediction carrying NaN/inf (or 0 for None) into scoring -- this
-        # asserts the None-return branch that prevents that corruption.
+        # A missing or non-finite (NaN, +-inf) throughput gives no Prediction at all.
         assert finalize_ml_prediction(_wl(), throughput=bad, runtime_seconds=100.0, metadata={}) is None
 
     def test_negative_throughput_clamped_to_zero(self):
-        # Oracle: clamp is max(throughput, 0.0); by hand max(-5.0, 0.0) == 0.0.
-        # (A finite negative is a real value, so it survives as a Prediction -- unlike NaN.)
+        # max(-5.0, 0.0) == 0.0; a finite negative still gives a Prediction.
         p = finalize_ml_prediction(_wl(), throughput=-5.0, runtime_seconds=100.0, metadata={})
         assert p is not None
         assert p.predicted_throughput == 0.0
 
     def test_finite_positive_throughput_passes_through_unchanged(self):
-        # Oracle: total_gpus = gpus_per_node * number_of_nodes = 4 * 2 = 8 (hand-derived,
-        # independent of the passed-through throughput/runtime). A finite positive
-        # throughput/runtime must be preserved verbatim (max(500,0)=500, not re-scaled),
-        # and metadata handed straight through.
+        # Finite positive values and the metadata pass through unchanged; total_gpus = 4 x 2 = 8.
         p = finalize_ml_prediction(
             _wl(gpus_per_node=4, number_of_nodes=2),
             throughput=500.0,
@@ -63,9 +51,7 @@ class TestFinalizeMlPrediction:
         assert p.metadata["predictor"] == "x"
 
     def test_total_gpus_scales_with_node_count(self):
-        # Scaling oracle: doubling number_of_nodes (2 -> 4) at fixed gpus_per_node=4 must
-        # exactly double total_gpus (8 -> 16). Pins the multiply, not a snapshot: catches a
-        # bug that used only gpus_per_node or added instead of multiplied.
+        # Doubling number_of_nodes from 2 to 4 at 4 GPUs per node doubles total_gpus from 8 to 16.
         p2 = finalize_ml_prediction(
             _wl(gpus_per_node=4, number_of_nodes=2), throughput=1.0, runtime_seconds=1.0, metadata={}
         )
@@ -77,25 +63,20 @@ class TestFinalizeMlPrediction:
 
     @pytest.mark.parametrize("bad_runtime", [float("nan"), float("inf"), float("-inf")])
     def test_non_finite_runtime_becomes_none_but_keeps_prediction(self, bad_runtime):
-        # Contract: a non-finite runtime is dropped to None, yet a valid throughput still
-        # yields a Prediction (runtime failure must not nuke the whole result). Oracle: the
-        # `max(rt,0) if isfinite else None` branch -> None for NaN/+-inf.
+        # A non-finite runtime becomes None, and a valid throughput still gives a Prediction.
         p = finalize_ml_prediction(_wl(), throughput=500.0, runtime_seconds=bad_runtime, metadata={})
         assert p is not None
         assert p.predicted_throughput == 500.0
         assert p.predicted_runtime_seconds is None
 
     def test_negative_runtime_clamped_to_zero(self):
-        # Oracle: runtime clamp is max(runtime, 0.0); by hand max(-10.0, 0.0) == 0.0.
-        # Distinct branch from the non-finite case (finite-but-negative stays a number).
+        # max(-10.0, 0.0) == 0.0; a finite negative runtime stays a number.
         p = finalize_ml_prediction(_wl(), throughput=500.0, runtime_seconds=-10.0, metadata={})
         assert p is not None
         assert p.predicted_runtime_seconds == 0.0
 
     def test_runtime_none_stays_none(self):
-        # Contract: runtime_seconds=None short-circuits before float() (distinct branch from
-        # the non-finite path), so a None input yields predicted_runtime_seconds is None
-        # while the (valid) throughput still produces a Prediction.
+        # runtime_seconds=None stays None without reaching float(), and the Prediction is still made.
         p = finalize_ml_prediction(_wl(), throughput=500.0, runtime_seconds=None, metadata={})
         assert p is not None
         assert p.predicted_throughput == 500.0

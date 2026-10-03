@@ -1,14 +1,13 @@
-"""Phase 5.2 characterization: the goal vocabulary (balanced/performance/energy/min_gpu) is
-encoded once in `_goals` and the engine + batch API derive their views from it. These tests
-pin the EXACT tables the three surfaces exposed before consolidation, so the derived views
-must reproduce them byte-for-byte (behavior-preserving).
+"""The goal vocabulary (balanced, performance, energy, min_gpu) is defined once in ``_goals``.
+
+The engine and the batch API build their tables from it. These tests pin those tables.
 """
 
 from __future__ import annotations
 
 from coastline.sdk.recommend import _goals, engine
 
-# The literal tables as they stood before consolidation (independent oracle).
+# The expected tables, written out in full.
 _EXPECTED_ENGINE_GOALS = {
     "Multi-objective balanced": ("multi_objective", "balanced"),
     "Multi-objective lowest runtime": ("multi_objective", "performance"),
@@ -41,7 +40,7 @@ def test_goal_to_label_unchanged():
 def test_rationale_phrase_unchanged():
     for goal, phrase in _EXPECTED_RATIONALE.items():
         assert _goals.rationale_phrase(goal) == phrase
-    # unknown / multi_objective strategy_name has no phrase (falls through to the default)
+    # multi_objective and unknown names have no phrase, so the rationale uses its default text
     assert _goals.rationale_phrase("multi_objective") is None
 
 

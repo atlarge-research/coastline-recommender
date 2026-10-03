@@ -1,46 +1,40 @@
 cff-version: 1.2.0
-message: >-
-  If you use Coastline in academic work, please cite the MSc thesis
-  (preferred-citation below). Cite this file when you need to refer to a
-  specific released version of the software itself.
-title: COASTLINE
+message: If you use Coastline, please cite it as below.
+title: >-
+  Coastline: Exploring the impact of multi-objective, context-aware
+  recommenders on performance and sustainability of datacenters under LLM
+  fine-tuning workloads
 abstract: >-
-  Coastline is a context-aware recommender for GPU and datacenter
-  configurations for LLM fine-tuning: given a workload it grid-searches
-  configurations, filters infeasible ones, predicts throughput and power, and
-  ranks the survivors on a performance-energy score.
+  LLM fine-tuning workloads are complex and, until now, unpredictable,
+  making it difficult to estimate computational demands. Coastline is a
+  context-aware recommender system for fine-tuning LLMs. It accounts for
+  infrastructure constraints, workload demands, and user objectives, and
+  recommends best-fit configurations as part of an LLM fine-tuning ecosystem.
 type: software
-version: 0.2.2
-date-released: "2026-09-16"
+version: 0.2.3
+date-released: "2026-10-03"
 license: MIT
 repository-code: "https://github.com/atlarge-research/coastline-recommender"
-url: "https://github.com/atlarge-research/coastline-recommender"
+url: "https://atlarge-research.github.io/coastline-recommender/"
 authors:
   - given-names: Radu
     family-names: Nicolae
     affiliation: Vrije Universiteit Amsterdam
-  - name: AtLarge Research
-    email: info@atlarge-research.com
+    orcid: "https://orcid.org/0009-0007-0318-9266"
+  - given-names: Daniele
+    family-names: Lotito
+    affiliation: IBM Research
+    orcid: "https://orcid.org/0000-0003-0320-0043"
+  - given-names: Alexandru
+    family-names: Iosup
+    affiliation: Vrije Universiteit Amsterdam
+    orcid: "https://orcid.org/0000-0001-8030-9398"
 keywords:
-  - llm
+  - LLM
   - fine-tuning
-  - gpu
-  - datacenter
   - recommender
-  - throughput
-  - energy-efficiency
-  - carbon
+  - GPU
+  - datacenter
+  - performance
   - sustainability
-  - mlops
-
-preferred-citation:
-  type: thesis
-  title: "Infrastructure recommenders for large-scale fine-tuning workloads"
-  authors:
-    - given-names: Radu
-      family-names: Nicolae
-      affiliation: Vrije Universiteit Amsterdam
-  institution:
-    name: Vrije Universiteit Amsterdam
-  thesis-type: "MSc thesis"
-  year: 2026
+  - energy

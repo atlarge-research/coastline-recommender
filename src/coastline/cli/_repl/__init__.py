@@ -1,1 +1,1 @@
-"""Rich/terminal widgets for the interactive REPL (folded into the CLI)."""
+"""Terminal widgets for the interactive REPL, built on Rich."""

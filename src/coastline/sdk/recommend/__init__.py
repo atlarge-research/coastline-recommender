@@ -1,12 +1,10 @@
-"""Recommend verbs — the top-level facade over the pipeline/policy engine.
+"""Public entry points over the pipeline and policy engine. All three run the same engine:
 
-Three call shapes, one engine:
-    Coastline      configured recommender: pick an estimator once, call per workload
-    recommend      batch DataFrame / list[dict] / dict → DataFrame of ranked configs
-    recommend_csv  batch CSV → CSV
+    Coastline      configured recommender: choose a predictor once, call it per workload
+    recommend      DataFrame, list of dicts or dict in, DataFrame of ranked configs out
+    recommend_csv  CSV in, CSV out
 
-Verbs are re-exported lazily (PEP 562) from their implementation modules so importing
-this package stays cheap.
+The names are loaded lazily from their modules (PEP 562), so importing this package is cheap.
 """
 
 from __future__ import annotations

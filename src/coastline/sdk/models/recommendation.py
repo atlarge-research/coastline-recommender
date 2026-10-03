@@ -8,10 +8,9 @@ from pydantic import BaseModel, Field, model_validator
 def round_floats_for_display(obj: Any, ndigits: int = 2) -> Any:
     """Return a copy of ``obj`` with every float rounded to ``ndigits`` decimals.
 
-    Presentation-only: recurses into dicts/lists to trim float noise from JSON
-    output and ``__str__`` while leaving ints, bools, strings, and every other
-    value untouched. Builds new containers so the caller's data (e.g. a
-    Recommendation's ``metadata`` dict) is never mutated.
+    For display (JSON output and ``__str__``): recurses into dicts and lists and leaves ints,
+    bools, strings and other values as they are. Builds new containers, so the caller's data
+    (such as a Recommendation's ``metadata``) is not changed.
     """
     if isinstance(obj, bool):  # bool is a subclass of int; keep True/False as-is
         return obj
@@ -25,7 +24,7 @@ def round_floats_for_display(obj: Any, ndigits: int = 2) -> Any:
 
 
 def _ensure_total_gpus_consistent(gpus_per_node: int, number_of_nodes: int, total_gpus: int) -> None:
-    """total_gpus must equal gpus_per_node * number_of_nodes (fail loud if it drifts)."""
+    """Raise ValueError unless total_gpus == gpus_per_node * number_of_nodes."""
     expected = gpus_per_node * number_of_nodes
     if total_gpus != expected:
         raise ValueError(f"total_gpus ({total_gpus}) must equal gpus_per_node * number_of_nodes ({expected})")
@@ -65,10 +64,9 @@ class Recommendation(BaseModel):
         return self
 
     def __str__(self) -> str:
-        """Display-only string with float noise rounded to 2 decimals.
+        """Display string with floats rounded to 2 decimals.
 
-        Mirrors pydantic's default ``field=value`` layout but trims long floats
-        (throughput, power, scores) so ``print(rec)`` stays readable. ``__repr__``
-        and the stored field values keep full precision.
+        Same ``field=value`` layout as pydantic's default, with long floats (throughput, power,
+        scores) shortened for ``print(rec)``. ``__repr__`` and the stored values keep full precision.
         """
         return " ".join(f"{name}={round_floats_for_display(getattr(self, name))!r}" for name in type(self).model_fields)

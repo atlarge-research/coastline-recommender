@@ -12,7 +12,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
 
-# The net architecture is the shipped package's — one definition, shared with inference.
+# The network class comes from the SDK, so training and inference share one definition.
 from coastline.sdk.predictors.performance.data_driven._nn import EmbeddingNN
 
 warnings.filterwarnings("ignore")
@@ -55,16 +55,16 @@ GRAD_CLIP_NORM = 1.0
 # Gaussian noise std for input regularisation during training
 NOISE_STD = 0.05
 
-# Auto-detect best available device - prioritize MPS for Apple Silicon
+# Device order: MPS (Apple Silicon), then CUDA, then CPU.
 if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
     DEVICE = torch.device("mps")
-    print("🚀 Using Apple Silicon GPU (MPS) for acceleration")
+    print("Using Apple Silicon GPU (MPS) for acceleration")
 elif torch.cuda.is_available():
     DEVICE = torch.device("cuda")
-    print("🚀 Using NVIDIA GPU (CUDA) for acceleration")
+    print("Using NVIDIA GPU (CUDA) for acceleration")
 else:
     DEVICE = torch.device("cpu")
-    print("⚠️  Using CPU (no GPU acceleration)")
+    print("Using CPU (no GPU acceleration)")
 
 
 class GPUPerformanceDataset(Dataset):
@@ -99,7 +99,7 @@ def train_epoch(model, dataloader, criterion, optimizer, device, grad_clip_norm=
 
 
 def evaluate(model, dataloader, criterion, device):
-    """Evaluate model."""
+    """Evaluate the model; returns (mean loss, predictions, targets)."""
     model.eval()
     total_loss = 0
     predictions, targets = [], []
@@ -153,7 +153,7 @@ def train_single_config(
         noise_std=NOISE_STD,
     ).to(DEVICE)
 
-    # Huber loss is more robust to outliers than L1 or MSE.
+    # Huber loss is linear for large errors, so outliers weigh less than under MSE.
     criterion = nn.HuberLoss(delta=0.5)
     optimizer = optim.AdamW(params=model.parameters(), lr=learning_rate, weight_decay=WEIGHT_DECAY)
     scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=50, T_mult=2, eta_min=1e-6)
@@ -181,7 +181,7 @@ def train_single_config(
 
 
 def train_deep_learning_model():
-    """Main training pipeline for Deep Learning model with grid search."""
+    """Grid-search, evaluate and save the deep learning model."""
     print("=" * 70)
     print("DEEP LEARNING PREDICTOR TRAINING WITH GRID SEARCH")
     print("=" * 70)
@@ -215,7 +215,7 @@ def train_deep_learning_model():
     y_log_val = y_log_val.to_numpy(dtype=float)
     y_log_test = y_log_test.to_numpy(dtype=float)
 
-    print(f"\n🔍 Starting grid search on {DEVICE}...")
+    print(f"\nStarting grid search on {DEVICE}...")
     print(f"  Hidden dims options: {len(HIDDEN_DIMS_OPTIONS)}")
     print(f"  Embedding dim options: {len(EMBEDDING_DIM_OPTIONS)}")
     print(f"  Dropout options: {len(DROPOUT_OPTIONS)}")
@@ -268,7 +268,7 @@ def train_deep_learning_model():
                             batch_size,
                         )
 
-                        print(f"  → Val Loss: {val_loss:.4f}")
+                        print(f"  -> Val Loss: {val_loss:.4f}")
 
                         if val_loss < best_val_loss:
                             best_val_loss = val_loss
@@ -281,15 +281,15 @@ def train_deep_learning_model():
                             }
                             best_model_state = model_state
                             best_model_architecture = model
-                            print(f"  ✨ New best configuration! Val Loss: {val_loss:.4f}")
+                            print(f"  New best configuration! Val Loss: {val_loss:.4f}")
 
     elapsed_time = time.time() - start_time
-    print(f"\n✅ Grid search complete in {elapsed_time / 60:.1f} minutes!")
+    print(f"\nGrid search complete in {elapsed_time / 60:.1f} minutes!")
 
     if best_config is None or best_model_state is None or best_model_architecture is None:
         raise RuntimeError("Grid search failed to find a valid configuration")
 
-    print("\n🏆 Best configuration:")
+    print("\nBest configuration:")
     for param, value in best_config.items():
         print(f"  {param}: {value}")
     print(f"  Best validation loss: {best_val_loss:.4f}")
@@ -324,7 +324,7 @@ def train_deep_learning_model():
     print_metrics(test_metrics_throughput, "Test Throughput")
     print_metrics(test_metrics_runtime, "Test Runtime", unit="sec")
 
-    print("\n🔍 Sample throughput predictions (first 10):")
+    print("\nSample throughput predictions (first 10):")
     print(f"{'True':>12} {'Predicted':>12} {'Error %':>10}")
     print("-" * 36)
     for i in range(min(10, len(y_test_true))):
@@ -368,11 +368,11 @@ def train_deep_learning_model():
         sklearn_artifacts=sklearn_artifacts,
     )
 
-    print(f"💾 {save_msg}")
-    print(f"  ✓ Test throughput MdAPE: {test_metrics_throughput['original_space']['mdape']:.2f}%")
-    print(f"  ✓ Test runtime MdAPE: {test_metrics_runtime['original_space']['mdape']:.2f}%")
-    print(f"  ✓ Test throughput R²: {test_metrics_throughput['original_space']['r2']:.4f}")
-    print(f"  ✓ Test runtime R²: {test_metrics_runtime['original_space']['r2']:.4f}")
+    print(f" {save_msg}")
+    print(f"  Test throughput MdAPE: {test_metrics_throughput['original_space']['mdape']:.2f}%")
+    print(f"  Test runtime MdAPE: {test_metrics_runtime['original_space']['mdape']:.2f}%")
+    print(f"  Test throughput R2: {test_metrics_throughput['original_space']['r2']:.4f}")
+    print(f"  Test runtime R2: {test_metrics_runtime['original_space']['r2']:.4f}")
 
     print("\n" + "=" * 70)
     print("TRAINING COMPLETE")
@@ -382,21 +382,21 @@ def train_deep_learning_model():
     target_threshold = 20.0
 
     if mdape < target_threshold:
-        status = "✅ SUCCESS"
-        emoji = "🎉"
+        status = "SUCCESS"
+        emoji = ""
     else:
-        status = "⚠️  NEEDS IMPROVEMENT"
-        emoji = "🔧"
+        status = "NEEDS IMPROVEMENT"
+        emoji = ""
 
     print(f"\n{emoji} {status}")
     print(f"  Target MdAPE: <{target_threshold}%")
     print(f"  Achieved MdAPE: {mdape:.2f}%")
-    print(f"  Test throughput R²: {test_metrics_throughput['original_space']['r2']:.4f}")
-    print(f"  Test runtime R²: {test_metrics_runtime['original_space']['r2']:.4f}")
+    print(f"  Test throughput R2: {test_metrics_throughput['original_space']['r2']:.4f}")
+    print(f"  Test runtime R2: {test_metrics_runtime['original_space']['r2']:.4f}")
     print(f"  Throughput within 20%: {test_metrics_throughput['original_space']['within_20_pct']:.1f}%")
     print(f"  Runtime within 20%: {test_metrics_runtime['original_space']['within_20_pct']:.1f}%")
     print(f"  Training time: {elapsed_time / 60:.1f} minutes")
-    print("\n🚀 Deep Learning predictor ready for inference!")
+    print("\nDeep Learning predictor ready for inference!")
 
     return model, encoders, scaler
 

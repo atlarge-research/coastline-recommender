@@ -1,9 +1,9 @@
-"""Tests for the trace -> flat measured-runs converter (coastline/sdk/trace/to_runs.py).
+"""Tests for the converter from a trace to flat measured runs (coastline/sdk/trace/to_runs.py).
 
-`coastline trace-to-runs` turns a fine-tuning TRACE CSV (dotted ``metadata.*``/``resources.*``
-columns) into the FLAT measured-runs schema that ``coastline tune``, the cache/intelligent
-retrieval lookup, and ``kavier calibrate`` all consume. Oracles here are the exact column
-rename map and the ``is_valid`` derivation rule (positive throughput AND runtime).
+`coastline utils trace-to-runs` turns a fine-tuning trace CSV (dotted ``metadata.*`` and
+``resources.*`` columns) into the flat measured-runs schema read by ``coastline utils tune``, the
+cache and intelligent retrieval lookup, and ``kavier calibrate``. The tests check the column
+rename map and the ``is_valid`` rule (throughput and runtime both positive).
 """
 
 import pandas as pd
@@ -55,23 +55,23 @@ def test_trace_is_renamed_to_the_flat_schema(tmp_path):
 
 
 def test_flat_batch_size_prefers_per_device_with_total_fallback(tmp_path):
-    """When the trace has per_device_train_batch_size, the flat batch_size (per-device by the
-    calibration convention) comes from it — not the total metadata.batch_size — falling back to
-    the total metadata.batch_size per-row where the per-device value is missing.
+    """When the trace has per_device_train_batch_size, the flat batch_size (per device, the
+    calibration convention) comes from it; a row without a per-device value falls back to the
+    total metadata.batch_size.
     """
     rows = [
-        # per-device 1 present while the total is 8 -> flat batch_size must be the per-device 1
+        # per-device 1 with a total of 8: the flat batch_size is 1
         {**_TRACE_ROW, "metadata.batch_size": 8, "per_device_train_batch_size": 1},
-        # per-device missing (NaN) -> fall back to the total metadata.batch_size (4)
+        # per-device missing (NaN): falls back to the total metadata.batch_size (4)
         {**_TRACE_ROW, "metadata.batch_size": 4, "per_device_train_batch_size": None},
     ]
     df = trace_to_runs(str(_write_csv(tmp_path, rows)))
     assert int(df.iloc[0]["batch_size"]) == 1  # per-device wins over the total 8
-    assert int(df.iloc[1]["batch_size"]) == 4  # per-device NaN -> total 4
+    assert int(df.iloc[1]["batch_size"]) == 4  # per-device NaN, so the total 4
 
 
 def test_is_valid_is_derived_from_positive_targets(tmp_path):
-    """is_valid = (dataset_tokens_per_second > 0) AND (train_runtime > 0)."""
+    """is_valid = (dataset_tokens_per_second > 0) and (train_runtime > 0)."""
     good = {**_TRACE_ROW, "metadata.uid": "good"}
     zero_tps = {**_TRACE_ROW, "metadata.uid": "zero-tps", "metadata.output.train_tokens_per_second": 0.0}
     no_runtime = {**_TRACE_ROW, "metadata.uid": "no-runtime", "metadata.train_runtime": 0.0}
@@ -115,7 +115,7 @@ def test_flat_input_keeps_its_own_is_valid(tmp_path):
             "batch_size": 1,
             "dataset_tokens_per_second": 900.0,
             "train_runtime": 300.0,
-            "is_valid": 0.0,  # explicitly marked invalid despite positive targets
+            "is_valid": 0.0,  # marked invalid despite positive targets
         }
     ]
     df = trace_to_runs(str(_write_csv(tmp_path, flat_rows, name="flat.csv")))
@@ -124,7 +124,7 @@ def test_flat_input_keeps_its_own_is_valid(tmp_path):
 
 
 def test_unrecognized_schema_raises(tmp_path):
-    """A CSV that is neither a trace nor the flat schema fails loudly."""
+    """A CSV that is neither a trace nor the flat schema raises ValueError."""
     junk = [{"foo": 1, "bar": 2}]
     with pytest.raises(ValueError, match="neither a fine-tuning trace nor a flat measured-runs CSV"):
         trace_to_runs(str(_write_csv(tmp_path, junk, name="junk.csv")))

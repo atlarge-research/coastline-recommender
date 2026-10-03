@@ -10,47 +10,46 @@ on:
       - "mkdocs.yml"
       - "pyproject.toml"
       - ".github/workflows/docs-deploy.yml"
-  workflow_dispatch:   # allow manual redeploys from the Actions tab
+  workflow_dispatch:   # manual redeploy
 
-# Least-privilege token: read the repo, write the Pages deployment.
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
-# One live deployment at a time; let an in-flight deploy finish rather than cancel it.
+# One deployment at a time; an in-flight deploy is not cancelled.
 concurrency:
   group: pages
   cancel-in-progress: false
 
 jobs:
-  # Build the static site exactly as the CI `docs` job does (strict: no broken links).
+  # --strict fails on warnings such as broken links.
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 3
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - name: Build docs (strict)
         run: |
-          uv sync --only-group docs --no-install-project
+          uv sync --locked --only-group docs --no-install-project
           uv run --no-sync mkdocs build --strict
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: site   # mkdocs.yml site_dir
 
-  # Publish the built artifact to GitHub Pages.
   deploy:
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

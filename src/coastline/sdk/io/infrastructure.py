@@ -32,17 +32,17 @@ class Infrastructure(BaseModel):
 
 
 def _config_path() -> Path:
-    """Infrastructure YAML path; honors INFRASTRUCTURE_CONFIG, else <repo>/coastline/config."""
+    """Infrastructure YAML path: INFRASTRUCTURE_CONFIG if set, else the repo's config/ directory."""
     override = os.environ.get("INFRASTRUCTURE_CONFIG")
     if override:
         return Path(override)
-    # src/coastline/sdk/io/infrastructure.py -> parents[4] == the coastline repo root (holds config/).
+    # parents[4] of this file is the repo root, which holds config/.
     return Path(__file__).resolve().parents[4] / "config" / "coastline_functionality" / "infrastructure.yaml"
 
 
 @lru_cache(maxsize=1)
 def load_infrastructure() -> Infrastructure:
-    """Load infrastructure config; falls back to built-in defaults with a warning if missing."""
+    """Load the infrastructure config; fall back to the built-in defaults if it is missing."""
     path = _config_path()
     if path.is_file():
         try:
@@ -51,25 +51,28 @@ def load_infrastructure() -> Infrastructure:
         except Exception as exc:
             logger.warning("Could not parse %s (%s); using built-in defaults", path, exc)
     else:
-        logger.warning("Infrastructure config not found at %s; using built-in defaults", path)
+        # An installed wheel has no config/ directory; only a missing override is a user error.
+        log = logger.warning if os.environ.get("INFRASTRUCTURE_CONFIG") else logger.info
+        log("Infrastructure config not found at %s; using built-in defaults", path)
     return Infrastructure(**_DEFAULTS)
 
 
 def resolve_cluster_caps(cluster_gpus: Optional[int] = None, node_gpus: Optional[int] = None) -> tuple[int, int, int]:
     """Resolve the cluster GPU caps as ``(total_gpus, gpus_per_node, max_nodes)``.
 
-    The cluster size is sysadmin-declared in ``infrastructure.yaml`` — it is deliberately NOT read
-    from the workload trace (a trace must never carry cluster topology). The optional ``cluster_gpus``
-    / ``node_gpus`` arguments (from a ``--cluster-gpus`` / ``--node-gpus`` CLI flag) override the
-    declared totals; when ``cluster_gpus`` is given, ``max_nodes`` is derived from it, otherwise the
-    file's declared ``max_nodes`` is used. The returned triple feeds ``SystemContext`` so the grid
-    never proposes a layout larger than the cluster.
+    The cluster size comes from ``infrastructure.yaml``, written by the sysadmin, and is never read
+    from the workload trace. ``cluster_gpus`` and ``node_gpus`` (the ``--cluster-gpus`` and
+    ``--node-gpus`` flags) override it; with ``cluster_gpus`` set, ``max_nodes`` is derived from
+    it, else the file's ``max_nodes`` is used. The result feeds ``SystemContext``, so the grid stays
+    within the cluster. A value below 1 raises ValueError.
     """
     infra = load_infrastructure()
-    total = int(cluster_gpus) if cluster_gpus else infra.total_gpus
+    total = int(cluster_gpus) if cluster_gpus is not None else infra.total_gpus
     if total < 1:
         raise ValueError(f"cluster GPUs must be >= 1, got {total}")
-    per_node = int(node_gpus) if node_gpus else infra.max_gpus_per_node
-    per_node = max(1, min(per_node, total))
-    max_nodes = max(1, math.ceil(total / per_node)) if cluster_gpus else infra.max_nodes
+    per_node = int(node_gpus) if node_gpus is not None else infra.max_gpus_per_node
+    if per_node < 1:
+        raise ValueError(f"GPUs per node must be >= 1, got {per_node}")
+    per_node = min(per_node, total)
+    max_nodes = max(1, math.ceil(total / per_node)) if cluster_gpus is not None else infra.max_nodes
     return total, per_node, max_nodes

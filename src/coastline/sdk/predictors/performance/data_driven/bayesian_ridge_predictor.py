@@ -13,8 +13,11 @@ from coastline.sdk.models.recommendation import Prediction  # noqa: F401  (retur
 from coastline.sdk.models.workload import WorkloadSpec
 from coastline.sdk.predictors.base import BasePredictor
 from coastline.sdk.predictors.performance.data_driven.ml_common import (
+    ModelNotShippedError,
     feature_row_has_unknown_specs,
     finalize_ml_prediction,
+    model_error_prediction,
+    model_not_shipped_error,
     performance_trained_model_path,
     workload_to_ml_feature_row,
 )
@@ -50,10 +53,7 @@ class BayesianRidgePredictor(BasePredictor):
             return
 
         if not self._model_path.exists():
-            raise FileNotFoundError(
-                f"Bayesian Ridge model not found at {self._model_path}. "
-                "Train it first: python -m trainer.main --model bayesian_ridge"
-            )
+            raise model_not_shipped_error("bayesian_ridge", self._model_path)
 
         try:
             with open(self._model_path, "rb") as f:
@@ -84,17 +84,17 @@ class BayesianRidgePredictor(BasePredictor):
             logger.info(f"Bayesian Ridge model loaded from {self._model_path}")
             logger.info(f"  Format: {'dual-output' if self._is_dual_output else 'single-output (legacy)'}")
             if self._test_metrics:
-                # Handle both old single dict and new dict-of-dicts for test_metrics
+                # test_metrics is one dict, or one dict per target
                 if self._is_dual_output and "throughput" in self._test_metrics:
                     mdape = self._test_metrics.get("throughput", {}).get("original_space", {}).get("mdape", "N/A")
                     r2 = self._test_metrics.get("throughput", {}).get("original_space", {}).get("r2", "N/A")
                 else:
                     mdape = self._test_metrics.get("original_space", {}).get("mdape", "N/A")
                     r2 = self._test_metrics.get("original_space", {}).get("r2", "N/A")
-                logger.info(f"  Test MdAPE: {mdape}%, R²: {r2}")
+                logger.info(f"  Test MdAPE: {mdape}%, R2: {r2}")
                 logger.info(f"  Uncertainty-Error Correlation: {self._uncertainty_correlation:.4f}")
             if self._best_params:
-                # Handle both old single dict and new dict-of-dicts for best_params
+                # best_params is one dict, or one dict per target
                 if self._is_dual_output and "throughput" in self._best_params:
                     poly_degree = self._best_params.get("throughput", {}).get("poly__degree", "N/A")
                 else:
@@ -108,12 +108,23 @@ class BayesianRidgePredictor(BasePredictor):
             raise
 
     def predict(self, workload: WorkloadSpec, context: SystemContext, return_std: bool = False) -> Optional[Prediction]:
-        """Predict throughput; return_std=True adds uncertainty to metadata. Returns None on load failure."""
+        """Predict throughput; ``return_std=True`` adds the log-space standard deviation to metadata.
+
+        Returns None for a model or GPU missing from Kavier's library. A model file that cannot be
+        loaded, or holds no model, gives a Prediction with no numbers and the reason in
+        ``metadata['error_detail']``. A missing model file raises ModelNotShippedError.
+        """
         try:
             self._load()
+        except ModelNotShippedError:
+            raise
         except Exception as e:
             logger.warning(f"Bayesian Ridge predictor unavailable: {e}")
-            return None
+            return model_error_prediction(
+                workload,
+                model_name="bayesian_ridge",
+                detail=f"model artifact could not be loaded: {self._model_path} ({e})",
+            )
 
         model = self._model
         best_params = self._best_params or {}
@@ -122,7 +133,9 @@ class BayesianRidgePredictor(BasePredictor):
         uncertainty_correlation = self._uncertainty_correlation if self._uncertainty_correlation is not None else 0.0
         if model is None:
             logger.warning("Bayesian Ridge predictor artifacts are incomplete")
-            return None
+            return model_error_prediction(
+                workload, model_name="bayesian_ridge", detail=f"model artifact is incomplete: {self._model_path}"
+            )
 
         X = pd.DataFrame([workload_to_ml_feature_row(workload)])
 
@@ -160,7 +173,7 @@ class BayesianRidgePredictor(BasePredictor):
             throughput = float(np.expm1(y_log_pred[0]))
             runtime_seconds = None
 
-        # Handle both old single dict and new dict-of-dicts for best_params
+        # best_params is one dict, or one dict per target
         if isinstance(model, dict) and "throughput" in best_params:
             poly_degree = best_params.get("throughput", {}).get("poly__degree", "N/A")
         else:

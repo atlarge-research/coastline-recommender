@@ -1,7 +1,7 @@
-"""The single ``coastline`` command — a lazy subcommand dispatcher.
+"""The ``coastline`` command, which dispatches to the subcommands.
 
-Each handler imports its subcommand module only when invoked, so ``coastline --help``
-and any one command never pull a sibling's heavy dependencies (pandas, kavier, ...).
+Each handler imports its subcommand module only when called, so ``coastline --help`` and
+each command load only the dependencies they use (pandas, kavier, ...).
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ def _run_utils(argv: Optional[Sequence[str]]) -> None:
 
 _COMMANDS: dict[str, tuple[str, _Handler]] = {
     "recommend-job": (
-        "Recommend GPU/node configs for ONE job: --interactive | --config | --input/--output CSV.",
+        "Recommend GPU/node configs for one job: --interactive | --config | --input/--output CSV.",
         _run_recommend_job,
     ),
     "recommend-trace": (
@@ -54,11 +54,11 @@ _COMMANDS: dict[str, tuple[str, _Handler]] = {
         _run_recommend_trace,
     ),
     "simulate": (
-        "Predict throughput/power/runtime for ONE declared config, without ranking.",
+        "Predict throughput/power/runtime for one declared config, without ranking.",
         _run_simulate,
     ),
     "explain": (
-        "Show WHY a recommendation won: ranked candidates, score components, weights.",
+        "Show why a recommendation won: ranked candidates, score components, weights.",
         _run_explain,
     ),
     "utils": ("Auxiliary tooling: tune | trace-to-runs | plot-trace.", _run_utils),

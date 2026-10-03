@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Exp1 timing: 12 models × N repeats -> timing_runs.csv + timing_summary.csv.
+"""Exp1 timing: 12 models x N repeats, written to timing_runs.csv and timing_summary.csv.
 
-Each model is timed in its OWN subprocess (``--worker``) so the native ML backends
-never co-load in one interpreter (co-loading several segfaults on macOS). The
-measured ``predict_time_s`` is the in-loop prediction time, so subprocess startup
-is not counted.
+Each model is timed in its own subprocess (``--worker``), because loading several native ML
+backends in one interpreter segfaults on macOS. ``predict_time_s`` covers only the prediction
+loop, so subprocess startup is excluded.
 """
 
 from __future__ import annotations
@@ -44,8 +43,7 @@ def _time_once(name: str, ml: dict) -> dict:
     elif name == "TabPFN":
         r = evaluate_tabpfn_batch(ml)
     else:
-        # _ML_MODELS maps a display name to a predictor key; build the predictor the same way
-        # run_benchmark.py does, so the timing measures the path the benchmark actually uses.
+        # Build the predictor as run_benchmark.py does, so the timing covers the same code path.
         from coastline.sdk.policies import PolicyFactory
 
         predictor = PolicyFactory.throughput_predictor({"performance": _ML_MODELS[name]})
@@ -130,5 +128,5 @@ if __name__ == "__main__":
     if a.worker:
         _worker(a.worker, a.repeats)
         sys.exit(0)
-    print(f"{len(MODELS)}×{a.repeats}={len(MODELS) * a.repeats} timings", flush=True)
+    print(f"{len(MODELS)}*{a.repeats}={len(MODELS) * a.repeats} timings", flush=True)
     run(a.repeats, a.output, a.summary, a.force)

@@ -12,9 +12,12 @@ from coastline.sdk.models.recommendation import Prediction  # noqa: F401  (retur
 from coastline.sdk.models.workload import WorkloadSpec
 from coastline.sdk.predictors.base import BasePredictor
 from coastline.sdk.predictors.performance.data_driven.ml_common import (
+    ModelNotShippedError,
     build_encoded_features,
     feature_row_has_unknown_specs,
     finalize_ml_prediction,
+    model_error_prediction,
+    model_not_shipped_error,
     performance_trained_model_path,
     workload_to_ml_feature_row,
 )
@@ -47,10 +50,7 @@ class GaussianProcessPredictor(BasePredictor):
             return
 
         if not self._model_path.exists():
-            raise FileNotFoundError(
-                f"Gaussian Process model not found at {self._model_path}. "
-                "Train it first: python -m trainer.main --model gaussian_process"
-            )
+            raise model_not_shipped_error("gaussian_process", self._model_path)
 
         try:
             with open(self._model_path, "rb") as f:
@@ -78,14 +78,14 @@ class GaussianProcessPredictor(BasePredictor):
             logger.info(f"Gaussian Process model loaded from {self._model_path}")
             logger.info(f"  Format: {'dual-output' if self._is_dual_output else 'single-output (legacy)'}")
             if self._test_metrics:
-                # Handle both old single dict and new dict-of-dicts for test_metrics
+                # test_metrics is one dict, or one dict per target
                 if self._is_dual_output and "throughput" in self._test_metrics:
                     mdape = self._test_metrics.get("throughput", {}).get("original_space", {}).get("mdape", "N/A")
                     r2 = self._test_metrics.get("throughput", {}).get("original_space", {}).get("r2", "N/A")
                 else:
                     mdape = self._test_metrics.get("original_space", {}).get("mdape", "N/A")
                     r2 = self._test_metrics.get("original_space", {}).get("r2", "N/A")
-                logger.info(f"  Test MdAPE: {mdape}%, R²: {r2}")
+                logger.info(f"  Test MdAPE: {mdape}%, R2: {r2}")
                 logger.info(f"  Uncertainty-correlation: {self._uncertainty_correlation:.4f}")
             if self._kernel:
                 logger.info(f"  Kernel: {self._kernel}")
@@ -95,12 +95,23 @@ class GaussianProcessPredictor(BasePredictor):
             raise
 
     def predict(self, workload: WorkloadSpec, context: SystemContext, return_std: bool = False) -> Optional[Prediction]:
-        """Predict throughput; return_std=True adds uncertainty to metadata. Returns None on load failure."""
+        """Predict throughput; ``return_std=True`` adds the log-space standard deviation to metadata.
+
+        Returns None for a model or GPU missing from Kavier's library. A model file that cannot be
+        loaded, or holds no model, gives a Prediction with no numbers and the reason in
+        ``metadata['error_detail']``. A missing model file raises ModelNotShippedError.
+        """
         try:
             self._load()
+        except ModelNotShippedError:
+            raise
         except Exception as e:
             logger.warning(f"Gaussian Process predictor unavailable: {e}")
-            return None
+            return model_error_prediction(
+                workload,
+                model_name="gaussian_process",
+                detail=f"model artifact could not be loaded: {self._model_path} ({e})",
+            )
 
         model = self._model
         encoders = self._encoders
@@ -110,7 +121,9 @@ class GaussianProcessPredictor(BasePredictor):
         uncertainty_correlation = self._uncertainty_correlation if self._uncertainty_correlation is not None else 0.0
         if model is None or encoders is None or cat_features is None or num_features is None:
             logger.warning("Gaussian Process predictor artifacts are incomplete")
-            return None
+            return model_error_prediction(
+                workload, model_name="gaussian_process", detail=f"model artifact is incomplete: {self._model_path}"
+            )
 
         row = workload_to_ml_feature_row(workload)
         if feature_row_has_unknown_specs(row):

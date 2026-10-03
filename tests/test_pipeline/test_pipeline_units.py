@@ -1,14 +1,7 @@
-"""Focused unit tests for the recommender pipeline building blocks.
+"""Unit tests for the pipeline building blocks.
 
-Targets the feasibility / grid-generation / scoring units that are only
-covered indirectly by the integration tests in test_unified_workflow.py:
-
-* coastline.sdk.predictors.feasibility.autoconf.RulesFeasibilityChecker
-* coastline.sdk.pipeline.grid: _powers_of_two, _derive_node_layout,
-  grid_config_from_dict, generate_candidates
-
-All inputs are synthetic and deterministic; no model artifacts or data files
-are loaded. These tests do not modify production code.
+Covers RulesFeasibilityChecker and the grid helpers _powers_of_two, _derive_node_layout,
+grid_config_from_dict and generate_candidates. No model or data file is loaded.
 """
 
 from __future__ import annotations
@@ -30,9 +23,6 @@ from coastline.sdk.predictors.feasibility.autoconf import (
 )
 
 
-# --------------------------------------------------------------------------- #
-# helpers
-# --------------------------------------------------------------------------- #
 def _workload(batch_size: int = 8, gpus_per_node=None, number_of_nodes=None) -> WorkloadSpec:
     return WorkloadSpec(
         llm_model="mistral-7b-v0.1",
@@ -58,12 +48,10 @@ def _context(max_gpus: int = 16, gpus_per_node: int = 8, max_nodes: int = 2) -> 
     )
 
 
-# --------------------------------------------------------------------------- #
-# RulesFeasibilityChecker — per-device sanity guards (no divisibility rule)
-# --------------------------------------------------------------------------- #
+# RulesFeasibilityChecker: per-device sanity checks (no divisibility rule)
 class TestRulesFeasibility:
     def test_valid_per_device_batch_is_feasible(self):
-        # Any valid per-device workload is feasible (no divisibility rule). total_gpus = 4.
+        # A valid per-device workload on 4 GPUs is feasible.
         wl = _workload(batch_size=8, gpus_per_node=4, number_of_nodes=1)
         assert wl.total_gpus == 4
         ok, meta = RulesFeasibilityChecker().is_feasible(wl)
@@ -71,8 +59,7 @@ class TestRulesFeasibility:
         assert meta == {}
 
     def test_non_divisible_batch_is_feasible(self):
-        # batch_size is PER-DEVICE: it need NOT divide the GPU count. total_gpus = 3, per-device
-        # batch 8 -> feasible (the old ``8 % 3`` divisibility rejection is gone).
+        # batch_size is per device and need not divide the GPU count: batch 8 on 3 GPUs is feasible.
         wl = _workload(batch_size=8, gpus_per_node=3, number_of_nodes=1)
         assert wl.total_gpus == 3
         ok, meta = RulesFeasibilityChecker().is_feasible(wl)
@@ -80,25 +67,21 @@ class TestRulesFeasibility:
         assert meta == {}
 
     def test_per_device_batch_feasible_regardless_of_total_gpus(self):
-        # A per-device batch of 8 is feasible on ANY GPU count, including 16 where the old
-        # divisibility rule (8 % 16 != 0) would have wrongly rejected it.
+        # A per-device batch of 8 is feasible on 16 GPUs too.
         wl = _workload(batch_size=8, gpus_per_node=8, number_of_nodes=2)
-        assert wl.total_gpus == 16  # 8 * 2, hand-computed
+        assert wl.total_gpus == 16  # 8 * 2
         ok, meta = RulesFeasibilityChecker().is_feasible(wl)
         assert ok is True
         assert meta == {}
 
     def test_default_layout_single_gpu_always_divisible(self):
-        # No layout given -> total_gpus defaults to 1; everything divisible by 1.
+        # Without a layout total_gpus is 1.
         wl = _workload(batch_size=7)
         assert wl.total_gpus == 1
         ok, _ = RulesFeasibilityChecker().is_feasible(wl)
         assert ok is True
 
 
-# --------------------------------------------------------------------------- #
-# _powers_of_two
-# --------------------------------------------------------------------------- #
 class TestPowersOfTwo:
     @pytest.mark.parametrize(
         "limit, expected",
@@ -107,7 +90,7 @@ class TestPowersOfTwo:
             (2, [1, 2]),
             (8, [1, 2, 4, 8]),
             (16, [1, 2, 4, 8, 16]),
-            (10, [1, 2, 4, 8]),  # truncates below non-power-of-two limit
+            (10, [1, 2, 4, 8]),  # stops below a limit that is not a power of two
             (0, []),  # nothing fits under 1
         ],
     )
@@ -115,43 +98,37 @@ class TestPowersOfTwo:
         assert _powers_of_two(limit) == expected
 
 
-# --------------------------------------------------------------------------- #
-# _derive_node_layout — pack GPUs per node, ceil node count
-# --------------------------------------------------------------------------- #
+# _derive_node_layout - exact layout, fewest nodes
 class TestDeriveNodeLayout:
     @pytest.mark.parametrize(
         "total_gpus, max_per_node, expected",
         [
-            (1, 8, (1, 1)),  # single GPU -> single node
-            (8, 8, (8, 1)),  # exactly fills one node
+            (1, 8, (1, 1)),  # one GPU on one node
+            (8, 8, (8, 1)),  # fills one node
             (16, 8, (8, 2)),  # two full nodes
-            (12, 8, (8, 2)),  # 12 GPUs -> 8/node, ceil(12/8) = 2 nodes
-            (3, 8, (3, 1)),  # fewer than a node packs into one node
-            (9, 8, (8, 2)),  # one over a node -> second node
-            (5, 4, (4, 2)),  # smaller node cap
+            (12, 8, (6, 2)),  # 6 per node on 2 nodes (8 x 2 would be 16)
+            (3, 8, (3, 1)),  # fits on one node
+            (9, 8, (3, 3)),  # one over a node: the only exact split within 8 per node is 3 x 3
+            (5, 4, (1, 5)),  # smaller node cap: 5 is prime, so one GPU per node
         ],
     )
     def test_layout(self, total_gpus, max_per_node, expected):
         gpus_per_node, num_nodes = _derive_node_layout(total_gpus, max_per_node)
         assert (gpus_per_node, num_nodes) == expected
-        # invariant: the allocation covers the requested total ...
+        # the layout covers the requested total
         assert gpus_per_node * num_nodes >= total_gpus
-        # ... and is minimal — dropping one node would NOT cover it (independent of
-        # the impl's ceil formula; asserts the "fewest nodes" contract directly).
+        # and one node fewer would not
         assert (num_nodes - 1) * gpus_per_node < total_gpus
-        # invariant: never pack more than the node cap onto a node
+        # no node holds more than the cap
         assert gpus_per_node <= max_per_node
 
     def test_zero_total_gpus_raises_zero_division(self):
-        # EDGE CASE / latent bug: total_gpus=0 -> gpus_per_node=min(0,8)=0 -> ceil(0/0).
-        # Guarded upstream today (callers feed positive values), documented here.
+        # total_gpus=0 gives gpus_per_node=0 and a modulo by zero. Callers skip non-positive
+        # counts before this point.
         with pytest.raises(ZeroDivisionError):
             _derive_node_layout(0, 8)
 
 
-# --------------------------------------------------------------------------- #
-# grid_config_from_dict
-# --------------------------------------------------------------------------- #
 class TestGridConfigFromDict:
     def test_explicit_total_gpus_list_preserved(self):
         gc = grid_config_from_dict({"grid": {"total_gpus": [2, 4], "batch_sizes": [8, 16], "top_k": 5}})
@@ -160,7 +137,7 @@ class TestGridConfigFromDict:
         assert gc.top_k == 5
 
     def test_total_gpus_derived_from_max_gpus_when_absent(self):
-        # No explicit list, max_gpus given -> powers of two up to max_gpus.
+        # Without a list, the GPU counts are the powers of two up to max_gpus.
         gc = grid_config_from_dict(None, max_gpus=8)
         assert gc.total_gpus == [1, 2, 4, 8]
         assert gc.batch_sizes == DEFAULT_BATCH_SIZES
@@ -182,21 +159,19 @@ class TestGridConfigFromDict:
         assert gc.top_k == 5
 
 
-# --------------------------------------------------------------------------- #
-# generate_candidates — grid (batch_sizes × total_gpus) with context clipping
-# --------------------------------------------------------------------------- #
+# generate_candidates: batch_sizes x total_gpus, clipped to the context
 class TestGenerateCandidates:
     def test_cartesian_product_and_layouts(self):
-        # total_gpus [1,2,4,8,16,32] clipped at max_gpus=16; 5 surviving steps × 2 bs.
+        # max_gpus=16 drops 32, leaving 5 GPU counts x 2 batch sizes.
         ctx = _context(max_gpus=16, gpus_per_node=8, max_nodes=2)
         gc = GridConfig(batch_sizes=[4, 8], total_gpus=[1, 2, 4, 8, 16, 32])
         cands = generate_candidates(_workload(), ctx, gc)
 
-        assert len(cands) == 5 * 2  # 32 dropped (> max_gpus)
+        assert len(cands) == 5 * 2  # 32 is over max_gpus
         layouts = sorted({(c.gpus_per_node, c.number_of_nodes, c.total_gpus) for c in cands})
         assert layouts == [(1, 1, 1), (2, 1, 2), (4, 1, 4), (8, 1, 8), (8, 2, 16)]
 
-        # every candidate carries one of the requested batch sizes
+        # every candidate has one of the requested batch sizes
         assert {c.batch_size for c in cands} == {4, 8}
 
     def test_max_gpus_bound_excludes_oversized_configs(self):
@@ -207,8 +182,8 @@ class TestGenerateCandidates:
         assert all(c.total_gpus <= ctx.max_gpus for c in cands)
 
     def test_max_nodes_bound_excludes_too_many_nodes(self):
-        # gpus_per_node=8, max_nodes=2 -> only up to 16 total GPUs reachable,
-        # even though max_gpus allows more. 24 (3 nodes) and 32 (4 nodes) dropped.
+        # At 8 GPUs per node and max_nodes=2 at most 16 GPUs fit, although max_gpus allows more,
+        # so 24 (3 nodes) and 32 (4 nodes) are dropped.
         ctx = _context(max_gpus=64, gpus_per_node=8, max_nodes=2)
         gc = GridConfig(batch_sizes=[8], total_gpus=[8, 16, 24, 32])
         cands = generate_candidates(_workload(), ctx, gc)
@@ -217,7 +192,7 @@ class TestGenerateCandidates:
         assert all(c.number_of_nodes <= ctx.constraints.max_nodes for c in cands)
 
     def test_gpus_per_node_cap_is_respected(self):
-        # Node cap of 4 means 8 total GPUs must span 2 nodes (not one node of 8).
+        # With 4 GPUs per node, 8 GPUs take 2 nodes.
         ctx = _context(max_gpus=16, gpus_per_node=4, max_nodes=8)
         gc = GridConfig(batch_sizes=[4], total_gpus=[4, 8])
         cands = generate_candidates(_workload(batch_size=4), ctx, gc)
@@ -226,7 +201,7 @@ class TestGenerateCandidates:
         assert all(c.gpus_per_node <= ctx.constraints.gpus_per_node for c in cands)
 
     def test_empty_grid_total_gpus_falls_back_to_powers_of_two(self):
-        # GridConfig.total_gpus == [] -> generate_candidates derives from max_gpus.
+        # An empty total_gpus list is filled from max_gpus.
         ctx = _context(max_gpus=4, gpus_per_node=8, max_nodes=2)
         gc = GridConfig(batch_sizes=[2], total_gpus=[])
         cands = generate_candidates(_workload(batch_size=2), ctx, gc)
@@ -235,7 +210,7 @@ class TestGenerateCandidates:
     def test_candidates_inherit_workload_fields(self):
         ctx = _context()
         gc = GridConfig(batch_sizes=[8], total_gpus=[2])
-        wl = _workload(batch_size=999)  # batch_size should come from grid, not workload
+        wl = _workload(batch_size=999)  # the batch size comes from the grid
         cands = generate_candidates(wl, ctx, gc)
         assert len(cands) == 1
         c = cands[0]
@@ -246,23 +221,22 @@ class TestGenerateCandidates:
         assert c.batch_size == 8  # from the grid
 
     def test_explicit_zero_total_gpus_is_skipped_cleanly(self):
-        # A 0 in the explicit total_gpus list is skipped by the non-positive
-        # guard (it would otherwise hit ceil(0/0) in _derive_node_layout);
-        # the remaining valid entry (2) still produces candidates.
+        # The 0 is skipped (it would divide by zero in _derive_node_layout), and 2 still gives
+        # candidates.
         ctx = _context()
         gc = GridConfig(batch_sizes=[8], total_gpus=[0, 2])
         cands = generate_candidates(_workload(), ctx, gc)
         assert {c.total_gpus for c in cands} == {2}
 
     def test_negative_total_gpus_is_skipped_cleanly(self):
-        # Non-positive guard also drops negative entries without error.
+        # Negative entries are skipped too.
         ctx = _context()
         gc = GridConfig(batch_sizes=[8], total_gpus=[-4, 2])
         cands = generate_candidates(_workload(), ctx, gc)
         assert {c.total_gpus for c in cands} == {2}
 
     def test_all_non_positive_total_gpus_yields_no_candidates(self):
-        # If every entry is non-positive, the grid is empty (no error raised).
+        # With only non-positive entries the grid is empty and nothing is raised.
         ctx = _context()
         gc = GridConfig(batch_sizes=[8], total_gpus=[0, -1])
         cands = generate_candidates(_workload(), ctx, gc)

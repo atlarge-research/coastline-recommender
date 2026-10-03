@@ -1,4 +1,4 @@
-"""Coastline command-line interface — the single ``coastline`` entrypoint."""
+"""Coastline command-line interface: the ``coastline`` command."""
 
 from coastline.cli.main import main
 

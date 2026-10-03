@@ -1,12 +1,12 @@
-"""Predict ONE declared configuration — the recommender's simulate step, without ranking.
+"""Predict one given configuration: the recommender's simulate step without ranking.
 
-``recommend`` sweeps a grid and ranks it; ``simulate_one`` runs the same feasibility check and
-the same throughput/power predictor against a single configuration the caller already chose, and
-reports the raw numbers.
+``recommend`` sweeps a grid and ranks it. ``simulate_one`` runs the same feasibility check and
+throughput and power predictors on a single configuration chosen by the caller, and reports the
+raw numbers.
 
-Deliberately no score. The policy scores (``power_score``/``throughput_score``) are min-max
-normalised *across the candidate grid* (``sdk/pipeline/selection.py``), so for a single
-configuration they degenerate to 1.0 and mean nothing. Use ``coastline explain`` for scores.
+There is no score: the policy scores (``power_score``, ``throughput_score``) are min-max
+normalized over the candidate grid (``sdk/pipeline/selection.py``) and are always 1.0 for a
+single configuration. ``coastline explain`` shows scores.
 """
 
 from __future__ import annotations
@@ -45,12 +45,13 @@ def simulate_one(
     ``None`` when it could not be derived. ``predicted_runtime_seconds`` and ``energy_kwh``
     need ``total_tokens`` (the Kavier engine returns per-step time, never total runtime).
     """
-    # Local imports: keep `import coastline` light — the predictor backends are heavy.
+    # Imported here to keep `import coastline` light; the predictor backends are heavy.
     from coastline.sdk.pipeline.feasibility import create_feasibility_checker
+    from coastline.sdk.pipeline.workflow import measured_power
     from coastline.sdk.policies import PolicyFactory, normalize_predictor
 
-    # The same validator the facade and batch API use: a typo must fail loudly here too, rather
-    # than resolving to the `intelligent` default and reporting its numbers under the typed name.
+    # Same validation as the facade and batch API: an unknown name raises instead of running the
+    # `intelligent` default under the mistyped name.
     predictor = normalize_predictor(predictor)
 
     gpus_per_node = workload.gpus_per_node or 1
@@ -81,8 +82,8 @@ def simulate_one(
         "error": None,
     }
 
-    # 1. Feasibility. `none` skips the check; `autoconf` raises when the model is unavailable
-    #    (unless COASTLINE_ALLOW_RULES_FALLBACK=1) — that is a configuration error, so let it out.
+    # 1. Feasibility. `none` skips the check. `autoconf` raises when the model is unavailable
+    #    (unless COASTLINE_ALLOW_RULES_FALLBACK=1); that configuration error propagates.
     checker = create_feasibility_checker({"feasibility": feasibility})
     feasible, feasibility_metadata = checker.is_feasible(workload)
     result["feasible"] = feasible
@@ -91,15 +92,15 @@ def simulate_one(
         result["error"] = "infeasible"
         return result
 
-    # 2. Throughput. PolicyFactory is the single source of truth for name -> predictor;
-    #    on the Kavier path power comes back from this same call, so this is one engine call.
+    # 2. Throughput, from the predictor PolicyFactory resolves. Kavier returns power from the
+    #    same call.
     prediction = PolicyFactory.throughput_predictor({"performance": predictor}).predict(workload, context)
     if prediction is None:
         result["error"] = "no prediction"
         return result
 
-    # Kavier signals failure with a non-None Prediction carrying error metadata and null numbers,
-    # so `prediction is None` alone is not a sufficient guard.
+    # Kavier reports a failure as a Prediction with error metadata and null numbers, so the
+    # metadata is checked too.
     reported_error = (prediction.metadata or {}).get("error")
     if reported_error:
         result["error"] = str(reported_error)
@@ -111,21 +112,23 @@ def simulate_one(
         return result
     result["predicted_throughput"] = throughput
 
-    # 3. Power. Kavier returns it from the call above; every other predictor needs the dedicated
-    #    power predictor, the same fallback GridWorkflowPipeline.recommend does (workflow.py:163-170).
+    # 3. Power. Kavier returned it above; other predictors use the power predictor, and a cache
+    #    hit without a power from it uses the power measured in its run, as
+    #    pipeline.workflow.simulate_one does.
     power = _finite(prediction.predicted_power)
     if power is None or power <= 0:
         power_prediction = PolicyFactory.power_predictor({"energy": energy}).predict(workload, context)
         power = _finite(power_prediction.predicted_power) if power_prediction is not None else None
+    if power is None or power <= 0:
+        power = measured_power(prediction)
     if power is not None and power > 0:
         result["predicted_power_watts"] = power
         result["cluster_power_watts"] = power * total_gpus
         result["tokens_per_watt"] = throughput / power
 
-    # 4. Runtime and energy need the dataset size; Kavier reports per-step time, not total runtime.
-    #    Without --total-tokens a cache/ML predictor may still carry a runtime, but that is the
-    #    wall clock of the HISTORICAL run it matched, for a dataset size the caller never declared.
-    #    Record which it is so the caller does not present someone else's runtime as this job's.
+    # 4. Runtime and energy need the dataset size, as Kavier reports only per-step time. Without
+    #    --total-tokens a cache or ML predictor may return a runtime, but it is the runtime of the
+    #    past run it matched. runtime_source records where the number comes from.
     if total_tokens > 0:
         runtime = total_tokens / throughput
         result["runtime_source"] = "total_tokens"

@@ -1,4 +1,4 @@
-"""`coastline simulate` — predict ONE declared configuration, without ranking anything."""
+"""`coastline simulate`: predict one declared configuration without ranking."""
 
 from __future__ import annotations
 
@@ -7,36 +7,40 @@ import json
 import sys
 from typing import Optional, Sequence
 
-from coastline.cli._shared import FriendlyParser
-from coastline.sdk.constants import DEFAULT_GPUS_PER_NODE
+from coastline.cli._shared import FriendlyParser, positive_int, report_errors
+from coastline.sdk.constants import DEFAULT_GPUS_PER_NODE, FeasibilityMode
 
 
 def _build_parser() -> FriendlyParser:
     p = FriendlyParser(
         prog="coastline simulate",
-        description="Predict throughput, power, runtime and energy for ONE configuration you "
+        description="Predict throughput, power, runtime and energy for one configuration you "
         "declare. No grid, no ranking: this is the recommender's simulate step on its own.",
         example="coastline simulate --model mistral-7b-v0.1 --method lora "
         "--gpu-model NVIDIA-A100-SXM4-80GB --tokens 1024 --batch-size 16 --gpus-per-node 4",
     )
-    # Every flag also answers to its underscore spelling (--model_name, --tokens_per_sample, ...),
-    # the form the thesis listings print; the hyphenated spellings are unchanged.
+    # The workload flags also accept the underscore spellings printed in the thesis listings
+    # (--model_name, --tokens_per_sample, ...).
     p.add_argument("--model", "--model_name", required=True, help="LLM model name (Kavier catalog spelling).")
     p.add_argument("--method", required=True, help="Fine-tuning method: full | lora | qlora.")
     p.add_argument("--gpu-model", "--gpu_model", required=True, help="GPU model, e.g. NVIDIA-A100-SXM4-80GB.")
     p.add_argument(
-        "--tokens", "--tokens_per_sample", type=int, required=True, help="Tokens per sample (sequence length)."
+        "--tokens",
+        "--tokens_per_sample",
+        type=positive_int,
+        required=True,
+        help="Tokens per sample (sequence length).",
     )
-    p.add_argument("--batch-size", "--batch_size", type=int, required=True, help="Per-device batch size.")
-    # The layout is declared EITHER per node or as a total, never both: the two would contradict.
-    # Both default to None so `_resolve_layout` can tell "not given" from "given as 1".
+    p.add_argument("--batch-size", "--batch_size", type=positive_int, required=True, help="Per-device batch size.")
+    # The layout is given per node or as a total; the parser rejects both together.
+    # Both default to None so _resolve_layout can tell "not given" from "given as 1".
     layout = p.add_mutually_exclusive_group()
     layout.add_argument("--gpus-per-node", type=int, default=None, help="GPUs per node (default: 1).")
     layout.add_argument(
         "--number_gpus",
         type=int,
         default=None,
-        help="TOTAL GPUs across every node — NOT a synonym for --gpus-per-node. Divided by --nodes "
+        help="Total GPUs across all nodes (--gpus-per-node is the count on one node). Divided by --nodes "
         f"to get the per-node layout; without --nodes it must fit one node (<= {DEFAULT_GPUS_PER_NODE}).",
     )
     p.add_argument("--nodes", "--number_nodes", type=int, default=None, help="Number of nodes (default: 1).")
@@ -45,7 +49,7 @@ def _build_parser() -> FriendlyParser:
         type=int,
         default=0,
         help="Dataset size in tokens. Required for runtime and energy: the analytical engine "
-        "reports per-step time, not total runtime, so both are omitted without it.",
+        "reports the time of one step, so both are omitted without it.",
     )
     p.add_argument(
         "--predictor",
@@ -56,19 +60,19 @@ def _build_parser() -> FriendlyParser:
     p.add_argument(
         "--feasibility",
         default="autoconf",
+        choices=[mode.value for mode in FeasibilityMode],
         help="Feasibility checker: autoconf (default, real OOM check via AutoConf) "
-        "| rules (divisibility-only, works without AutoConf) | none.",
+        "| rules (structural sanity guards only, no OOM check; works without AutoConf) | none.",
     )
     p.add_argument("--json", action="store_true", help="Emit the raw result as JSON instead of a text report.")
     return p
 
 
 def _resolve_layout(parser: FriendlyParser, args: argparse.Namespace) -> tuple[int, int]:
-    """The ``(gpus_per_node, nodes)`` layout behind either spelling.
+    """Return ``(gpus_per_node, nodes)`` from either layout flag.
 
-    ``--gpus-per-node`` declares the per-node width directly. ``--number_gpus`` declares the
-    TOTAL across the cluster, so the per-node width is derived from ``--nodes`` and must divide
-    evenly. The parser makes the two mutually exclusive, so at most one is set here.
+    ``--gpus-per-node`` gives the per-node width. ``--number_gpus`` gives the total across all
+    nodes, which must divide evenly over ``--nodes``. The parser allows at most one of the two.
     """
     nodes = args.nodes
     if nodes is not None and nodes < 1:
@@ -122,13 +126,13 @@ def _format_report(result: dict) -> str:
         lines.append(f"tok/W     {result['tokens_per_watt']:.2f}")
     if result["predicted_runtime_seconds"] is not None:
         historical = result["runtime_source"] == "predictor_history"
-        provenance = "  (the matched historical run, NOT this dataset)" if historical else ""
+        provenance = "  (for the dataset of the matched historical run)" if historical else ""
         lines.append(f"runtime   {result['predicted_runtime_seconds']:.2f} s{provenance}")
     if result["energy_kwh"] is not None:
         lines.append(f"energy    {result['energy_kwh']:.4f} kWh")
     if result["runtime_source"] != "total_tokens":
         lines.append("")
-        lines.append("note      pass --total-tokens for a runtime and energy derived from YOUR dataset.")
+        lines.append("note      pass --total-tokens for a runtime and energy derived from your dataset.")
     return "\n".join(lines)
 
 
@@ -137,12 +141,20 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     args = parser.parse_args(argv)
     if args.total_tokens < 0:
         parser.error("--total-tokens cannot be negative")
+    gpus_per_node, nodes = _resolve_layout(parser, args)
+    with report_errors(parser):
+        result = _simulate(args, gpus_per_node, nodes)
 
+    print(json.dumps(result, indent=2) if args.json else _format_report(result))
+    if result["error"]:
+        sys.exit(1)
+
+
+def _simulate(args: argparse.Namespace, gpus_per_node: int, nodes: int) -> dict:
     from coastline.sdk.models.context import SystemContext
     from coastline.sdk.models.workload import WorkloadSpec
     from coastline.sdk.recommend.simulate import simulate_one
 
-    gpus_per_node, nodes = _resolve_layout(parser, args)
     total_gpus = gpus_per_node * nodes
     workload = WorkloadSpec(
         llm_model=args.model,
@@ -160,17 +172,13 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         max_nodes=nodes,
     )
 
-    result = simulate_one(
+    return simulate_one(
         workload,
         context,
         predictor=args.predictor,
         feasibility=args.feasibility,
         total_tokens=args.total_tokens,
     )
-
-    print(json.dumps(result, indent=2) if args.json else _format_report(result))
-    if result["error"]:
-        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -1,16 +1,15 @@
 """Convert a fine-tuning trace CSV to the flat measured-runs schema.
 
-A *trace* CSV has dotted ``metadata.*`` / ``resources.*`` columns (one recorded job per
-row — the input to ``coastline recommend-trace``). ``coastline tune``, the cache/intelligent
-retrieval lookup (``$DATA_DIR/profiling-dataset/raw_trace.csv``), and ``kavier calibrate`` all
-consume the *flat* measured-runs schema instead:
+A trace CSV has dotted ``metadata.*`` and ``resources.*`` columns, one recorded job per row, and
+is the input of ``coastline recommend-trace``. ``coastline tune``, the cache lookup of the
+``cache`` and ``intelligent`` predictors (``$DATA_DIR/profiling-dataset/raw_trace.csv``) and
+``kavier calibrate`` read the flat measured-runs schema:
 
     model_name, method, gpu_model, number_nodes, number_gpus, tokens_per_sample,
     batch_size, dataset_tokens_per_second, train_runtime, is_valid
 
-``trace_to_runs`` bridges the two. It is idempotent: a CSV that is already in the flat schema is
-passed through unchanged (so callers can feed either shape). ``is_valid`` is derived from the
-targets when absent (a row is valid iff its observed throughput and runtime are both positive).
+A CSV already in the flat schema passes through unchanged. A missing ``is_valid`` is derived:
+a row is valid if its observed throughput and runtime are both positive.
 """
 
 from __future__ import annotations
@@ -33,7 +32,7 @@ from coastline.sdk.trace.recommend import (
     _TOKENS,
 )
 
-# trace column -> flat measured-runs column
+# trace column and the flat column it becomes
 _TRACE_TO_FLAT: dict[str, str] = {
     _MODEL: "model_name",
     _METHOD: "method",
@@ -66,12 +65,11 @@ def trace_to_runs(input_csv: str, output_csv: Optional[str] = None) -> pd.DataFr
     df = pd.read_csv(input_csv, low_memory=False)
 
     if set(_FLAT_REQUIRED).issubset(df.columns):
-        flat = df.copy()  # already flat — pass through
+        flat = df.copy()  # already flat
     elif set(_TRACE_TO_FLAT).issubset(df.columns):
         flat = df.rename(columns=_TRACE_TO_FLAT)
-        # batch_size is PER-DEVICE in the flat schema (Kavier/calibrate convention). When the trace
-        # carries per_device_train_batch_size, prefer it per-row, falling back to the renamed total
-        # metadata.batch_size only where the per-device value is missing.
+        # batch_size is per device in the flat schema (the Kavier convention). Use
+        # per_device_train_batch_size where the trace has it, else the total metadata.batch_size.
         if _REC_PER_DEVICE in df.columns:
             flat["batch_size"] = pd.to_numeric(df[_REC_PER_DEVICE], errors="coerce").fillna(flat["batch_size"])
     else:

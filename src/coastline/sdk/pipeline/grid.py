@@ -1,9 +1,8 @@
-"""Candidate grid generation (batch_size × total_gpus); node layout auto-derived from total_gpus."""
+"""Candidate grid (batch_size x total_gpus); the node layout is derived from total_gpus."""
 
 from __future__ import annotations
 
 import logging
-import math
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -15,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 def _powers_of_two(limit: int) -> List[int]:
-    """Return [1, 2, 4, …] up to and including the largest power of 2 ≤ limit."""
+    """Return [1, 2, 4, ...] up to the largest power of 2 <= limit."""
     result = []
     g = 1
     while g <= limit:
@@ -24,11 +23,21 @@ def _powers_of_two(limit: int) -> List[int]:
     return result
 
 
+def check_top_k(top_k: int) -> None:
+    """Raise ValueError unless ``top_k`` asks for at least one recommendation."""
+    if top_k < 1:
+        raise ValueError(f"top_k must be at least 1, got {top_k}")
+
+
 @dataclass(frozen=True)
 class GridConfig:
     batch_sizes: List[int]
     total_gpus: List[int]
     top_k: int = 5
+
+    def __post_init__(self) -> None:
+        # Otherwise the ranking would quietly turn a top_k below 1 into 1.
+        check_top_k(self.top_k)
 
 
 def grid_config_from_dict(config: Optional[dict], max_gpus: Optional[int] = None) -> GridConfig:
@@ -47,10 +56,16 @@ def grid_config_from_dict(config: Optional[dict], max_gpus: Optional[int] = None
 
 
 def _derive_node_layout(total_gpus: int, max_gpus_per_node: int) -> tuple[int, int]:
-    """Return (gpus_per_node, number_of_nodes); packs GPUs per node to minimize inter-node comm."""
+    """Return (gpus_per_node, number_of_nodes) for exactly ``total_gpus`` GPUs.
+
+    Uses the largest per-node count within the cap that divides the total, which gives the fewest
+    nodes and the least inter-node traffic: 12 GPUs at up to 8 per node become 6 x 2 (8 x 2 would
+    be 16). A power of two under a power-of-two cap fills whole nodes.
+    """
     gpus_per_node = min(total_gpus, max_gpus_per_node)
-    number_of_nodes = math.ceil(total_gpus / gpus_per_node)
-    return gpus_per_node, number_of_nodes
+    while total_gpus % gpus_per_node:
+        gpus_per_node -= 1
+    return gpus_per_node, total_gpus // gpus_per_node
 
 
 def generate_candidates(
@@ -66,6 +81,7 @@ def generate_candidates(
     gpu_steps = grid_config.total_gpus or _powers_of_two(max_gpus)
 
     candidates: List[WorkloadSpec] = []
+    seen: set[tuple[int, int, int]] = set()
     for n_gpus in gpu_steps:
         if n_gpus <= 0:
             # Non-positive GPU count: not runnable and would divide-by-zero in _derive_node_layout.
@@ -73,16 +89,18 @@ def generate_candidates(
             continue
         if n_gpus > max_gpus:
             continue
+        # The layout uses exactly n_gpus, so it stays within max_gpus; only the node count can
+        # rule it out (9 GPUs at <= 8 per node is 3 x 3, which needs three nodes).
         gpus_per_node, num_nodes = _derive_node_layout(n_gpus, max_gpus_per_node)
         if num_nodes > max_nodes:
             continue
-        # A non-power-of-two step rounds its layout UP (e.g. 30 GPUs at 8/node -> 8x4 = 32),
-        # so the actual layout can exceed the cap even when the requested step did not. Re-check
-        # the derived total so a cluster budget is never overrun.
-        if gpus_per_node * num_nodes > max_gpus:
-            continue
 
         for batch_size in grid_config.batch_sizes:
+            # A repeated grid entry would otherwise be scored and returned twice.
+            key = (gpus_per_node, num_nodes, batch_size)
+            if key in seen:
+                continue
+            seen.add(key)
             candidates.append(
                 WorkloadSpec(
                     llm_model=workload.llm_model,

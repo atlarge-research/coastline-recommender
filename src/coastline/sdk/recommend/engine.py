@@ -1,4 +1,4 @@
-"""Pure recommend logic for the interactive UI — no Rich, no prompts; shared by REPL and non-interactive path."""
+"""Recommendation logic without Rich or prompts, shared by the REPL, the no-TTY path and the APIs."""
 
 from __future__ import annotations
 
@@ -43,20 +43,20 @@ FALLBACK_GPUS = ["NVIDIA-A100-SXM4-80GB", "NVIDIA-A100-80GB-PCIe", "L40S"]
 FALLBACK_TOKENS = DEFAULT_TOKENS_PER_SAMPLE
 FALLBACK_BATCH_SIZES = DEFAULT_BATCH_SIZES
 
-# Optimisation goal (display label) -> (strategy_name, preset). Derived from the single
-# objective vocabulary in `_goals`; the REPL enumerates these keys as menu choices.
+# Goal display label to (strategy_name, preset), built from `_goals`. The REPL lists these keys
+# as menu choices.
 GOALS: dict[str, tuple[str, Optional[str]]] = _goals.engine_goals()
 
 # Top-level performance-predictor choices for the UI. "ml" is a sentinel that
 # opens the trained-ML submenu (ML_MODELS); the rest are engine predictor keys.
 PREDICTOR_CHOICES: list[tuple[str, str]] = [
-    ("intelligent", "intelligent  ·  exact cache match, else Kavier physics"),
-    ("kavier", "physics simulator  ·  Kavier"),
-    ("ml", "trained ML model  ·  you pick"),
-    ("cache", "exact match  ·  measured past runs only"),
+    ("intelligent", "intelligent  |  exact cache match, else Kavier physics"),
+    ("kavier", "physics simulator  |  Kavier"),
+    ("ml", "trained ML model  |  you pick"),
+    ("cache", "exact match  |  measured past runs only"),
 ]
 
-# The data-driven models, surfaced as a submenu under "trained ML model".
+# Data-driven models, listed in the "trained ML model" submenu.
 ML_MODELS: list[tuple[str, str]] = [
     ("catboost", "CatBoost"),
     ("xgboost", "XGBoost"),
@@ -145,10 +145,8 @@ def build_config(
         "strategy": strategy,
         "predictors": predictors,
         "grid": {
-            # The chosen batch size plus its neighbours, so the ranked table
-            # shows real trade-offs rather than a single row.
-            # An explicit batch grid (e.g. the trace's full per-device sweep) overrides the
-            # default neighbourhood around the seed batch size.
+            # The chosen batch size with half and double of it, so the table has more than one
+            # row. A given batch grid, such as the trace's per-device sweep, replaces them.
             "batch_sizes": (
                 list(answers["batch_sizes"])
                 if answers.get("batch_sizes")
@@ -163,6 +161,12 @@ def build_config(
     return config, strategy_name, preset
 
 
+def _gpus_per_node(answers: dict[str, Any]) -> int:
+    """The node width the grid may use: the ``max_gpus_per_node`` cap (default 8), within max_gpus."""
+    cap = answers.get("max_gpus_per_node") or DEFAULT_GPUS_PER_NODE
+    return min(int(cap), int(answers["max_gpus"]))
+
+
 def build_workload(answers: dict[str, Any]) -> WorkloadSpec:
     return WorkloadSpec(
         llm_model=answers["llm_model"],
@@ -170,33 +174,29 @@ def build_workload(answers: dict[str, Any]) -> WorkloadSpec:
         gpu_model=answers["gpu_model"],
         tokens_per_sample=int(answers["tokens_per_sample"]),
         batch_size=int(answers["batch_size"]),
-        gpus_per_node=min(DEFAULT_GPUS_PER_NODE, answers["max_gpus"]),
+        gpus_per_node=_gpus_per_node(answers),
         number_of_nodes=1,
     )
 
 
 def build_context(answers: dict[str, Any]) -> SystemContext:
     max_gpus = int(answers["max_gpus"])
-    return SystemContext.for_gpus(
-        [answers["gpu_model"]], max_gpus=max_gpus, gpus_per_node=min(DEFAULT_GPUS_PER_NODE, max_gpus)
-    )
+    return SystemContext.for_gpus([answers["gpu_model"]], max_gpus=max_gpus, gpus_per_node=_gpus_per_node(answers))
 
 
 @dataclass
 class RecommendRequest:
-    """The one shape the engine consumes. Every door (facade, batch CSV, config-driven
-    ``run``, UI, and the answers-driven ``run_pipeline``) builds one of these its own way,
-    then hands it to :func:`run_request`. Input-building and output-serialization stay in
-    the caller; only the strategy-create → recommend core lives here."""
+    """Input to :func:`run_request`. The facade, the config-driven ``run`` command, the UI and
+    :func:`run_pipeline` each build one; input parsing and output formatting stay with them."""
 
     workload: WorkloadSpec
     context: SystemContext
-    config: dict[str, Any]  # fully-formed PolicyFactory config: strategy / predictors / grid
+    config: dict[str, Any]  # full PolicyFactory config: strategy, predictors, grid
     strategy_name: str
     preset: Optional[str] = None
     alpha: Optional[float] = None
     beta: Optional[float] = None
-    total_tokens: int = 0  # for runtime/energy meta; 0 == "not applicable" (facade, run.py)
+    total_tokens: int = 0  # for runtime and energy in meta; 0 means unused (facade, run.py)
 
 
 def build_strategy(
@@ -206,10 +206,9 @@ def build_strategy(
     alpha: Optional[float] = None,
     beta: Optional[float] = None,
 ) -> "BaseStrategy":
-    """The ONE place ``PolicyFactory.create_strategy`` is called. Split out from
-    :func:`execute_strategy` so a caller (``batch_csv``) can build the strategy once and
-    reuse it across many rows — predictors + the AutoConf feasibility model load a single
-    time instead of per row."""
+    """Build a strategy with ``PolicyFactory.create_strategy``. Separate from
+    :func:`execute_strategy` so a caller such as ``batch_csv`` can build it once for all rows,
+    loading the predictors and the AutoConf model once."""
     from coastline.sdk.policies import PolicyFactory
 
     return PolicyFactory.create_strategy(
@@ -218,20 +217,19 @@ def build_strategy(
 
 
 class StrategyCache:
-    """Reuse one built strategy across many calls that share the SAME config.
+    """Reuse a built strategy across calls with the same config.
 
-    :func:`build_strategy` constructs every predictor and the feasibility checker, so calling
-    it once per trace row re-pays those constructions. The config is NOT constant across rows
-    -- :func:`build_config` derives ``grid.batch_sizes`` from the row's own batch size unless
-    an explicit sweep is passed -- and the grid is baked into the pipeline at construction, so
-    this keys on the fully-formed config instead of assuming one strategy fits a whole trace.
-    An unserializable config builds uncached rather than risking a wrong hit.
+    :func:`build_strategy` constructs every predictor and the feasibility checker. The config
+    can differ between trace rows (:func:`build_config` derives ``grid.batch_sizes`` from the
+    row's batch size unless a sweep is given) and the grid is fixed when the pipeline is built,
+    so the cache is keyed on the full config. A config that cannot be serialized is built
+    without caching.
     """
 
     def __init__(self, capacity: int = 128) -> None:
         self._capacity = capacity
         self._entries: "OrderedDict[str, BaseStrategy]" = OrderedDict()
-        self.builds = 0  # strategies actually constructed (observability + tests)
+        self.builds = 0  # strategies constructed (for logging and tests)
         self.hits = 0
 
     @staticmethod
@@ -283,8 +281,8 @@ def execute_strategy(
     predictor: Optional[str],
     total_tokens: int = 0,
 ) -> tuple[list[Recommendation], dict[str, Any]]:
-    """Run ``strategy.recommend``, time it, normalize ``None``/single/list → list, build meta.
-    Accepts a pre-built strategy so it can be called repeatedly with the same one."""
+    """Run a pre-built strategy on one workload, time it and return ``(recs, meta)``.
+    A ``None`` or single result becomes a list."""
     t0 = time.perf_counter()
     recs = strategy.recommend(workload, context)
     elapsed = time.perf_counter() - t0
@@ -311,10 +309,10 @@ def execute_strategy(
 def run_request(
     request: RecommendRequest, strategy_cache: Optional[StrategyCache] = None
 ) -> tuple[list[Recommendation], dict[str, Any]]:
-    """The single workflow: build the strategy, run it, return (recs, meta).
+    """Build the strategy, run it and return ``(recs, meta)``.
 
     ``strategy_cache`` lets a batch caller (a trace, a CSV) reuse one strategy across rows that
-    share a config. ``None`` builds per call, which is the historical behaviour.
+    share a config. With ``None`` the strategy is built on every call.
     """
     args = (request.config, request.strategy_name, request.preset, request.alpha, request.beta)
     strategy = build_strategy(*args) if strategy_cache is None else strategy_cache.get(*args)
@@ -338,12 +336,11 @@ def run_pipeline(
     strategy_cache: Optional[StrategyCache] = None,
     workers: Optional[int] = None,
 ) -> tuple[list[Recommendation], dict[str, Any]]:
-    """Answers-driven entry (interactive REPL, no-TTY path, and ``batch_api``): derive a
-    ``RecommendRequest`` from an ``answers`` dict and run it. Signature and return are
-    unchanged — this is a thin wrapper over the shared :func:`run_request` seam.
+    """Build a ``RecommendRequest`` from an ``answers`` dict and run it with :func:`run_request`.
+    Used by the interactive REPL, the no-TTY path and ``batch_api``.
 
-    ``feasibility`` (``autoconf`` | ``rules`` | ``none``) picks the feasibility
-    checker; an answers ``feasibility`` key takes precedence (see ``build_config``).
+    ``feasibility`` (``autoconf``, ``rules`` or ``none``) picks the feasibility checker; a
+    ``feasibility`` key in ``answers`` takes precedence (see ``build_config``).
     """
     config, strategy_name, preset = build_config(answers, top_k, max_slowdown, feasibility, workers)
     total_tokens = int(answers["dataset_size"] * answers["epochs"] * answers["tokens_per_sample"])
@@ -370,9 +367,9 @@ def runtime_energy(rec: Recommendation, total_tokens: int) -> tuple[Optional[flo
 
 
 def flatten_recommendation(rec: Recommendation, total_tokens: int = 0) -> dict[str, Any]:
-    """The one extraction every surface's serializer wraps: canonical raw values for one
-    Recommendation. Runtime/energy via runtime_energy (``total_tokens=0`` → the model's own
-    ``predicted_runtime_seconds``). Callers rename these keys to their own contract spelling."""
+    """Raw values of one Recommendation; each output format renames the keys to its own columns.
+    Runtime and energy come from :func:`runtime_energy`; with ``total_tokens=0`` the runtime is
+    the predictor's ``predicted_runtime_seconds``."""
     runtime, energy_wh = runtime_energy(rec, total_tokens)
     meta = rec.metadata or {}
     return {
@@ -395,8 +392,8 @@ def recommendation_rationale(recs: list[Recommendation], meta: dict[str, Any]) -
     if not recs:
         return "No feasible configuration in the search space."
     top = recs[0]
-    # The phrase keys off the preset (balanced/performance/energy) or, for min_gpu, the
-    # strategy name — both are canonical goals in the single `_goals` vocabulary.
+    # The phrase comes from the preset (balanced, performance, energy) or, for min_gpu, the
+    # strategy name; both are goals in `_goals`.
     goal = (
         _goals.rationale_phrase(meta.get("preset"))
         or _goals.rationale_phrase(meta.get("strategy_name"))
@@ -404,7 +401,7 @@ def recommendation_rationale(recs: list[Recommendation], meta: dict[str, Any]) -
     )
     plural = "s" if top.total_gpus != 1 else ""
     top_batch = (top.metadata or {}).get("batch_size")
-    config = f"{top.gpus_per_node}×{top.number_of_nodes}" + (f", batch {top_batch}" if top_batch else "")
+    config = f"{top.gpus_per_node}x{top.number_of_nodes}" + (f", batch {top_batch}" if top_batch else "")
     line = f"{top.total_gpus} GPU{plural} ({config}) picked for {goal}"
     if len(recs) > 1 and top.predicted_throughput and recs[1].predicted_throughput:
         runner = recs[1]

@@ -1,4 +1,4 @@
-"""Rich rendering for the recommender UI — spec cards, ranked table, recommendation panel."""
+"""Rich rendering for the REPL: spec cards, the ranked table and the recommendation panel."""
 
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ def _kv(rows: list[tuple[str, str]]) -> Table:
 
 def _fmt_runtime(seconds: Optional[float]) -> str:
     if not seconds or seconds <= 0:
-        return "—"
+        return "-"
     if seconds < 90:
         return f"{seconds:.0f}s"
     minutes = seconds / 60.0
@@ -50,7 +50,7 @@ def _fmt_runtime(seconds: Optional[float]) -> str:
 
 def _fmt_energy(wh: Optional[float]) -> str:
     if not wh or wh <= 0:
-        return "—"
+        return "-"
     return f"{wh:,.0f} Wh" if wh < 1000 else f"{wh / 1000:,.2f} kWh"
 
 
@@ -108,7 +108,7 @@ def specs_panel(model: str, gpu: str, accent: str = ACCENT) -> Panel:
 
 def workload_panel(answers: dict[str, Any], accent: str = ACCENT) -> Panel:
     epochs = answers.get("epochs", 1)
-    dataset = f"{answers.get('dataset_size', 0):,} samples · {epochs:g} epoch{'s' if epochs != 1 else ''}"
+    dataset = f"{answers.get('dataset_size', 0):,} samples, {epochs:g} epoch{'s' if epochs != 1 else ''}"
     body = _kv(
         [
             ("method", answers["fine_tuning_method"]),
@@ -140,11 +140,11 @@ def ranked_table(recs: list[Recommendation], total_tokens: int, accent: str = AC
         best = i == 1
         runtime, energy = runtime_energy(r, total_tokens)
         t.add_row(
-            "★" if best else f"[dim]{i}[/]",
-            f"{r.gpus_per_node}×{r.number_of_nodes}",
+            "*" if best else f"[dim]{i}[/]",
+            f"{r.gpus_per_node}*{r.number_of_nodes}",
             str(r.total_gpus),
-            str((r.metadata or {}).get("batch_size", "—")),
-            f"{r.predicted_throughput:,.0f}" if r.predicted_throughput else "—",
+            str((r.metadata or {}).get("batch_size", "-")),
+            f"{r.predicted_throughput:,.0f}" if r.predicted_throughput else "-",
             _fmt_runtime(runtime),
             _fmt_energy(energy),
             style=f"bold {WINNER}" if best else None,
@@ -153,25 +153,23 @@ def ranked_table(recs: list[Recommendation], total_tokens: int, accent: str = AC
 
 
 def recommendation_panel(rec: Recommendation, meta: dict[str, Any]) -> Panel:
-    """Render the chosen configuration as a green hero card."""
+    """The chosen configuration as a green panel."""
     runtime, energy = runtime_energy(rec, meta.get("total_tokens", 0))
     plural = "s" if rec.total_gpus != 1 else ""
     config = _kv(
         [
-            ("layout", f"{rec.gpus_per_node}×{rec.number_of_nodes}"),
-            ("batch", str((rec.metadata or {}).get("batch_size", "—"))),
-            ("predictor", str(meta.get("predictor", "—"))),
+            ("layout", f"{rec.gpus_per_node}*{rec.number_of_nodes}"),
+            ("batch", str((rec.metadata or {}).get("batch_size", "-"))),
+            ("predictor", str(meta.get("predictor", "-"))),
         ]
     )
     metrics = _kv(
         [
-            ("throughput", f"[green]{rec.predicted_throughput:,.0f}[/] tok/s" if rec.predicted_throughput else "—"),
+            ("throughput", f"[green]{rec.predicted_throughput:,.0f}[/] tok/s" if rec.predicted_throughput else "-"),
             ("runtime", _fmt_runtime(runtime)),
             ("energy", f"[{ENERGY}]{_fmt_energy(energy)}[/]"),
         ]
     )
-    headline = Text.from_markup(f"[bold green]{rec.total_gpus} GPU{plural}[/]   [green]·   full run on your dataset[/]")
+    headline = Text.from_markup(f"[bold green]{rec.total_gpus} GPU{plural}[/]   [green]|   full run on your dataset[/]")
     body = Group(headline, Text(""), Columns([config, metrics], expand=True))
-    return Panel(
-        body, title="[bold green]✓ recommendation[/]", title_align="left", border_style="green", padding=(1, 2)
-    )
+    return Panel(body, title="[bold green]recommendation[/]", title_align="left", border_style="green", padding=(1, 2))

@@ -1,7 +1,5 @@
-/* Coastline — scientific-instrument UI.
-   IBM Plex Sans + Plex Mono on light paper; one restrained blue accent.
-   Compact typography, generous use of mono for numeric/technical content,
-   sparse borders. The aesthetic is "instrument console": dense but quiet. */
+/* Coastline dashboard styles: IBM Plex Sans and Plex Mono on a light background with one
+   blue accent; numbers and technical values use the mono font. */
 
 :root {
   --paper:        #f3f4f7;
@@ -49,7 +47,7 @@ body {
 
 .shell { max-width: 1280px; margin: 0 auto; padding: 22px 24px 36px; }
 
-/* ── Masthead — single horizontal bar ──────────────── */
+/* Masthead: one horizontal bar */
 .masthead {
   display: flex; align-items: center; justify-content: space-between;
   gap: 32px; padding: 4px 0 14px; margin-bottom: 16px;
@@ -72,6 +70,7 @@ body {
   font-size: .82rem; color: var(--muted);
   border-left: 1px solid var(--line-strong); padding-left: 12px;
 }
+.tagline a { color: inherit; }
 .readout {
   display: flex; gap: 18px; align-items: baseline; flex-wrap: wrap;
   justify-content: flex-end; flex-shrink: 0;
@@ -84,7 +83,7 @@ body {
 }
 .readout .v { color: var(--ink-soft); }
 
-/* ── Tabs ─────────────────────────────────────────── */
+/* Tabs */
 .tabs {
   display: flex; gap: 2px;
   margin-bottom: 16px;
@@ -101,7 +100,7 @@ body {
 .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
 .tab-panel[hidden] { display: none; }
 
-/* ── Workbench grid ───────────────────────────────── */
+/* Workbench grid */
 .workbench {
   display: grid;
   grid-template-columns: 320px minmax(0, 1fr);
@@ -115,7 +114,7 @@ body {
 }
 .config { position: sticky; top: 16px; padding: 4px 18px 18px; }
 
-/* ── Form ─────────────────────────────────────────── */
+/* Form */
 .config form { display: flex; flex-direction: column; }
 .group {
   border: none; padding: 14px 0;
@@ -180,7 +179,7 @@ body {
 .run:active { transform: translateY(1px); }
 .run:disabled { opacity: .5; cursor: not-allowed; }
 
-/* ── Results panel ────────────────────────────────── */
+/* Results panel */
 .results { padding: 14px 20px 18px; min-height: 360px; display: flex; flex-direction: column; }
 .results-head {
   display: flex; align-items: baseline; justify-content: space-between;
@@ -231,7 +230,7 @@ body {
 .summary .v { font-size: .84rem; font-weight: 500; color: var(--ink); }
 .summary .v.mono { font-family: var(--mono); font-size: .82rem; }
 
-/* ── Tables (rec / queue / playground / admin) ────── */
+/* Tables (rec / queue / playground / admin) */
 .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius-sm); }
 .rec-table { width: 100%; border-collapse: collapse; font-size: .8rem; min-width: 580px; }
 .rec-table th {
@@ -271,7 +270,7 @@ body {
 .rec-table tbody tr { animation: rowIn .28s ease both; }
 @keyframes rowIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 
-/* ── Mini buttons (secondary actions, Schedule, Remove) ── */
+/* Mini buttons (secondary actions, Schedule, Remove) */
 .btn-mini {
   display: inline-flex; align-items: center; gap: 5px;
   padding: 5px 10px;
@@ -297,21 +296,21 @@ body {
 .btn-mini.danger:hover { background: var(--danger-soft); border-color: var(--danger); color: var(--danger); }
 .btn-mini.icon { padding: 3px 7px; font-size: .9rem; line-height: 1; }
 
-/* Action cell (Schedule + Remove ×) — narrow, right-aligned */
+/* Action cell (Schedule and Remove buttons): narrow, right-aligned */
 .rec-table td.action { width: 84px; padding: 6px 10px; text-align: right; }
 .rec-table td.action .btn-mini { padding: 4px 10px; font-size: .7rem; }
 
-/* ── Right-column stack (results + queue under it) ── */
+/* Right-column stack: results with the queue below */
 .right-stack {
   display: flex; flex-direction: column;
   gap: 16px; min-width: 0;
 }
 
-/* ── Queue section (sits inside the right-stack now) ── */
+/* Queue section, inside the right-column stack */
 .queue-section { margin-top: 0; }
 .queue-section .queue-panel { padding: 14px 20px 18px; }
 
-/* Queue-add — 5-col grid; 9 fields wrap to 2 rows naturally. */
+/* Queue-add form: a 5-column grid, so the 9 fields wrap to 2 rows. */
 .queue-add {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -341,7 +340,7 @@ body {
   color: var(--muted); font-style: italic; font-size: .8rem;
 }
 
-/* ── Admin sub-block (inside queue panel) ─────────── */
+/* Admin sub-block (inside queue panel) */
 .admin-block {
   margin-top: 16px; padding-top: 12px;
   border-top: 1px dashed var(--line-strong);
@@ -370,7 +369,7 @@ body {
   font-variant-numeric: tabular-nums; font-family: var(--mono);
 }
 
-/* ── Activity log (terminal-style, integrated) ────── */
+/* Activity log */
 .activity {
   margin-top: 18px;
   background: var(--surface);
@@ -419,7 +418,7 @@ body {
 .activity-entry.ok   .lvl { background: var(--good-soft);   color: var(--good); }
 .activity-entry.info .lvl { background: var(--accent-soft); color: var(--accent-ink); }
 
-/* ── Toast (transient banners) ────────────────────── */
+/* Toasts (banners that fade out) */
 #toast {
   position: fixed; top: 16px; right: 16px; z-index: 99;
   display: flex; flex-direction: column; gap: 8px; max-width: 360px;
@@ -437,7 +436,7 @@ body {
 .toast.out { animation: toastOut .18s ease forwards; }
 @keyframes toastOut { to   { opacity: 0; transform: translateX(12px); } }
 
-/* ── Segmented control (hardware mode) ────────────── */
+/* Segmented control (hardware mode) */
 .segmented {
   display: inline-flex; width: 100%; gap: 2px; padding: 2px;
   background: var(--surface-2); border: 1px solid var(--line-strong);
@@ -456,7 +455,7 @@ body {
   box-shadow: 0 1px 2px rgba(20, 23, 33, .08);
 }
 
-/* ── Playground model checkboxes ─────────────────── */
+/* Playground model checkboxes */
 .checks {
   display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px;
   grid-column: 1 / -1;
@@ -475,7 +474,7 @@ body {
 .dim-row td { color: var(--faint); }
 .dim-row .muted { font-size: .68rem; color: var(--faint); }
 
-/* ── Responsive ───────────────────────────────────── */
+/* Responsive */
 @media (max-width: 980px) {
   .workbench { grid-template-columns: 1fr; }
   .config { position: static; }
@@ -489,7 +488,7 @@ body {
   .hint:hover .hint-pop, .hint:focus-within .hint-pop { transform: none; }
 }
 
-/* ── Usage / manual tab ───────────────────────────── */
+/* Usage tab */
 .usage-body {
   padding: 12px 0 0;
   font-size: .86rem; line-height: 1.6; color: var(--ink-soft);
@@ -510,17 +509,15 @@ body {
   padding: 1px 5px;
 }
 
-/* ── Playground predictor-family colour-coding ──────────────────────────────
-   Each result row is a rounded "card" with a light, modern tint per family and
-   a soft left accent bar. kavier = blue · cache = teal-green · data-driven ML =
-   amber. Text keeps the default ink colour. Scoped to the Playground table so
-   the Recommend table is unaffected. */
+/* Playground rows coloured by predictor family: a rounded row with a light tint and a left
+   bar, blue for kavier, teal-green for cache and amber for data-driven ML. Only the
+   Playground table is styled this way. */
 :root {
   --fam-kavier-bg: #eef3ff;  --fam-kavier-bar: #3b6ef0;
   --fam-cache-bg:  #e7f6ef;  --fam-cache-bar:  #10a36a;
   --fam-ml-bg:     #fdf1e7;  --fam-ml-bar:     #e8843c;
 }
-/* Separate borders give us real vertical gaps + rounded row corners. */
+/* Separate borders allow gaps between rows and rounded row corners. */
 #panel-playground .rec-table { border-collapse: separate; border-spacing: 0 7px; }
 #panel-playground .rec-table th { border-bottom: none; padding-bottom: 4px; }
 #pgRows td {
@@ -534,24 +531,21 @@ body {
 #pgRows tr.fam-cache  td { background: var(--fam-cache-bg); }
 #pgRows tr.fam-ml     td { background: var(--fam-ml-bg); }
 
-/* Soft rounded accent bar on the leading cell. */
+/* Accent bar on the first cell. */
 #pgRows tr td:first-child { box-shadow: inset 3px 0 0 var(--row-bar, transparent); }
 #pgRows tr.fam-kavier { --row-bar: var(--fam-kavier-bar); }
 #pgRows tr.fam-cache  { --row-bar: var(--fam-cache-bar); }
 #pgRows tr.fam-ml     { --row-bar: var(--fam-ml-bar); }
 
-/* Gentle lift on hover. */
+/* Lift the row on hover. */
 #pgRows tr:hover td { transform: translateY(-1px); }
 #pgRows tr.fam-kavier:hover td { background: #e4ecff; }
 #pgRows tr.fam-cache:hover  td { background: #dcf2e7; }
 #pgRows tr.fam-ml:hover     td { background: #fce7d5; }
 
-/* ── Inline help hints — info dot + plain-language tooltip ───────────────────
-   A quiet "i" affordance beside the title and every input. Faint by default,
-   it takes the console's one blue accent on hover / keyboard-focus / tap and
-   reveals a short, jargon-free tooltip. Reveal is pure CSS (:hover /
-   :focus-within); app.js only builds the markup + ARIA from each field's
-   data-hint. Reuses the existing tokens — nothing else is restyled. */
+/* Inline help hints: a small "i" button next to a label, which turns blue on hover or focus
+   and shows a tooltip. The CSS shows the tooltip (:hover, :focus-within); app.js builds the
+   markup and ARIA attributes from each field's data-hint. */
 .hint {
   position: relative;
   display: inline-flex;
@@ -560,8 +554,7 @@ body {
   line-height: 0;
   vertical-align: middle;
 }
-/* Sit snug after a field label (gap handles spacing) and push any unit to the
-   right so the order stays: label · (i) ········· unit. */
+/* Right after the field label, with any unit pushed to the right end. */
 .field label .hint { margin-left: 0; margin-right: auto; align-self: center; }
 .group legend .hint { vertical-align: baseline; }
 .hint--header { margin-left: 8px; }
@@ -582,7 +575,7 @@ body {
   background: var(--accent-soft); outline: none;
 }
 .hint-dot:focus-visible { box-shadow: 0 0 0 2px rgba(15, 98, 254, .16); }
-/* Header dot — a touch more present, as the primary overview affordance. */
+/* Larger, blue variant of the dot for a header. */
 .hint-dot--primary {
   width: 16px; height: 16px; font-size: 10px;
   color: var(--accent); border-color: var(--accent-soft);
@@ -616,7 +609,7 @@ body {
   transform: rotate(45deg);
 }
 .hint-pop--wide { max-width: 264px; }
-/* Right-anchored variant — used near the right edge so it never overflows. */
+/* Right-anchored variant, for hints near the right edge. */
 .hint--end .hint-pop { left: auto; right: -6px; }
 .hint--end .hint-pop::before { left: auto; right: 12px; }
 
@@ -626,17 +619,14 @@ body {
   pointer-events: auto;
 }
 
-/* ── Cluster timeline (the Exp2/Exp4 figure) ────────────────────────────────
-   A dual strip-chart drawn as inline SVG inside the Admin · FIFO results:
-   GPU allocation (blue) filling toward a dashed capacity ceiling, stacked above
-   queue depth (amber) on one shared time axis. A crosshair scrubber (pointer +
-   arrow keys) reads exact values at any instant — the one interactive flourish;
-   the charts themselves stay the console's quiet hairlines + mono ticks. Every
-   colour comes from the existing tokens (accent blue + the playground amber). */
+/* Cluster timeline (the Exp2/Exp4 figure), an inline SVG in the admin FIFO results: GPUs
+   allocated (blue) against a dashed capacity line, above the queue depth (amber), on one
+   time axis. A crosshair moved by the pointer or the arrow keys reads the values. The
+   colours are the accent blue and the Playground amber. */
 .cluster-fig {
   --ct-gpu:        var(--accent);
   --ct-gpu-soft:   rgba(15, 98, 254, .13);
-  --ct-queue:      #e8843c;                 /* == --fam-ml-bar, already in use   */
+  --ct-queue:      #e8843c;                 /* same colour as --fam-ml-bar */
   --ct-queue-soft: rgba(232, 132, 60, .15);
   margin: 6px 0 16px;
   padding: 12px 14px 10px;
@@ -666,9 +656,8 @@ body {
 .cluster-plot { position: relative; }
 .cluster-plot svg { display: block; width: 100%; height: auto; }
 
-/* axes / grid / ticks — hairlines + mono labels. Tick / axis-title fonts are
-   sized to read at the larger CLI plot's scale (CLI: ticks 12pt, labels 14pt);
-   renderClusterTimeline's margins (ML / MT / gap / xlabH) leave room for them. */
+/* Axes, grid and ticks. The tick and axis-title fonts follow the CLI plot (ticks 12 pt,
+   labels 14 pt); the margins in renderClusterTimeline (ML, MT, gap, xlabH) leave room. */
 .ct-axis  { stroke: var(--line-strong); stroke-width: 1; }
 .ct-grid  { stroke: var(--line); stroke-width: 1; }
 .ct-cap-rule { stroke: var(--accent); stroke-width: 1.25; stroke-dasharray: 4 3; opacity: .55; }
@@ -686,7 +675,7 @@ body {
 .ct-area-q   { fill: var(--ct-queue-soft); stroke: none; }
 .ct-line-q   { fill: none; stroke: var(--ct-queue); stroke-width: 1.5; stroke-linejoin: round; }
 
-/* crosshair — hidden until hover/focus */
+/* Crosshair, hidden until hover or focus */
 .ct-cursor { opacity: 0; transition: opacity .12s ease; pointer-events: none; }
 .cluster-plot.cursor-on .ct-cursor { opacity: 1; }
 .ct-cursor-line { stroke: var(--ink-soft); stroke-width: 1; stroke-dasharray: 2 2; }
@@ -694,13 +683,13 @@ body {
 .ct-dot-gpu { fill: var(--ct-gpu); }
 .ct-dot-q   { fill: var(--ct-queue); }
 
-/* scrub overlay — focusable, positioned over the plot columns only */
+/* Focusable overlay over the plot area that drives the crosshair */
 .ct-scrub { position: absolute; cursor: crosshair; outline: none; touch-action: none; }
 .ct-scrub:focus-visible {
   box-shadow: inset 0 0 0 2px rgba(15, 98, 254, .4); border-radius: 2px;
 }
 
-/* readout chip — sits beside the cursor, flips before the right edge */
+/* Readout next to the crosshair; it flips to the left side near the right edge */
 .ct-readout {
   position: absolute; top: 2px; left: 0; transform: translateX(8px);
   display: none; flex-direction: column; gap: 2px;

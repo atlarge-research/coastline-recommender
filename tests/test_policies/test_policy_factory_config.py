@@ -1,29 +1,9 @@
-"""
-Regression tests for ``PolicyFactory.load_config`` / ``create_strategy`` default
-config resolution in ``coastline/recommendation_policies/__init__.py``.
+"""Default config resolution in ``PolicyFactory.load_config`` and ``create_strategy``.
 
-The bug being guarded: ``load_config`` defaulted to a package-relative
-``recommender/config/experiment.yaml`` that does not exist, so calling
-``PolicyFactory.create_strategy()`` with no ``config`` argument raised a bare
-``FileNotFoundError`` at ``open()`` time.
-
-The fix makes the *no-config* path robust:
-  - resolve the one canonical config (``config/coastline_functionality/experiment.yaml``,
-    env-overridable),
-  - and fall back to a built-in default config when it does not exist —
-    instead of crashing.
-
-Behaviour when an *explicit* config path is passed is unchanged (the file is
-loaded directly and errors propagate), which these tests also pin.
-
-The end-to-end ``create_strategy()`` checks use a Kavier-only predictor config so
-the factory never loads the heavy ML artifacts (xgboost/catboost) or Kavier
-physics that could segfault the host — mirroring ``test_strategies.py``.
-
-Run:
-  cd <repo> && PYTHONPATH=coastline:coastline/common:kavier/src \
-    DATA_DIR=./trace-archive .venv/bin/python -m pytest \
-    coastline/tests/test_policy_factory_config.py -q
+Without a path, load_config reads the first existing default candidate (normally
+config/coastline_functionality/experiment.yaml, or the file named by EXPERIMENT_CONFIG) and
+otherwise returns a built-in default config. An explicit path is loaded as given, and a missing
+file raises. The create_strategy tests use Kavier and rules feasibility, so no ML model is loaded.
 """
 
 from __future__ import annotations
@@ -42,9 +22,7 @@ from coastline.sdk.policies import (
 from coastline.sdk.policies.min_gpu import MinGPUStrategy
 from coastline.sdk.policies.multi_objective import MultiObjectiveStrategy
 
-# A predictor config that keeps the factory off the real ML models / physics:
-# Kavier throughput + Kavier power + rules-only feasibility (same trick the
-# strategy tests use to build recommendation_policies without loading xgboost/catboost).
+# Kavier throughput and power with rules feasibility, so building a strategy loads no ML model.
 _KAVIER_PREDICTORS = {
     "performance": "kavier",
     "energy": "kavier_power",
@@ -57,12 +35,10 @@ def _write_yaml(path: Path, data: dict) -> Path:
     return path
 
 
-# ===========================================================================
-# load_config() — explicit path: behaviour MUST be identical to before
-# ===========================================================================
+# load_config() with an explicit path
 class TestLoadConfigExplicitPath:
-    def test_explicit_valid_path_is_loaded_verbatim(self, tmp_path):
-        """An explicit, existing config file is parsed and returned unchanged."""
+    def test_explicit_valid_path_is_loaded_unchanged(self, tmp_path):
+        """An existing config file passed by path is parsed and returned unchanged."""
         payload = {
             "strategy": {"name": "min_gpu", "preset": "balanced"},
             "grid": {"batch_sizes": [4], "total_gpus": [1, 2], "top_k": 3},
@@ -73,24 +49,16 @@ class TestLoadConfigExplicitPath:
         assert loaded == payload
 
     def test_explicit_missing_path_still_raises_file_not_found(self, tmp_path):
-        """The explicit-path contract is unchanged: a bad path still raises.
-
-        Only the *no-argument* (default) path is made robust by the fix; passing
-        a wrong explicit path is a caller error and must surface as before.
-        """
+        """A missing path raises FileNotFoundError; only a call without a path falls back."""
         missing = tmp_path / "does_not_exist.yaml"
         with pytest.raises(FileNotFoundError):
             PolicyFactory.load_config(str(missing))
 
 
-# ===========================================================================
-# load_config() — no path: default resolution + built-in fallback (the fix)
-# ===========================================================================
+# load_config() without a path: the default candidates, then the built-in config
 class TestLoadConfigDefaultResolution:
     def test_no_arg_uses_the_canonical_experiment_yaml(self):
-        """The no-arg path resolves to the one canonical config: experiment.yaml. Returned
-        verbatim (no translation). Also covers the FileNotFoundError regression — this no-arg
-        call used to crash."""
+        """Without a path, load_config returns the contents of experiment.yaml unchanged."""
         experiment = _REPO_ROOT / "config" / "coastline_functionality" / "experiment.yaml"
         assert experiment.is_file(), f"expected {experiment} to exist"
 
@@ -110,15 +78,14 @@ class TestLoadConfigDefaultResolution:
         _write_yaml(cfg_dir / "default.yaml", payload)
         assert not (cfg_dir / "experiment.yaml").exists()
 
-        # Point the candidate list at this fake repo root: experiment.yaml is
-        # absent, so default.yaml must be picked.
+        # experiment.yaml is missing from these candidates, so default.yaml is used.
         monkeypatch.setattr(
             PolicyFactory,
             "_default_config_candidates",
             staticmethod(
                 lambda: [
                     cfg_dir / "experiment.yaml",  # missing
-                    cfg_dir / "default.yaml",  # present -> used
+                    cfg_dir / "default.yaml",  # present
                 ]
             ),
         )
@@ -127,7 +94,7 @@ class TestLoadConfigDefaultResolution:
         assert config["strategy"]["name"] == "min_gpu"
 
     def test_built_in_default_when_no_files_exist(self, tmp_path, monkeypatch):
-        """No default file anywhere -> built-in default config, NOT a crash."""
+        """With no default file, load_config returns the built-in default config."""
         monkeypatch.setattr(
             PolicyFactory,
             "_default_config_candidates",
@@ -140,30 +107,27 @@ class TestLoadConfigDefaultResolution:
         )
         config = PolicyFactory.load_config()
         assert config == _BUILTIN_DEFAULT_CONFIG
-        # A fresh DEEP copy is returned so callers can't mutate the module constant.
+        # A deep copy, so callers cannot change the module constant.
         assert config is not _BUILTIN_DEFAULT_CONFIG
-        # Invariant (independent of ==): mutating a NESTED value in the returned
-        # config must not bleed into the shared module constant. A shallow copy
-        # would share the nested dict and fail this.
+        # Changing a nested value leaves the constant alone (a shallow copy would share the
+        # nested dict).
         original_name = _BUILTIN_DEFAULT_CONFIG["strategy"]["name"]
         config["strategy"]["name"] = "mutated-by-caller"
         assert _BUILTIN_DEFAULT_CONFIG["strategy"]["name"] == original_name
-        # And a second call is unaffected by the first caller's mutation.
+        # A second call does not see the change.
         assert PolicyFactory.load_config()["strategy"]["name"] == original_name
 
     def test_default_candidates_point_at_the_canonical_experiment_yaml(self):
-        """The no-arg default resolution points at the one canonical config file."""
+        """The default candidates include config/coastline_functionality/experiment.yaml."""
         candidates = [Path(p) for p in PolicyFactory._default_config_candidates()]
         experiment = _REPO_ROOT / "config" / "coastline_functionality" / "experiment.yaml"
         assert experiment in candidates
 
 
-# ===========================================================================
-# create_strategy() — the end-to-end symptom: no-arg must build a strategy
-# ===========================================================================
+# create_strategy() without a config
 class TestCreateStrategyNoConfig:
     def _patch_candidates(self, monkeypatch, tmp_path, strategy_name, preset="balanced"):
-        """Make the no-arg default resolution land on a Kavier-only temp config."""
+        """Make the default lookup find a temporary config that uses Kavier."""
         cfg_file = tmp_path / "default.yaml"
         cfg_file.write_text(
             textwrap.dedent(
@@ -190,10 +154,7 @@ class TestCreateStrategyNoConfig:
         )
 
     def test_create_strategy_no_config_builds_from_default_file(self, tmp_path, monkeypatch):
-        """create_strategy() with no config no longer raises FileNotFoundError.
-
-        It resolves a default config and honours its ``strategy.name``.
-        """
+        """create_strategy() without a config uses the default file and its ``strategy.name``."""
         self._patch_candidates(monkeypatch, tmp_path, "min_gpu")
         strat = PolicyFactory.create_strategy()
         assert isinstance(strat, MinGPUStrategy)
@@ -201,24 +162,15 @@ class TestCreateStrategyNoConfig:
 
     @pytest.mark.parametrize("preset", ["balanced", "energy", "performance"])
     def test_create_strategy_no_config_respects_default_strategy_name(self, tmp_path, monkeypatch, preset):
-        """A default file declaring multi_objective yields a multi-objective strategy.
-
-        Oracle: get_name() is composed as ``multi_objective_{preset}`` (see
-        MultiObjectiveStrategy.get_name). Varying the preset varies the behavior
-        (the name suffix), not just a constant — a bug that hard-coded the suffix
-        or dropped the preset would make the energy/performance cases fail.
-        """
+        """A default file naming multi_objective gives a MultiObjectiveStrategy named
+        multi_objective_<preset>."""
         self._patch_candidates(monkeypatch, tmp_path, "multi_objective", preset=preset)
         strat = PolicyFactory.create_strategy()
         assert isinstance(strat, MultiObjectiveStrategy)
         assert strat.get_name() == f"multi_objective_{preset}"
 
     def test_explicit_config_still_takes_precedence_over_defaults(self, tmp_path, monkeypatch):
-        """An explicit config passed to create_strategy() bypasses default lookup.
-
-        Behaviour with an explicit valid config is identical to before: the
-        default-candidate resolution must not even be consulted.
-        """
+        """A config passed to create_strategy() is used without looking up the default candidates."""
 
         def _boom():  # pragma: no cover - must never be called
             raise AssertionError("default candidate lookup should not run")

@@ -1,9 +1,9 @@
-"""`coastline recommend-job` — mode selection.
+"""Mode selection in `coastline recommend-job`.
 
-The verb has three input modes (`--interactive`, `--config`, `--input/--output`), and with no
-flags at all it runs the single declared-job mode against the default config. These tests pin
-the routing, not the recommendation: the default config selects AutoConf and the cache
-predictor, so the engine seam is stubbed and a real run is left to the pipeline tests.
+The command has three input modes (`--interactive`, `--config`, `--input/--output`); with no
+flags it runs the declared job of the default config. These tests check the routing only. The
+default config selects AutoConf and the cache predictor, so the engine call is stubbed and real
+runs are left to the pipeline tests.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ def _payload(capsys) -> dict:
 
 @pytest.fixture
 def captured_request(monkeypatch):
-    """Stub the one engine seam every door routes through; capture the request it was handed."""
+    """Stub the engine call that every mode goes through and keep the request it receives."""
     captured: dict = {}
 
     def fake_run_request(request):
@@ -48,7 +48,7 @@ def captured_request(monkeypatch):
 
 
 def test_bare_recommend_job_runs_the_default_configuration(capsys, captured_request) -> None:
-    """No flags is not a usage error (exit 2): it is the declared job of the default config."""
+    """With no flags the command runs the declared job of the default config and does not exit 2."""
     main(["recommend-job"])
 
     declared = (yaml.safe_load(default_experiment_path().read_text(encoding="utf-8")) or {})["workload"]
@@ -58,7 +58,7 @@ def test_bare_recommend_job_runs_the_default_configuration(capsys, captured_requ
     assert workload.tokens_per_sample == declared["tokens_per_sample"]
     assert workload.batch_size == declared["batch_size"]
 
-    # …and the recommendation reaches stdout, as it does for an explicit --config.
+    # The recommendation reaches stdout, as with an explicit --config.
     assert _payload(capsys)["configuration"]["total_gpus"] == 4
 
 
@@ -91,7 +91,7 @@ def test_recommend_job_still_rejects_a_batch_without_a_config(capsys) -> None:
 
 
 def test_recommend_job_still_rejects_a_json_override_without_a_config(capsys) -> None:
-    """--input alone is an override of a config's workload — there must be a config to override."""
+    """--input alone overrides a config's workload, so it needs a config."""
     with pytest.raises(SystemExit) as excinfo:
         main(["recommend-job", "--input", "job.json"])
 

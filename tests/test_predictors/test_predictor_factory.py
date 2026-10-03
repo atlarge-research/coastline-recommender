@@ -1,28 +1,16 @@
-"""Tests for the predictor factory wiring.
+"""Tests for the factories that map a config name to a throughput or power predictor.
 
-Covers the string-keyed factory that maps a config / name to a concrete
-performance (throughput) or energy (power) predictor:
+  * ``PolicyFactory.throughput_predictor`` and ``PolicyFactory.power_predictor``
+    (``sdk/policies/__init__.py``): performance names intelligent, cache, kavier and the ML
+    models; energy name kavier_power.
+  * ``create_physics_driven`` (``sdk/predictors/factory.py``): builds the Kavier predictor.
+  * ``workflow._create_throughput_predictor`` and ``_create_power_predictor``, which delegate to
+    ``PolicyFactory``.
 
-  * ``PolicyFactory.throughput_predictor`` / ``PolicyFactory.power_predictor``
-    (``recommender/recommendation_policies/__init__.py``) — the canonical factory used by the
-    strategy layer (performance: intelligent / cache / kavier / named-ML;
-    energy: kavier_power).
-  * ``create_physics_driven`` (``recommender/predictor_factory.py``) — the
-    low-level physics-predictor constructor the above delegates to.
-  * ``coastline.sdk.pipeline.workflow._create_throughput_predictor`` /
-    ``_create_power_predictor`` — the workflow's near-twin of the above.
-
-Scope / segfault avoidance
---------------------------
-These tests assert the *type / wiring* of the returned predictor only. They
-never call ``.predict()`` on a data-driven (ML) predictor: all of them lazy-load
-their pickled model on first ``predict``, and unpickling xgboost (and friends)
-in-process segfaults on the host. Constructing them is safe, so we assert the
-returned class without touching the model.
-
-The ``intelligent`` performance path is a cache→physics composite: an exact
-cache match (a measured past run) when one exists, else the Kavier analytical
-predictor.
+The tests check the class and wiring of the returned predictor and do not call ``predict()`` on
+an ML predictor: those load their pickled model on the first ``predict``, and unpickling xgboost
+and similar models in this process can segfault. ``intelligent`` returns an exact cache match (a
+measured past run) when there is one, else the Kavier estimate.
 """
 
 import pytest
@@ -35,9 +23,7 @@ from coastline.sdk.predictors.performance.composite import CacheThenSimulatePred
 from coastline.sdk.predictors.performance.physics import KavierPredictor
 from coastline.sdk.predictors.performance.retrieval.cache_predictor import RetrievalPredictor
 
-# ---------------------------------------------------------------------------
-# PredictorFactory (low-level: physics / power / data-driven)
-# ---------------------------------------------------------------------------
+# create_physics_driven
 
 
 class TestPredictorFactory:
@@ -46,9 +32,7 @@ class TestPredictorFactory:
         assert isinstance(predictor, KavierPredictor)
 
 
-# ---------------------------------------------------------------------------
 # PolicyFactory.throughput_predictor (performance: string-keyed)
-# ---------------------------------------------------------------------------
 
 
 class TestThroughputPredictorFactory:
@@ -61,68 +45,70 @@ class TestThroughputPredictorFactory:
         assert isinstance(predictor, RetrievalPredictor)
 
     def test_intelligent_wires_cache_first_then_fallback(self):
-        # Contract of "intelligent" (CLAUDE.md): exact cache hit of a real past run,
-        # ELSE Kavier physics. The cascade ORDER is the spec, so pin both slots:
-        # a bug that swapped them (physics tried first) or wired two physics
-        # predictors would pass a bare isinstance check but is caught here.
+        # "intelligent" returns an exact cache hit of a past run, else the Kavier estimate. Both
+        # slots are checked, so a swapped order or two physics predictors fails.
         predictor = PolicyFactory.throughput_predictor({"performance": "intelligent"})
         assert isinstance(predictor, CacheThenSimulatePredictor)
         assert isinstance(predictor._cache, RetrievalPredictor)  # tried first
         assert isinstance(predictor._fallback, KavierPredictor)  # fallback
 
     def test_intelligent_fallback_model_is_configurable(self):
-        # A cache MISS simulates with the configured `fallback` model, not always Kavier.
-        # Default stays Kavier; `fallback: xgboost` swaps the miss branch to that ML model
-        # while the cache stays first. Constructing is safe; we never call .predict.
+        # A cache miss uses the configured `fallback` model (Kavier by default); `fallback: xgboost`
+        # uses that ML model while the cache stays first. The test does not call .predict.
         default = PolicyFactory.throughput_predictor({"performance": "intelligent"})
         assert isinstance(default._fallback, KavierPredictor)
         custom = PolicyFactory.throughput_predictor({"performance": "intelligent", "fallback": "xgboost"})
         assert isinstance(custom, CacheThenSimulatePredictor)
         assert isinstance(custom._cache, RetrievalPredictor)  # still cache-first
-        assert type(custom._fallback).__name__ == "SklearnPortfolioPredictor"  # miss -> the ML model
+        assert type(custom._fallback).__name__ == "SklearnPortfolioPredictor"  # a miss uses the ML model
         assert custom._fallback.get_name() == "xgboost"
 
     @pytest.mark.parametrize("bad_fallback", ["intelligent", "cache", "totally-bogus"])
-    def test_intelligent_fallback_guard_degrades_to_kavier(self, bad_fallback):
-        # A `fallback` that names a caching predictor ("intelligent"/"cache") or an unknown model
-        # must NOT nest another cache or recurse — it degrades to Kavier. Pins the
-        # _resolve_simulation_predictor guard so a future refactor that re-routes unknown names
-        # (e.g. back through throughput_predictor) can't reintroduce infinite recursion.
-        predictor = PolicyFactory.throughput_predictor({"performance": "intelligent", "fallback": bad_fallback})
-        assert isinstance(predictor, CacheThenSimulatePredictor)
+    def test_a_fallback_that_is_not_a_simulation_model_raises(self, bad_fallback):
+        # A `fallback` that names a caching predictor ("intelligent", "cache") or an unknown model
+        # raises and lists the simulation models, as an unknown `performance` name does. This also
+        # keeps a cache from nesting in another or recursing through throughput_predictor.
+        with pytest.raises(ValueError, match=f"unknown fallback predictor '{bad_fallback}'") as excinfo:
+            PolicyFactory.throughput_predictor({"performance": "intelligent", "fallback": bad_fallback})
+        options = str(excinfo.value).split("choose from")[1]
+        assert "'kavier'" in options and "'xgboost'" in options
+        assert "'cache'" not in options and "'intelligent'" not in options
+
+    @pytest.mark.parametrize("spelling", ["Kavier", " kavier ", "PHYSICS"])
+    def test_the_fallback_name_ignores_letter_case_and_spaces(self, spelling):
+        predictor = PolicyFactory.throughput_predictor({"performance": "intelligent", "fallback": spelling})
         assert isinstance(predictor._fallback, KavierPredictor)
-        assert not isinstance(predictor._fallback, CacheThenSimulatePredictor)
+
+    def test_a_fallback_model_name_ignores_letter_case(self):
+        # 'XGBoost' resolves to xgboost. The test does not call .predict.
+        predictor = PolicyFactory.throughput_predictor({"performance": "intelligent", "fallback": "XGBoost"})
+        assert predictor._fallback.get_name() == "xgboost"
+
+    def test_a_blank_fallback_keeps_the_kavier_default(self):
+        # A key left empty in the YAML (`fallback:`) loads as None.
+        predictor = PolicyFactory.throughput_predictor({"performance": "intelligent", "fallback": None})
+        assert isinstance(predictor._fallback, KavierPredictor)
 
     @pytest.mark.parametrize("name", ["xgboost", "catboost"])
     def test_named_ml_model_routes_to_its_own_predictor(self, name):
-        # Oracle = the documented model catalog (CLAUDE.md lists catboost/xgboost/…).
-        # Two DISTINCT names must resolve to predictors that self-report their OWN name
-        # (get_name), catching the regression noted in workflow.py where every named
-        # model silently collapsed to CatBoost. xgboost/catboost now share one class
-        # (SklearnPortfolioPredictor) but stay distinguishable by name. Constructing is
-        # safe; we never call .predict.
+        # Each name resolves to a predictor that reports that name. xgboost and catboost share
+        # SklearnPortfolioPredictor and differ by get_name(). The test does not call .predict.
         predictor = PolicyFactory.throughput_predictor({"performance": name})
         assert predictor.get_name() == name
-        # Named models must reach the ML branch, NOT fall through to the intelligent
-        # default composite (that fallback is reserved for UNKNOWN names).
+        # A named model gets the ML predictor itself, with no cache in front.
         assert not isinstance(predictor, CacheThenSimulatePredictor)
 
-    def test_unknown_name_falls_back_to_intelligent_default(self):
-        # Unknown performance names log a warning and fall back to the intelligent
-        # default rather than raising (lenient by design).
-        predictor = PolicyFactory.throughput_predictor({"performance": "totally-bogus"})
-        assert isinstance(predictor, CacheThenSimulatePredictor)
+    def test_unknown_name_raises(self):
+        # An unknown performance name raises and lists the valid names.
+        with pytest.raises(ValueError, match="unknown predictor 'totally-bogus'"):
+            PolicyFactory.throughput_predictor({"performance": "totally-bogus"})
 
 
-# ---------------------------------------------------------------------------
-# _build_named_ml_predictor (name -> individual ML predictor or None)
-# ---------------------------------------------------------------------------
+# _build_named_ml_predictor: name to ML predictor, or None
 
 
 class TestBuildNamedMlPredictor:
-    # Oracle = the documented data-driven model library (CLAUDE.md / _build_named_ml_predictor
-    # map). Parametrized over the whole catalog so behavior varies name-by-name, not just a
-    # number. Constructing is safe (models unpickle lazily on first .predict, which we never call).
+    # Models load on the first .predict, which these tests do not call.
     @pytest.mark.parametrize(
         "name, expected_identity",
         [
@@ -139,22 +125,17 @@ class TestBuildNamedMlPredictor:
         assert predictor.get_name() == expected_identity
 
     def test_distinct_names_build_distinct_predictors(self):
-        # Regression guard for the bug called out in workflow.py: an earlier duplicate
-        # resolver "silently collapsed every named model — e.g. tabpfn — to CatBoost".
-        # Independent oracle: N distinct catalog names must yield N distinguishable
-        # predictors. get_name() is the identity that survives the portfolio collapse
-        # (six models share one class but keep distinct names).
+        # Distinct names give predictors with distinct get_name() values; the six portfolio models
+        # share one class.
         names = ["catboost", "xgboost", "lightgbm", "random_forest", "tabpfn"]
         identities = {_build_named_ml_predictor(n).get_name() for n in names}
-        assert len(identities) == len(names)  # 5 names -> 5 distinguishable predictors
+        assert len(identities) == len(names)  # 5 names, 5 distinct predictors
 
     def test_unknown_name_returns_none(self):
         assert _build_named_ml_predictor("not-a-real-model") is None
 
 
-# ---------------------------------------------------------------------------
 # PolicyFactory.power_predictor (energy: string-keyed)
-# ---------------------------------------------------------------------------
 
 
 class TestPowerPredictorFactory:
@@ -171,42 +152,33 @@ class TestPowerPredictorFactory:
             PolicyFactory.power_predictor({"energy": "totally-bogus"})
 
 
-# ---------------------------------------------------------------------------
-# workflow module-level factory functions (the near-twin used by the pipeline)
-# ---------------------------------------------------------------------------
+# workflow module-level factory functions, used by the pipeline
 
 
 class TestWorkflowThroughputFactory:
     @pytest.mark.parametrize("alias", ["kavier", "physics", "physics_driven"])
     def test_physics_aliases_all_map_to_kavier(self, alias):
-        # All three spelling aliases (CLAUDE.md config map) resolve to the physics engine.
+        # All three aliases resolve to the Kavier predictor.
         predictor = wf._create_throughput_predictor({"performance": alias})
         assert isinstance(predictor, KavierPredictor)
 
     @pytest.mark.parametrize("name", ["kavier", "cache", "intelligent", "xgboost", "tabpfn"])
     def test_workflow_never_diverges_from_policyfactory(self, name):
-        # The workflow factory is documented as delegating to PolicyFactory so the two
-        # "can never diverge on what performance resolves to" — the old copy here
-        # silently collapsed every named model (e.g. tabpfn) to CatBoost.
-        # Independent oracle: for each name the workflow's class == PolicyFactory's class.
-        # Reintroducing a private resolver in workflow.py breaks this parity.
+        # The workflow factory delegates to PolicyFactory, so both give the same class per name.
         via_workflow = type(wf._create_throughput_predictor({"performance": name}))
         via_factory = type(PolicyFactory.throughput_predictor({"performance": name}))
         assert via_workflow is via_factory
 
     def test_default_is_the_intelligent_composite_not_a_bare_engine(self):
-        # Empty config => "intelligent" default. The anti-twin guard: the default must be
-        # the cache→physics COMPOSITE, never a bare Kavier/Retrieval (which is what the old
-        # divergent workflow copy produced). Falsifiable: return KavierPredictor() and it reds.
+        # An empty config gives the "intelligent" default: the cache-then-Kavier composite.
         predictor = wf._create_throughput_predictor({})
         assert isinstance(predictor, CacheThenSimulatePredictor)
         assert not isinstance(predictor, (KavierPredictor, RetrievalPredictor))
 
 
 class TestWorkflowPowerFactory:
-    # kavier_power + missing-key default mirror TestPowerPredictorFactory exactly
-    # (both delegate to the same wiring); only the error path of this separate
-    # workflow function is exercised here.
+    # TestPowerPredictorFactory covers kavier_power and the missing key (same wiring); this class
+    # checks the workflow function's error path.
     def test_unknown_energy_raises_value_error(self):
         with pytest.raises(ValueError, match="Unknown energy predictor"):
             wf._create_power_predictor({"energy": "totally-bogus"})

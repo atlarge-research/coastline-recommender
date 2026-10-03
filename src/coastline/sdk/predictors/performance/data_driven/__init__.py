@@ -1,16 +1,13 @@
 """Data-driven performance predictors (ML models).
 
-Inference needs only two shipped classes — ``EmbeddingNN`` (in ``_nn``) and
-``_DualOutputCatBoost`` (in ``_catboost_model``); the training scripts that produce the
-pickles live in the dev-only ``dev/trainer`` package and import those same classes back,
-so there is one definition and no drift.
+Inference needs two classes from this package: ``EmbeddingNN`` (in ``_nn``) and
+``_DualOutputCatBoost`` (in ``_catboost_model``). The training scripts in ``dev/trainer``
+import the same classes, so training and inference share one definition.
 """
 
-# Lazy attribute access (PEP 562). Importing one predictor must NOT drag in every
-# other ML runtime: torch (deep_learning) + catboost + xgboost + lightgbm loading
-# into a single process makes their native OpenMP runtimes coexist, which segfaults
-# on macOS. Each predictor module is imported only when its name is first accessed,
-# so e.g. the playground subprocess for "xgboost" loads xgboost alone.
+# Lazy attribute access (PEP 562): a predictor module is imported when its name is first used.
+# Loading torch, catboost, xgboost and lightgbm into one process puts their OpenMP runtimes side
+# by side, which segfaults on macOS, so the playground subprocess for "xgboost" loads only xgboost.
 _PREDICTOR_MODULES = {
     "SklearnPortfolioPredictor": "sklearn_portfolio",
     "GaussianProcessPredictor": "gaussian_process_predictor",

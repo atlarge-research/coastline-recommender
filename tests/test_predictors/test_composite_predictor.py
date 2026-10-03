@@ -1,14 +1,12 @@
-"""The 'intelligent' cascade: exact cache match, else a simulation predictor.
+"""The 'intelligent' cascade: an exact cache match, else a simulation predictor.
 
-Contract of ``CacheThenSimulatePredictor.predict`` (see composite.py):
-    if hit is not None AND hit.predicted_throughput (truthy) AND > 0:
-        return hit                        # a real recorded run wins
+``CacheThenSimulatePredictor.predict`` (composite.py) does:
+    if hit is not None and hit.predicted_throughput and hit.predicted_throughput > 0:
+        return hit                        # a recorded run
     else:
-        return fallback.predict(...)      # fall back to the simulation model
+        return fallback.predict(...)      # the simulation model
 
-Oracles below are the *routing decision* plus object identity: we construct
-the cache/fallback predictions ourselves, so the expected object is an input we
-control, never a value the code produced.
+The tests build the cache and fallback predictions and check which object comes back.
 """
 
 from __future__ import annotations
@@ -37,7 +35,7 @@ class _Stub:
 
 
 class _Exploding:
-    """Fallback predictor that must never be consulted on a valid cache hit."""
+    """Fallback predictor that raises if called."""
 
     def predict(self, workload, context):
         raise AssertionError("fallback was called despite a valid cache hit")
@@ -46,12 +44,9 @@ class _Exploding:
         return "exploding"
 
 
-def test_valid_cache_hit_is_returned_verbatim_and_short_circuits_fallback():
-    # Cache hit carries positive throughput (999 > 0), so the cascade MUST
-    # return that exact object and MUST NOT fall through to the fallback (a cache
-    # hit exists precisely to avoid a second, expensive simulation call).
-    # Oracle: identity — the result is the very object the cache returned;
-    # fallback.predict raising proves the short-circuit (it was not consulted).
+def test_valid_cache_hit_is_returned_unchanged_and_short_circuits_fallback():
+    # A hit with positive throughput (999) is returned as is, and the fallback is not called
+    # (it would raise).
     hit = SimpleNamespace(predicted_throughput=999.0)
     p = CacheThenSimulatePredictor(cache=_Stub(hit), fallback=_Exploding())
     result = p.predict(None, None)
@@ -59,9 +54,7 @@ def test_valid_cache_hit_is_returned_verbatim_and_short_circuits_fallback():
 
 
 def test_cache_miss_none_falls_through_to_fallback_once():
-    # Cache returns None (no recorded run for this workload) -> the fallback
-    # prediction is used verbatim. Oracle: the result is identically the
-    # fallback object, and the fallback is consulted exactly once (no double call).
+    # A cache miss (None) returns the fallback's prediction from a single fallback call.
     fallback_pred = SimpleNamespace(predicted_throughput=111.0)
     fallback = _Stub(fallback_pred)
     p = CacheThenSimulatePredictor(cache=_Stub(None), fallback=fallback)
@@ -72,12 +65,8 @@ def test_cache_miss_none_falls_through_to_fallback_once():
 
 @pytest.mark.parametrize("bad_throughput", [0.0, -5.0, None])
 def test_non_positive_or_missing_cache_throughput_is_treated_as_miss(bad_throughput):
-    # The guard requires throughput to be truthy AND strictly > 0. Three kinds
-    # of unusable cache entry must therefore fall through to the fallback:
-    #   0.0  -> falsy, fails the truthiness clause
-    #   -5.0 -> truthy but fails the `> 0` clause
-    #   None -> falsy, fails the truthiness clause
-    # Oracle: for every kind the fallback object (not the bad hit) is returned.
+    # A hit counts only with a truthy throughput above 0, so all three fall back:
+    # 0.0 and None are falsy, and -5.0 is truthy but not above 0.
     hit = SimpleNamespace(predicted_throughput=bad_throughput)
     fallback_pred = SimpleNamespace(predicted_throughput=111.0)
     p = CacheThenSimulatePredictor(cache=_Stub(hit), fallback=_Stub(fallback_pred))
@@ -86,10 +75,8 @@ def test_non_positive_or_missing_cache_throughput_is_treated_as_miss(bad_through
 
 
 def test_get_name_advertises_the_actual_fallback():
-    # get_name reports the real fallback model, not a hardcoded "kavier" — so a config that
-    # sets a different fallback (e.g. catboost) is visible in run reporting. Oracle: the label
-    # embeds the fallback's own get_name().
+    # get_name includes the fallback's own get_name(), so a catboost fallback shows in run reports.
     p = CacheThenSimulatePredictor(cache=_Stub(None), fallback=_Stub(None, name="kavier"))
-    assert p.get_name() == "intelligent (cache→kavier)"
+    assert p.get_name() == "intelligent (cache->kavier)"
     p2 = CacheThenSimulatePredictor(cache=_Stub(None), fallback=_Stub(None, name="catboost"))
-    assert p2.get_name() == "intelligent (cache→catboost)"
+    assert p2.get_name() == "intelligent (cache->catboost)"

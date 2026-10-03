@@ -1,9 +1,8 @@
-"""One home for Coastline's closed-set vocabularies and the default search space.
+"""Closed-set vocabularies and the default search space.
 
-Values on the wire (YAML / JSON / CSV) stay plain strings; the enums here use a ``str`` base so
-they compare and serialize as that wire string (``FeasibilityMode.RULES == "rules"``) while giving
-the code a single, typed source of truth. The default lists are the fallback search space used
-only when a config's ``grid`` doesn't specify its own.
+Values in YAML, JSON and CSV are plain strings. The enums subclass ``str``, so they compare and
+serialize as those strings (``FeasibilityMode.RULES == "rules"``). The default lists are the
+search space used when a config's ``grid`` does not set its own.
 """
 
 from __future__ import annotations
@@ -15,7 +14,7 @@ class FeasibilityMode(str, Enum):
     """How a candidate configuration's feasibility is checked."""
 
     AUTOCONF = "autoconf"  # OOM-aware AutoConf model (default)
-    RULES = "rules"  # divisibility rules only
+    RULES = "rules"  # structural sanity guards only; no memory model (see EMPIRICAL_OOM_TOKEN_BUDGET)
     NONE = "none"  # no feasibility check
 
 
@@ -55,7 +54,7 @@ class Preset(str, Enum):
 
 class SelectionPolicy(str, Enum):
     """How the winning candidate is chosen: ``min_gpu`` = fewest feasible GPUs; the rest rank on
-    the weighted throughput↔energy score."""
+    the weighted throughput and energy score."""
 
     MIN_GPU = "min_gpu"
     PERFORMANCE = "performance"
@@ -70,8 +69,8 @@ class NormalizationMode(str, Enum):
     FRONTIER = "frontier"
 
 
-# α (power weight), β (throughput weight) per base preset. The -frontier variants are derived
-# (same weights, different normalization) rather than re-listed.
+# (alpha, beta) per base preset: alpha weights power, beta weights throughput. The -frontier
+# variants reuse these weights with frontier normalization.
 _BASE_PRESET_WEIGHTS: dict[str, tuple[float, float]] = {
     Preset.ENERGY: (0.8, 0.2),
     Preset.BALANCED: (0.5, 0.5),
@@ -82,7 +81,7 @@ PRESET_WEIGHTS: dict[str, tuple[float, float]] = {
     **{f"{p.value}-frontier": w for p, w in _BASE_PRESET_WEIGHTS.items()},
 }
 
-# Base preset -> ranking policy; the -frontier variants map to the same policy (derived).
+# Ranking policy per base preset; each -frontier variant uses its base preset's policy.
 _BASE_PRESET_TO_POLICY: dict[str, "SelectionPolicy"] = {
     Preset.ENERGY: SelectionPolicy.ENERGY,
     Preset.BALANCED: SelectionPolicy.BALANCED,
@@ -94,10 +93,10 @@ PRESET_TO_POLICY: dict[str, "SelectionPolicy"] = {
 }
 
 
-# The standard node topology (a DGX-style node holds 8 GPUs); a context/config may override it.
+# GPUs per node (a DGX-style node holds 8); a context or config may override it.
 DEFAULT_GPUS_PER_NODE: int = 8
 
-# --- default search space (a config's ``grid`` overrides these per run) ---
+# Default search space; a config's ``grid`` overrides it.
 GPU_BUDGETS: tuple[int, ...] = (1, 2, 4, 8, 16, 32, 64, 128, 256)
 DEFAULT_BATCH_SIZES: list[int] = [1, 2, 4, 8, 16, 32, 64, 128, 256]
 DEFAULT_TOKENS_PER_SAMPLE: list[int] = [512, 1024, 2048, 4096, 8192]
@@ -105,30 +104,27 @@ DEFAULT_TOKENS_PER_SAMPLE: list[int] = [512, 1024, 2048, 4096, 8192]
 # The AutoConf OOM model version used when a config doesn't pin one.
 DEFAULT_AUTOCONF_MODEL_VERSION = "3.1.0"
 
-#: AutoConf models whose classifier may decide a whole chunk of candidates in one call, rather
-#: than one call per candidate. Membership is earned by measurement, not assumed: each was
-#: checked over 3,339 real grid candidates and an 81,928-row adversarial grid, at chunk sizes
-#: 1/8/35/250/1000, comparing verdicts, metadata and probabilities against the per-row path.
+#: AutoConf model versions whose classifier may judge a chunk of candidates in one call. Each was
+#: compared with the one-call-per-candidate path on 3,339 real grid candidates and an 81,928-row
+#: adversarial grid, at chunk sizes 1, 8, 35, 250 and 1000 (verdicts, metadata, probabilities):
 #:
-#:   3.1.0 (CatBoost + WeightedEnsemble_L2) -- bitwise identical, max drift 0.0.
-#:   3.0.0 (NeuralNetTorch + WeightedEnsemble_L2) -- zero verdict differences; probabilities
-#:          drift up to 1.4e-6 while the candidate nearest the 0.5 decision threshold sits
-#:          3.4e-5 away, a margin of ~25x.
+#:   3.1.0 (CatBoost + WeightedEnsemble_L2): bitwise identical.
+#:   3.0.0 (NeuralNetTorch + WeightedEnsemble_L2): same verdicts; probabilities differ by up to
+#:          1.4e-6, and the candidate closest to the 0.5 threshold is 3.4e-5 away (~25x margin).
 #:
-#: An unrecognised version falls back to one call per candidate, because that evidence does not
-#: transfer to a model nobody has measured. COASTLINE_NO_AUTOCONF_BATCH=1 opts out entirely.
+#: Other versions were not measured and get one call per candidate.
+#: COASTLINE_NO_AUTOCONF_BATCH=1 turns batching off.
 BATCHABLE_AUTOCONF_MODEL_VERSIONS = frozenset({"3.1.0", "3.0.0"})
 
-# The empirical OOM guard's per-device token ceiling, re-derived from the nine Zurich campaigns
-# (135 jobs: 49 OOM, 86 completed). 60,224 is the UNIQUE accuracy maximum at 89.63% (121/135),
-# catching 36 of 49 OOMs with a single false alarm.
+# Per-device token ceiling of the empirical OOM guard, fitted on the nine Zurich campaigns
+# (135 jobs: 49 OOM, 86 completed). 60,224 is the only threshold with the top accuracy, 89.63%
+# (121/135): it catches 36 of 49 OOMs with one false alarm.
 #
-# The comparison is STRICTLY greater-than and that is load-bearing: 14 jobs sit at exactly
-# 60,224 tokens/device and every one of them completed. Using >= drops accuracy to 79.3%.
+# The guard rejects strictly more tokens/device than this. 14 jobs ran at exactly 60,224
+# tokens/device and all completed; with >= the accuracy drops to 79.3%.
 #
-# This rule cannot do better. Completed jobs run up to 79,200 tokens/device while OOMs start at
-# 15,104, so the classes overlap over 87 of the 135 jobs; 89.63% is the provable ceiling for any
-# single tokens/device threshold. The 13 missed OOMs separate on gradient_checkpointing instead.
-# Treat it as a guard, not a classifier: the threshold was selected on the same campaigns it is
-# scored against, so true out-of-sample accuracy is lower.
+# No single tokens/device threshold does better: completed jobs reach 79,200 tokens/device and
+# OOMs start at 15,104, so the classes overlap on 87 of the 135 jobs. The 13 missed OOMs differ
+# in gradient_checkpointing. The threshold was chosen on the same campaigns it is scored on, so
+# out-of-sample accuracy is lower.
 EMPIRICAL_OOM_TOKEN_BUDGET = 60_224

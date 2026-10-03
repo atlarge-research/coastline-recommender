@@ -1,8 +1,7 @@
-"""Dataset validation for `coastline tune` — the loud-failure contract.
+"""Dataset validation for `coastline utils tune`: a bad dataset fails with a clear error.
 
-Oracles are hand-built DataFrames: every expected error/warning is derived from
-the row counts and column values constructed in the test, never from the
-validator's own output. No ML backend is imported (validation is light).
+The expected errors and warnings follow from the rows each test builds. No ML backend is
+imported.
 """
 
 import pandas as pd
@@ -16,7 +15,7 @@ from coastline.sdk.predictors.performance.data_driven.tune import (
     validate_dataset,
 )
 
-# A structurally-valid row: known model+GPU (in Kavier's library), positive targets.
+# A valid row: model and GPU in Kavier's library, positive targets.
 _GOOD = {
     "model_name": "mistral-7b-v0.1",
     "method": "lora",
@@ -31,26 +30,26 @@ _GOOD = {
 }
 
 
-def test_missing_columns_fail_loudly_with_the_schema():
-    """Dropping two required columns must name exactly those two and print the contract."""
+def test_missing_columns_fail_with_the_schema():
+    """Dropping two required columns names those two and prints the dataset format."""
     df = pd.DataFrame([_GOOD]).drop(columns=["gpu_model", "train_runtime"])
     with pytest.raises(DatasetFormatError) as err:
         validate_dataset(df)
     msg = str(err.value)
     assert "gpu_model" in msg and "train_runtime" in msg
     assert "model_name" not in msg.split("\n")[0]  # present columns are not listed as missing
-    assert "A valid tuning dataset" in msg  # the full contract rides along
+    assert "A valid tuning dataset" in msg  # the format help is included
 
 
-def test_all_rows_filtered_fails_loudly():
-    """is_valid=0 on every row -> no usable rows -> DatasetFormatError, not a silent empty fit."""
+def test_all_rows_filtered_raises():
+    """With is_valid=0 on every row there are no usable rows, and validation raises DatasetFormatError."""
     df = pd.DataFrame([{**_GOOD, "is_valid": 0.0}] * 3)
     with pytest.raises(DatasetFormatError, match="no usable rows"):
         validate_dataset(df)
 
 
 def test_filters_and_dropped_row_warning():
-    """3 good + 1 invalid + 1 zero-throughput -> 3 kept, and the drop is called out."""
+    """Of 3 good, 1 invalid and 1 zero-throughput row, 3 are kept and a warning reports the 2 dropped."""
     rows = [
         {**_GOOD, "batch_size": 4},
         {**_GOOD, "batch_size": 8},
@@ -64,7 +63,7 @@ def test_filters_and_dropped_row_warning():
 
 
 def test_quality_warnings_name_the_violated_properties():
-    """1 row, 1 config, model+GPU unknown to Kavier -> each property is spelled out."""
+    """One row, one config, and a model and GPU unknown to Kavier: each problem gets a warning."""
     row = {**_GOOD, "model_name": "totally-made-up-llm-9b", "gpu_model": "FAKE-GPU-1"}
     clean, warnings = validate_dataset(pd.DataFrame([row]))
     assert len(clean) == 1
@@ -76,7 +75,7 @@ def test_quality_warnings_name_the_violated_properties():
 
 
 def test_clean_large_dataset_yields_no_warnings():
-    """MIN_ROWS known-model rows across several configs -> zero quality warnings."""
+    """MIN_ROWS rows of a known model across several configs give no warnings."""
     rows = [{**_GOOD, "batch_size": b, "number_gpus": g} for b in (4, 8, 16, 32) for g in (1, 2, 4, 8)][:MIN_ROWS]
     rows += [dict(_GOOD)] * (MIN_ROWS - len(rows))
     clean, warnings = validate_dataset(pd.DataFrame(rows))
@@ -85,7 +84,7 @@ def test_clean_large_dataset_yields_no_warnings():
 
 
 def test_tune_rejects_bad_train_percentage_and_unknown_model(tmp_path):
-    """Argument validation fires before any dataset/ML work."""
+    """Bad arguments are rejected before any dataset or ML work."""
     with pytest.raises(ValueError, match="train-percentage"):
         tune("does-not-matter.csv", train_percentage=0.0)
     # tabpfn and xgboost are tunable; a portfolio model like catboost is not (use dev/trainer).

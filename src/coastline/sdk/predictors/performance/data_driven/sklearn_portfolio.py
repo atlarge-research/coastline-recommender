@@ -1,13 +1,12 @@
-"""One predictor for the six sklearn-style portfolio models.
+"""One predictor class for the six sklearn-style portfolio models.
 
-catboost, xgboost, lightgbm, random_forest, svr and knn are all thin wrappers over a
-featv3 pickle with a log1p target. Their only differences are (a) the hyperparameters
-they surface in ``metadata`` and (b) whether categoricals are native (catboost) or
-LabelEncoded (the rest). Both are data, so one class + the per-model table in
-``policies`` replaces the six near-identical modules.
+catboost, xgboost, lightgbm, random_forest, svr and knn each load a featv3 pickle with a
+log1p target. They differ only in the hyperparameters they report in ``metadata`` and in
+whether categoricals are native (catboost) or LabelEncoded (the rest); the per-model table
+is in ``policies``.
 
-Models with a distinct runtime (tabpfn, deep_learning) or a ``return_std`` path
-(gaussian_process, bayesian_ridge) keep their own classes — they are not portfolio-shaped.
+tabpfn and deep_learning (separate runtimes) and gaussian_process and bayesian_ridge (a
+``return_std`` path) have their own classes.
 """
 
 import logging
@@ -25,10 +24,13 @@ from coastline.sdk.models.recommendation import Prediction  # noqa: F401  (retur
 from coastline.sdk.models.workload import WorkloadSpec
 from coastline.sdk.predictors.base import BasePredictor
 from coastline.sdk.predictors.performance.data_driven.ml_common import (
+    ModelNotShippedError,
     build_encoded_features,
     feature_row_has_unknown_specs,
     finalize_ml_prediction,
     invert_log_targets,
+    model_error_prediction,
+    model_not_shipped_error,
     performance_trained_model_path,
     workload_to_ml_feature_row,
 )
@@ -38,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class Param:
-    """A hyperparameter surfaced from the pickle's ``best_params`` (absent -> 'N/A')."""
+    """A hyperparameter read from the pickle's ``best_params`` ('N/A' if absent)."""
 
     key: str
     source: Optional[str] = None
@@ -60,7 +62,7 @@ class Const:
 
 @dataclass(frozen=True)
 class Artifact:
-    """A value read from the pickle's top-level artifacts dict (absent -> None)."""
+    """A value read from the pickle's top-level artifacts dict (None if absent)."""
 
     key: str
     source: Optional[str] = None
@@ -73,10 +75,9 @@ MetaField = Union[Param, Const, Artifact]
 
 
 def _alias_legacy_catboost_module() -> None:
-    """The committed catboost pickle was serialized under the pre-refactor top-level
-    module ``trainer.train_performance_catboost``. Alias that path to the shipped class so
-    the pickle resolves with no retrain in a wheel install with no dev trainer on the path.
-    ``setdefault`` leaves a real dev trainer intact."""
+    """Map ``trainer.train_performance_catboost``, the module the bundled catboost pickle was
+    saved under, to the installed class, so the pickle loads without the dev trainer.
+    An already imported dev trainer is left in place."""
     from coastline.sdk.predictors.performance.data_driven import _catboost_model
 
     sys.modules.setdefault("trainer", types.ModuleType("trainer"))
@@ -87,19 +88,13 @@ def _alias_legacy_catboost_module() -> None:
 
 
 def _pin_to_one_thread(model: Any, name: str) -> Any:
-    """Make a pickled ensemble reproduce its own numbers, and (for the forests) run faster.
+    """Set ``n_jobs=1`` so a pickled ensemble returns the same numbers on every call.
 
-    ``random_forest.pkl`` carries ``n_jobs=-1`` from training. At predict time sklearn then
-    accumulates 1,200 tree outputs into a shared array from a joblib thread pool, and float
-    addition is not associative, so the reduction order decides the last bits: the same candidate,
-    in the same process, through the same object, yields several distinct throughputs (measured:
-    6 distinct float64 values in 30 predicts, spread ~9e-15 relative). That is a silent violation
-    of the determinism the tool promises, and it has nothing to do with parallelism -- it is
-    there on a plain sequential run.
-
-    Pinning to one thread makes the result bit-stable, and for the forest it is also ~3.5x
-    faster (53 ms -> 15 ms per prediction), because dispatching 1,200 single-row tree calls
-    through a thread pool costs more than running them.
+    ``random_forest.pkl`` has ``n_jobs=-1`` from training, so sklearn sums its tree outputs from
+    a joblib thread pool. Float addition is not associative, so the summation order changes the
+    last bits of a prediction from call to call. With one thread the result is bit-stable, and
+    the forest is faster, since dispatching single-row tree calls to a thread pool costs more
+    than running them.
     """
     n_jobs = getattr(model, "n_jobs", None)
     if n_jobs is not None and n_jobs != 1:
@@ -109,9 +104,9 @@ def _pin_to_one_thread(model: Any, name: str) -> Any:
 
 
 class SklearnPortfolioPredictor(BasePredictor):
-    """Featv3 sklearn-style throughput predictor, configured by name + metadata fields."""
+    """Featv3 sklearn-style throughput predictor, configured by model name and metadata fields."""
 
-    #: A pickled sklearn/boosted-tree model: 0.9-51 ms per prediction, worth a worker dispatch.
+    #: A pickled sklearn/boosted-tree model costs more per prediction than a worker dispatch.
     EXPENSIVE = True
 
     def __init__(
@@ -133,15 +128,12 @@ class SklearnPortfolioPredictor(BasePredictor):
         self._loaded = False
 
     def _load(self) -> None:
-        """Lazy-load model + preprocessing artifacts from the featv3 pickle."""
+        """Lazy-load the model and preprocessing artifacts from the featv3 pickle."""
         if self._loaded:
             return
 
         if not self._model_path.exists():
-            raise FileNotFoundError(
-                f"{self._name} model not found at {self._model_path}. "
-                f"Train it first: python -m trainer.main --model {self._name}"
-            )
+            raise model_not_shipped_error(self._name, self._model_path)
 
         try:
             if self._native_categorical:
@@ -170,17 +162,28 @@ class SklearnPortfolioPredictor(BasePredictor):
             raise
 
     def predict(self, workload: WorkloadSpec, context: SystemContext) -> Optional[Prediction]:
-        """Predict throughput, or None on load failure / out-of-library workload
-        (the pipeline skips that candidate)."""
+        """Predict throughput, or None for a model or GPU missing from Kavier's library (the
+        pipeline skips that candidate).
+
+        A model file that cannot be loaded, or holds no model, gives a Prediction with no numbers
+        and the reason in ``metadata['error_detail']``. A missing model file raises
+        ModelNotShippedError, since no candidate could be scored.
+        """
         try:
             self._load()
+        except ModelNotShippedError:
+            raise
         except Exception as e:
             logger.warning("%s unavailable, skipping prediction: %s", self._name, e)
-            return None
+            return model_error_prediction(
+                workload, model_name=self._name, detail=f"model artifact could not be loaded: {self._model_path} ({e})"
+            )
 
         if self._model is None or self._cat_features is None or self._num_features is None:
             logger.warning("%s predictor artifacts are incomplete", self._name)
-            return None
+            return model_error_prediction(
+                workload, model_name=self._name, detail=f"model artifact is incomplete: {self._model_path}"
+            )
 
         row = workload_to_ml_feature_row(workload)
         if feature_row_has_unknown_specs(row):
@@ -215,8 +218,8 @@ class SklearnPortfolioPredictor(BasePredictor):
 
 @dataclass(frozen=True)
 class PortfolioModel:
-    """One portfolio model's config — its metadata fields and categorical mode. The
-    only per-model difference; the inference path is shared by ``SklearnPortfolioPredictor``."""
+    """Per-model config: metadata fields and categorical mode. Inference is shared in
+    ``SklearnPortfolioPredictor``."""
 
     metadata: tuple[MetaField, ...]
     native_categorical: bool = False

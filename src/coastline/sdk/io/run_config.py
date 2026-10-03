@@ -1,4 +1,4 @@
-"""Resolve + load the recommendation-policy YAML (strategy / predictors / grid)."""
+"""Find and load the recommendation-policy YAML (strategy, predictors, grid)."""
 
 from __future__ import annotations
 
@@ -17,9 +17,8 @@ from coastline.sdk.pipeline.parallel import (
     resolve_workers,
 )
 
-# The one built-in recommendation-policy default (multi_objective/balanced), loaded from the
-# bundled ``default_experiment.yaml`` so every surface (CLI, facade/API, UI) shares a single
-# source instead of parallel hardcoded dicts. Used only when no config file is found.
+# Built-in policy (multi_objective, balanced) for the CLI, the Python API and the UI, used when
+# no config file is found.
 _BUILTIN_DEFAULT_PATH = Path(__file__).parent / "default_experiment.yaml"
 
 
@@ -30,38 +29,38 @@ def _load_builtin_default() -> dict[str, Any]:
 
 
 def builtin_default_config() -> dict[str, Any]:
-    """The one built-in recommendation-policy default (``strategy``/``predictors``/``grid``),
-    loaded from the bundled ``default_experiment.yaml``. Every surface falls back to this when no
-    config file is present. Returns a fresh deep copy — callers may mutate it freely."""
+    """A deep copy of the built-in policy (``strategy``, ``predictors``, ``grid``) from the bundled
+    ``default_experiment.yaml``, used when no config file is present."""
     return copy.deepcopy(_load_builtin_default())
 
 
-# Module-level default dict (the deep copy every door merges under). Kept as a name for the
-# surfaces + tests that reference it; its content is the bundled YAML, never a second literal.
+# The default that a loaded config file is merged over.
 _DEFAULT_STRATEGY_CONFIG: dict[str, Any] = builtin_default_config()
 
-# The single canonical recommendation-policy config file. Every door falls back to this one
-# ``experiment.yaml`` (there is no separate ``default.yaml``/``config.yaml`` any more); the
-# ``EXPERIMENT_CONFIG`` env var lets a deployment point elsewhere. Repo root: io/ -> sdk/ ->
-# coastline/ -> src/ -> repo.
+# The repo's policy config, used by every entry point unless EXPERIMENT_CONFIG points elsewhere.
+# parents[4] of this file is the repo root.
 _CONFIG_ENV_KEY = "EXPERIMENT_CONFIG"
 _CANONICAL_CONFIG = Path(__file__).resolve().parents[4] / "config" / "coastline_functionality" / "experiment.yaml"
 
 
 def default_experiment_path() -> Path:
-    """The one recommendation-policy config every surface resolves to when none is given.
-    The ``EXPERIMENT_CONFIG`` env var wins; else the repo's ``experiment.yaml``. The path may not
-    exist (stripped wheel) — callers then fall back to :func:`builtin_default_config`."""
+    """The policy config path used when none is given.
+
+    ``EXPERIMENT_CONFIG`` if set, returned even when the file is missing so the caller can report
+    it; else the repo's ``experiment.yaml``; else (in an installed wheel, which has no ``config/``)
+    the bundled ``default_experiment.yaml`` that :func:`builtin_default_config` reads.
+    """
     override = os.environ.get(_CONFIG_ENV_KEY)
-    return Path(override) if override else _CANONICAL_CONFIG
+    if override:
+        return Path(override)
+    return _CANONICAL_CONFIG if _CANONICAL_CONFIG.is_file() else _BUILTIN_DEFAULT_PATH
 
 
 def load_runtime_workers(path: str | Path | None = None) -> Optional[int]:
-    """``runtime.parallel_workers`` from the policy YAML, or None when it is not declared.
+    """``runtime.parallel_workers`` from the policy YAML, or None when it is not set.
 
-    Read separately from :func:`load_strategy_config` because the trace and batch paths build
-    their config from arguments rather than from the file, yet still need the operator's worker
-    count. A malformed value is ignored rather than failing a run over a preference.
+    Separate from :func:`load_strategy_config` because the trace and batch paths build their
+    config from arguments but still use the configured worker count. An invalid value is ignored.
     """
     path = Path(path) if path is not None else default_experiment_path()
     if not path.is_file():
@@ -78,12 +77,10 @@ def load_runtime_workers(path: str | Path | None = None) -> Optional[int]:
 
 
 def resolve_cli_workers(flag: Optional[int] = None, path: str | Path | None = None) -> int:
-    """The worker count a command should use: ``--workers`` wins, then the policy YAML, then 4.
+    """Worker count for a command: ``--workers``, else the policy YAML, else 4.
 
-    The default lives here rather than in the SDK on purpose. A command is a whole run the
-    operator asked for, so spending the machine on it is what they want; a library call is a
-    step inside someone else's program, where silently moving work into subprocesses would take
-    their monkeypatches, their in-process state and their logging handlers away from them.
+    The SDK default stays 1: a library call runs inside someone else's program, and moving its
+    work into subprocesses would bypass that program's monkeypatches, state and log handlers.
     """
     if flag is not None:
         return resolve_workers(flag)

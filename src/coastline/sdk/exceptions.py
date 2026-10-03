@@ -9,6 +9,12 @@ class PredictionError(RecommenderSystemError):
     """Raised when prediction fails."""
 
 
+class NoPredictionError(PredictionError, RuntimeError):
+    """Raised when candidates pass the feasibility check but the predictor gives no usable
+    number for any of them. Also a RuntimeError, so code that catches the pipeline's
+    'no feasible candidates' RuntimeError still catches this case."""
+
+
 class ValidationError(RecommenderSystemError):
     """Raised when workload or context validation fails."""
 
@@ -44,6 +50,7 @@ class RecommendationError(RecommenderSystemError):
 __all__ = [
     "RecommenderSystemError",
     "PredictionError",
+    "NoPredictionError",
     "ValidationError",
     "ConfigurationError",
     "DataLoadError",

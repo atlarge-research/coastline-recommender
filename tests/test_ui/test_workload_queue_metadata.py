@@ -1,8 +1,8 @@
-"""simulate_fifo must keep each result's OWN display metadata, even when two queued jobs share a
-request_id (a client can set request_id via the API, and a CSV import can carry duplicate ids).
+"""simulate_fifo keeps each result's own display metadata when two queued jobs share a request_id.
 
-Regression guard for the Kavier-delegation refactor: an earlier version keyed the display fields on
-request_id, so duplicates collapsed onto the last job's metadata. The scheduler keys on position.
+A client can set request_id through the API, and a CSV import can carry duplicate ids. The
+scheduler keys results on position; keyed on request_id, duplicates would all get the last job's
+metadata.
 """
 
 from __future__ import annotations
@@ -16,5 +16,5 @@ def test_simulate_fifo_keeps_per_job_metadata_with_duplicate_request_ids() -> No
         QueueJob(request_id="x", arrival_time=0, num_gpus=2, predicted_duration_s=10, llm_model="B"),
     ]
     result = simulate_fifo(jobs, n_gpus_cluster=8)
-    # Both jobs are scheduled; each JobResult keeps its own model, not two copies of the last one.
+    # Both jobs are scheduled and each JobResult keeps its own model.
     assert sorted(j.llm_model for j in result.jobs) == ["A", "B"]

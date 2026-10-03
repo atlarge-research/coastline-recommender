@@ -5,7 +5,7 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from coastline.sdk.constants import DEFAULT_GPUS_PER_NODE
-from coastline.sdk.library.hardware import get_gpu_memory
+from coastline.sdk.library.hardware import canonical_gpu_name, get_gpu_memory
 
 
 class Constraints(BaseModel):
@@ -33,12 +33,16 @@ class SystemContext(BaseModel):
         gpus_per_node: int = DEFAULT_GPUS_PER_NODE,
         max_nodes: Optional[int] = None,
     ) -> "SystemContext":
-        """Build a SystemContext from gpu_models; derives max_nodes when not given."""
+        """Build a SystemContext from gpu_models; derives max_nodes when not given.
+
+        GPU aliases are stored under Kavier's name, the name the workload carries too.
+        """
         if max_nodes is None:
             max_nodes = max(1, -(-max_gpus // gpus_per_node))  # ceil division
+        names = [canonical_gpu_name(m) for m in gpu_models]
         return cls(
-            available_gpu_models=list(gpu_models),
+            available_gpu_models=names,
             max_gpus=max_gpus,
-            gpu_memory={m: get_gpu_memory(m) for m in gpu_models},
+            gpu_memory={m: get_gpu_memory(m) for m in names},
             constraints=Constraints(max_gpus=max_gpus, gpus_per_node=gpus_per_node, max_nodes=max_nodes),
         )

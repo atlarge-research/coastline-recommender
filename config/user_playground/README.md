@@ -1,5 +1,5 @@
 # User playground
 
-A safe space to explore. Play with these files to learn the available options — nothing here is loaded by default, so editing them won't affect a real run.
+Example configs for learning the options. Nothing loads these files by default, so editing them does not change a normal run.
 
-- **demo.yaml** — an annotated reference example listing every config option with its allowed values.
+- **demo.yaml**: an annotated example of the config options and their allowed values.

@@ -13,16 +13,13 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, QuantileTransformer
 
 BASE_DIR = Path(__file__).parent
-# Honour DATA_DIR (Docker/CI); otherwise resolve the shared trace-archive relative to this
-# file so lookup never depends on the CWD. The trace-archive sits in the superproject umbrella,
-# one level above the coastline repo root; this file lives at dev/trainer/common.py, so
-# parents[2] is the repo root and parents[3] the umbrella that holds trace-archive.
+# DATA_DIR overrides the location (Docker, CI). The default is the trace-archive in the umbrella
+# repo: parents[2] of this file is the coastline repo root and parents[3] the umbrella.
 DATA_DIR = Path(os.environ.get("DATA_DIR", str(Path(__file__).resolve().parents[3] / "trace-archive")))
 DATA_PATH = DATA_DIR / "profiling-dataset" / "curated_trace.csv"
-# Official (re)trained artifacts live in the packaged portfolio (the one home for bundled
-# models, inside the SDK), tracked in git and independent of DATA_DIR. User-tuned models go to
-# portfolio/custom/ via `coastline utils tune`. Honour PORTFOLIO_DIR (Docker/CI/pip-install):
-# a pip-installed deployment points this env var at its own models dir.
+# Retrained models go to the packaged portfolio inside the SDK, which is tracked in git and
+# independent of DATA_DIR. `coastline utils tune` writes user models to portfolio/custom/ instead.
+# PORTFOLIO_DIR overrides the location (Docker, CI, pip installs).
 _PACKAGED_PORTFOLIO = (
     Path(__file__).resolve().parents[2]
     / "src"
@@ -55,10 +52,9 @@ TARGET_COLUMNS = {
     "runtime_seconds": "train_runtime",
 }
 
-# Train / Val / Test split ratios
-# 70% train, ~15% val, 15% test
+# Split: 70% train, about 15% val, 15% test.
 TEST_SIZE = 0.15
-VAL_SIZE = 0.176  # 0.176 of remaining 85% ≈ 15% of total
+VAL_SIZE = 0.176  # 0.176 of the remaining 85% is about 15% of the total
 
 # Categorical: method, gpu_model, model_type (from llm_model), torch_dtype,
 #   enable_roce (0/1/unknown), model_size_bucket (coarse size from llm_model).
@@ -70,17 +66,16 @@ ENGINEERED_CATEGORICAL = ["model_type", "torch_dtype", "enable_roce", "model_siz
 BASE_NUMERICAL = ["number_nodes", "number_gpus", "tokens_per_sample", "batch_size", "total_gpus"]
 
 # ---------------------------------------------------------------------------
-# Feature parity with Kavier: the analytical model consumes deep LLM/GPU specs;
-# we attach the SAME specs (sourced from Kavier's libraries) so both predictor
-# families see identical inputs. Tuned calibration knobs (mfu_factor,
-# calibration_factor) are deliberately excluded — they are not raw inputs.
+# Feature parity with Kavier: the ML models get the same LLM and GPU specs as
+# Kavier's analytical model, read from Kavier's libraries. The tuned calibration
+# knobs (mfu_factor, calibration_factor) are fitted values and are left out.
 # ---------------------------------------------------------------------------
-# Kavier is installed separately (pip install "kavier>=0.4,<0.5"). Use kavier.sdk.library's
-# top-level re-exports (its public surface), not the .llm/.gpu submodules.
+# Kavier is installed separately. Import from kavier.sdk.library, its public API,
+# instead of the .llm/.gpu submodules.
 try:
     from kavier.sdk.library import GPU_SPEC_LIBRARY as _GPU_LIB
     from kavier.sdk.library import LLM_SPEC_LIBRARY as _LLM_LIB
-except ImportError:  # specs unavailable -> features fall back to NaN (median-filled)
+except ImportError:  # without Kavier the spec features are NaN and get median-filled
     _LLM_LIB, _GPU_LIB = {}, {}
 
 LLM_SPEC_NUMERICAL = [
@@ -117,7 +112,7 @@ def llm_spec_features(model_name: Any) -> Dict[str, float]:
         "llm_d_head": float(s.d_head),
         "llm_m_params": float(s.m_params),
         "llm_active_params": float(s.active_params),
-        # llm_num_experts / llm_active_experts: hardcoded 1.0 — Kavier dropped MoE; kept for _featv3 pickle compat.
+        # Fixed at 1.0 because Kavier has no MoE specs; the columns stay so _featv3 pickles still load.
         "llm_num_experts": 1.0,
         "llm_active_experts": 1.0,
     }
@@ -140,7 +135,7 @@ def gpu_spec_features(gpu_model: Any) -> Dict[str, float]:
 
 
 def extract_model_family(name: str) -> str:
-    """Extract the base model family (e.g. 'llama3.1-70b' -> 'llama', 'meta-llama/Llama-3.1-8B' -> 'llama')."""
+    """Base model family, e.g. 'llama' for both 'llama3.1-70b' and 'meta-llama/Llama-3.1-8B'."""
     full = str(name).lower()
     for family in ["llama", "granite", "mistral", "mixtral", "allam"]:
         if family in full:
@@ -149,7 +144,7 @@ def extract_model_family(name: str) -> str:
 
 
 def extract_model_size_bucket(name: str) -> str:
-    """Coarse size bucket: llama3.1-70b → llama70b, mixtral-8x7b → mixtral8x7b."""
+    """Coarse size bucket, e.g. 'llama70b' for 'llama3.1-70b' and 'mixtral8x7b' for 'mixtral-8x7b'."""
     raw = str(name).strip().lower()
     norm = raw.replace("_", "-").replace(" ", "")
 
@@ -218,7 +213,7 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
     else:
         df["enable_roce"] = "unknown"
 
-    # Feature parity: attach Kavier's deep LLM + GPU specs as numeric columns.
+    # Attach Kavier's LLM and GPU specs as numeric columns.
     mn = df["model_name"].astype(str) if "model_name" in df.columns else pd.Series([""] * len(df), index=df.index)
     gm = df["gpu_model"].astype(str) if "gpu_model" in df.columns else pd.Series([""] * len(df), index=df.index)
     llm_df = mn.map(llm_spec_features).apply(pd.Series)
@@ -342,7 +337,7 @@ def split_data(*arrays, test_size=TEST_SIZE, val_size=VAL_SIZE, seed=SEED):
 
 
 def as_dataframes(*objs: Any) -> Tuple[pd.DataFrame, ...]:
-    """Type-narrow split outputs to DataFrame (runtime no-op; aids static typing)."""
+    """Cast split outputs to DataFrame for the type checker; a no-op at runtime."""
     return tuple(cast(pd.DataFrame, o) for o in objs)
 
 
@@ -352,7 +347,10 @@ def encode_categorical_features(
     X_cat_test: pd.DataFrame,
     return_numpy: bool = False,
 ) -> Tuple:
-    """Encode categoricals via LabelEncoder (with explicit 'unknown' class); returns (enc_train, enc_val, enc_test, encoders, vocab_sizes)."""
+    """Label-encode categoricals, mapping unseen values to an added 'unknown' class.
+
+    Returns (enc_train, enc_val, enc_test, encoders, vocab_sizes).
+    """
     encoders: Dict[str, LabelEncoder] = {}
     vocab_sizes: Dict[str, int] = {}
 
@@ -435,7 +433,7 @@ def calculate_metrics(
     median_ae = median_absolute_error(y_true, y_pred)
     max_err = float(np.max(np.abs(y_true - y_pred)))
 
-    # Percentage-based metrics (filter zeros)
+    # Percentage metrics skip rows with y_true <= 0.
     mask = y_true > 0
     mape = float(np.mean(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100)
     mdape = float(np.median(np.abs((y_true[mask] - y_pred[mask]) / y_true[mask])) * 100)
@@ -517,13 +515,13 @@ def save_pickled_artifact_if_better(
     if old is not None and new_throughput_mdape >= old:
         return False, (
             f"Kept existing model: on-disk test throughput MdAPE {old:.4f}% "
-            f"≤ new {new_throughput_mdape:.4f}%. Not writing {artifact_path}"
+            f"<= new {new_throughput_mdape:.4f}%. Not writing {artifact_path}"
         )
     with open(artifact_path, "wb") as f:
         pickle.dump(artifacts, f)
     if old is None:
         return True, f"Saved model to {artifact_path} (no comparable prior MdAPE on disk)."
-    return True, (f"Replaced model at {artifact_path}: test throughput MdAPE {old:.4f}% → {new_throughput_mdape:.4f}%")
+    return True, (f"Replaced model at {artifact_path}: test throughput MdAPE {old:.4f}% -> {new_throughput_mdape:.4f}%")
 
 
 def save_deep_learning_bundle_if_better(
@@ -534,7 +532,7 @@ def save_deep_learning_bundle_if_better(
     sklearn_artifacts: dict,
     force: bool = False,
 ) -> Tuple[bool, str]:
-    """Save DL .pth + .pkl bundle atomically only when MdAPE improves; returns (saved, message)."""
+    """Save the DL .pth and .pkl files together, only when test throughput MdAPE improves; returns (saved, message)."""
     import torch
 
     model_dir = Path(model_dir)
@@ -545,7 +543,7 @@ def save_deep_learning_bundle_if_better(
     if old is not None and new_throughput_mdape >= old:
         return False, (
             f"Kept existing Deep Learning bundle: on-disk test throughput MdAPE {old:.4f}% "
-            f"≤ new {new_throughput_mdape:.4f}%. Not writing {model_dir}"
+            f"<= new {new_throughput_mdape:.4f}%. Not writing {model_dir}"
         )
     model_dir.mkdir(parents=True, exist_ok=True)
     torch.save(torch_save_dict, model_path)
@@ -555,12 +553,12 @@ def save_deep_learning_bundle_if_better(
         return True, f"Saved Deep Learning bundle under {model_dir} (no prior MdAPE on disk)."
     return True, (
         f"Replaced Deep Learning bundle under {model_dir}: test throughput MdAPE "
-        f"{old:.4f}% → {new_throughput_mdape:.4f}%"
+        f"{old:.4f}% -> {new_throughput_mdape:.4f}%"
     )
 
 
 def print_metrics(metrics: Dict, dataset_name: str = "", unit: str = "tokens/sec") -> None:
-    """Pretty-print training metrics."""
+    """Print training metrics."""
     if dataset_name:
         print(f"\n{'=' * 70}")
         print(f"{dataset_name.upper()} METRICS")
@@ -568,24 +566,24 @@ def print_metrics(metrics: Dict, dataset_name: str = "", unit: str = "tokens/sec
 
     orig = metrics["original_space"]
 
-    print("\n📊 Original Space:")
+    print("\nOriginal Space:")
     print(f"  MAE:           {orig['mae']:>12,.2f} {unit}")
     print(f"  RMSE:          {orig['rmse']:>12,.2f} {unit}")
-    print(f"  R²:            {orig['r2']:>12.4f}")
+    print(f"  R2:            {orig['r2']:>12.4f}")
     print(f"  Max Error:     {orig['max_error']:>12,.2f} {unit}")
     print(f"  Median AE:     {orig['median_ae']:>12,.2f} {unit}")
 
-    print("\n🎯 Key Performance Indicators:")
+    print("\nKey Performance Indicators:")
     print(f"  MdAPE:         {orig['mdape']:>12.2f}%")
     print(f"  MAPE:          {orig['mape']:>12.2f}%")
     print(f"  Within 20%:    {orig['within_20_pct']:>12.1f}%")
 
     if "log_space" in metrics:
         log = metrics["log_space"]
-        print("\n📈 Log Space:")
+        print("\nLog Space:")
         print(f"  MAE:           {log['mae']:>12.4f}")
         print(f"  RMSE:          {log['rmse']:>12.4f}")
-        print(f"  R²:            {log['r2']:>12.4f}")
+        print(f"  R2:            {log['r2']:>12.4f}")
 
 
 def transform_targets(y: pd.DataFrame) -> pd.DataFrame:

@@ -1,8 +1,7 @@
-"""The one objective vocabulary shared by both recommend surfaces.
+"""Goal names accepted by both ``coastline.recommend(batch, goal=...)`` and
+``Coastline(...).recommend(wl, goal=...)``.
 
-``coastline.recommend(batch, goal=...)`` and ``Coastline(...).recommend(wl, goal=...)`` accept the
-same ``goal`` strings; each maps it to what its own layer needs — a ``(strategy, preset)`` pair for
-the facade, an engine label for the batch API.
+The facade maps a goal to a ``(strategy, preset)`` pair; the batch API maps it to an engine label.
 """
 
 from __future__ import annotations
@@ -12,18 +11,17 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Goal:
-    """One objective, described once. Every other surface derives its view from these records:
-    the facade wants ``(strategy, preset)``, the engine/REPL want the display ``label``, the
-    batch API maps canonical→label, and the recommendation rationale wants the ``phrase``."""
+    """One goal. The facade reads ``(strategy, preset)``, the engine and REPL read ``label``, the
+    batch API maps ``canonical`` to ``label``, and the rationale uses ``phrase``."""
 
     canonical: str
-    label: str  # display label (interactive REPL choices + engine.GOALS key + answers["goal_label"])
+    label: str  # display label: REPL choice, engine.GOALS key and answers["goal_label"]
     strategy: str
     preset: str | None
     phrase: str  # short reason used in the recommendation rationale
 
 
-# The single source of truth for the objective vocabulary.
+# All goals.
 GOAL_SPECS: tuple[Goal, ...] = (
     Goal(
         "balanced",
@@ -46,7 +44,7 @@ GOAL_SPECS: tuple[Goal, ...] = (
 GOALS: tuple[str, ...] = tuple(g.canonical for g in GOAL_SPECS)
 _BY_CANONICAL: dict[str, Goal] = {g.canonical: g for g in GOAL_SPECS}
 
-# Friendly spellings → a canonical goal. The canonical names themselves always resolve.
+# Other accepted spellings of the canonical goals. Canonical names are accepted as well.
 _ALIASES: dict[str, str] = {
     "runtime": "performance",
     "lowest_runtime": "performance",
@@ -59,7 +57,7 @@ _ALIASES: dict[str, str] = {
 
 
 def normalize_goal(goal: str) -> str:
-    """Canonical goal for any accepted spelling; ValueError (listing the options) on a typo."""
+    """The canonical goal for an accepted spelling; ValueError listing the options otherwise."""
     key = str(goal).strip().lower().replace(" ", "_")
     key = _ALIASES.get(key, key)
     if key not in GOALS:
@@ -74,17 +72,18 @@ def goal_to_strategy_preset(goal: str) -> tuple[str, str | None]:
 
 
 def engine_goals() -> dict[str, tuple[str, str | None]]:
-    """Display label → ``(strategy, preset)`` — the table the engine/REPL enumerate as choices."""
+    """Each display label with its ``(strategy, preset)``; the engine and REPL list these as choices."""
     return {g.label: (g.strategy, g.preset) for g in GOAL_SPECS}
 
 
 def goal_to_label(goal: str) -> str:
-    """Any accepted goal spelling → its engine display label."""
+    """The engine display label for any accepted goal spelling."""
     return _BY_CANONICAL[normalize_goal(goal)].label
 
 
-def rationale_phrase(key: str) -> str | None:
-    """The rationale phrase for a canonical goal (or ``None`` for anything without one, e.g. the
-    ``multi_objective`` strategy name — the caller falls back to a generic phrase)."""
-    g = _BY_CANONICAL.get(key)
+def rationale_phrase(key: str | None) -> str | None:
+    """The rationale phrase for a canonical goal, or None for a key without one (such as the
+    ``multi_objective`` strategy name); the caller then uses a generic phrase."""
+    # Presets are case-insensitive, so a config's 'Performance' gets the performance phrase.
+    g = _BY_CANONICAL.get(str(key).strip().lower()) if key else None
     return g.phrase if g else None

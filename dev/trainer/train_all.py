@@ -16,9 +16,9 @@ def train_all():
         print(f"\n[{i}/{total}] Training {name}...")
         try:
             _run_single_model(name)
-            results.append((name, "✅ Success"))
+            results.append((name, "Success"))
         except Exception as e:
-            results.append((name, f"❌ Failed: {str(e)[:50]}"))
+            results.append((name, f"Failed: {str(e)[:50]}"))
 
     print("\n" + "=" * 80)
     print("Training Summary")

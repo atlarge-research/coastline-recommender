@@ -1,27 +1,15 @@
-"""Guards for the fork-join stage machinery: chunking, gather order, and what is worth forking.
+"""The parallel stages of GridWorkflowPipeline.recommend: chunking, gather order and when to fork.
 
-``GridWorkflowPipeline.recommend`` runs as stages with a barrier between them — judge every
-candidate for feasibility, then simulate every survivor, then rank the whole set — and each stage
-may split its candidates across worker processes. The contract that makes that safe is:
+recommend checks feasibility for every candidate, simulates every survivor and then ranks the whole
+set. The first two stages may split their candidates across worker processes, and any worker count
+must give the sequential result: rank_candidates keeps grid order for some equal scores, so chunks
+are contiguous and gathered in chunk order. A stage forks only if it is expensive and large enough;
+the cheap backends (rules, none, Kavier) and a checker that decides a whole chunk in one call run
+inline. The tests check the path taken as well as the result.
 
-* **Identical output at any worker count.** ``rank_candidates`` breaks exact score ties by grid
-  insertion order, so a reordered gather silently changes which config wins. Chunks are therefore
-  contiguous and concatenated in chunk order; the oracle here is the sequential run itself, which
-  every parallel run must reproduce field-for-field.
-* **Only an expensive stage forks, and only once it is big enough.** ``is_expensive`` /
-  ``EXPENSIVE`` gate the fork, so the cheap backends (``rules``, ``none``, Kavier) keep paying
-  zero dispatch cost; ``batches`` then picks the size threshold, because a stage that has already
-  collapsed into one vectorised call needs a far bigger grid to be worth k calls instead of one.
-  The tests assert the *path taken*, not just the answer: a cheap stage must never reach
-  ``map_chunks``.
-* **``evaluate_chunk`` is a free function, not a Protocol default.** ``FeasibilityChecker`` is
-  satisfied structurally and no implementer inherits it, so a method body on the Protocol would
-  reach none of them. ``test_protocol_carries_no_chunk_default`` pins that trap.
-
-No process is ever spawned here. ``get_pool`` is stubbed to None so ``map_chunks`` runs the real
-module-level worker entry points inline, which exercises everything except the pickling itself —
-and the pickling is pinned separately by ``TestWorkerEntryPoints``. Nothing reads the machine's
-core count either: ``os.cpu_count`` is fixed at 8 for the whole module.
+No process is started: get_pool is stubbed to return None, so map_chunks runs the module-level
+worker entry points in this process, and TestWorkerEntryPoints checks that they pickle.
+os.cpu_count is fixed at 8 for the whole module.
 """
 
 from __future__ import annotations
@@ -64,17 +52,13 @@ from coastline.sdk.predictors.base import BasePredictor
 
 GPU = "NVIDIA-A100-SXM4-80GB"
 
-#: A machine-independent core count. resolve_workers clamps to os.cpu_count(), so without this
-#: every "workers=2" assertion would depend on the host.
+#: resolve_workers clamps to os.cpu_count(), so the tests fix the core count.
 FAKE_CPU_COUNT = 8
 
 
-# --------------------------------------------------------------------------- #
-# fixtures
-# --------------------------------------------------------------------------- #
 @pytest.fixture(autouse=True)
 def fixed_cpu_count(monkeypatch):
-    """Pin the core count so worker-count clamping is the same on a laptop and in CI."""
+    """Fix the core count so the worker clamping does not depend on the host."""
     monkeypatch.setattr("os.cpu_count", lambda: FAKE_CPU_COUNT)
 
 
@@ -92,13 +76,10 @@ def clean_parallel_state():
 
 @pytest.fixture
 def no_pool(monkeypatch):
-    """Make ``get_pool`` return None, so ``map_chunks`` runs the real workers in this process.
+    """Make ``get_pool`` return None, so ``map_chunks`` runs the workers in this process.
 
-    Returns the list of worker counts it was asked for, so a test can assert the stage really
-    tried to fork (and with how many workers) without a process ever being spawned.
-
-    The pool also reports warm: these tests are about the fork decision and the gather, not about
-    whether a stage is big enough to justify starting workers from cold (covered in TestPlanChunks).
+    Returns the worker counts it was asked for, so a test can check that a stage tried to fork.
+    The pool reports warm; TestPlanChunks covers the cold-start threshold.
     """
     asked: list[int] = []
 
@@ -113,10 +94,10 @@ def no_pool(monkeypatch):
 
 @pytest.fixture
 def map_calls(monkeypatch):
-    """Record every ``map_chunks`` call (payload lists), delegating to the real implementation.
+    """Record every ``map_chunks`` call and pass it on to the real one.
 
-    ``run_feasibility``/``run_simulation`` only reach ``map_chunks`` when they decide to fork, so
-    an empty record is proof the inline path was taken.
+    run_feasibility and run_simulation call map_chunks only when they fork, so an empty record
+    means the stage ran inline.
     """
     calls: list[dict[str, Any]] = []
     real = parallel.map_chunks
@@ -150,14 +131,10 @@ def context():
     )
 
 
-# --------------------------------------------------------------------------- #
-# doubles
-# --------------------------------------------------------------------------- #
 class _RecordingChecker:
-    """A checker with is_feasible and deliberately NO check_chunk (the fallback path).
+    """A checker with is_feasible and no check_chunk.
 
-    Rejects any candidate whose total_gpus is in ``reject`` and records the order it was asked in,
-    so a test can prove evaluate_chunk walked the candidates one by one, in input order.
+    Rejects candidates whose total_gpus is in ``reject`` and records the order of the calls.
     """
 
     def __init__(self, reject: set[int] | None = None, expensive: bool = False):
@@ -191,22 +168,20 @@ class _ChunkingChecker:
 
 
 class _ExpensiveRulesChecker(RulesFeasibilityChecker):
-    """The rules backend, flagged expensive so the fork decision fires.
+    """The rules backend marked expensive, so a stage may fork.
 
-    A worker rebuilds its checker from the predictor config, so with ``feasibility: rules`` the
-    rebuilt checker is a plain RulesFeasibilityChecker — identical verdicts, which is exactly what
-    makes forked-vs-inline comparable.
+    A worker rebuilds a plain RulesFeasibilityChecker from ``feasibility: rules``, which gives the
+    same verdicts, so forked and inline runs can be compared.
     """
 
     EXPENSIVE = True
 
 
 class _BatchingRulesChecker(_ExpensiveRulesChecker):
-    """Expensive AND batched — the regime of the AutoConf backend on the verified model.
+    """Expensive and batched, like the AutoConf backend on the verified model version.
 
-    One call decides the whole chunk, so the per-candidate cost is already collapsed and the stage
-    never forks at any size. The verdicts are still the rules backend's, so a run that DID fork
-    (whose worker rebuilds a plain rules checker from the config) stays comparable.
+    One call decides a whole chunk, so the stage never forks. The verdicts are the rules backend's,
+    so a run that did fork would still be comparable.
     """
 
     def batches(self) -> bool:
@@ -217,10 +192,9 @@ class _BatchingRulesChecker(_ExpensiveRulesChecker):
 
 
 class _LinearPredictor(BasePredictor):
-    """Deterministic: throughput = 100·total_gpus + batch_size, per-GPU power = 50·total_gpus.
+    """Throughput = 100 * total_gpus + batch_size and per-GPU power = 50 * total_gpus.
 
-    Distinct per (total_gpus, batch_size), so the gathered order of a chunked run is checkable
-    against the sequential one candidate by candidate.
+    Each (total_gpus, batch_size) gets its own throughput, so a reordered gather shows up.
     """
 
     EXPENSIVE = False
@@ -244,7 +218,7 @@ class _LinearPredictor(BasePredictor):
 
 
 class _DeadPool:
-    """A pool whose map() dies, for the BrokenProcessPool path. Records its own shutdown."""
+    """A pool whose map() raises BrokenProcessPool. Records whether it was shut down."""
 
     def __init__(self):
         self.shutdown_called = False
@@ -262,7 +236,7 @@ def _double_all(payload: list[int]) -> list[int]:
 
 
 def _candidates(context, batch_sizes=(8,), total_gpus=(1, 2, 4, 8)) -> list[WorkloadSpec]:
-    """The grid a stage is handed: batch_sizes × total_gpus, in generate_candidates' own order."""
+    """The grid a stage receives: batch_sizes x total_gpus, in generate_candidates' order."""
     base = WorkloadSpec(
         llm_model="mistral-7b-v0.1",
         fine_tuning_method="lora",
@@ -297,20 +271,18 @@ def _pipeline(config: dict, **overrides) -> GridWorkflowPipeline:
 
 
 def _dump(recs) -> list[dict]:
-    """Recommendations as plain data, for a field-for-field comparison between two runs."""
+    """Recommendations as plain data, for a field-by-field comparison of two runs."""
     return [r.model_dump() for r in recs]
 
 
-# --------------------------------------------------------------------------- #
-# chunk() — contiguous, order-preserving, complete
-# --------------------------------------------------------------------------- #
+# chunk(): contiguous, in order, complete
 class TestChunk:
     @pytest.mark.parametrize(
         "n_items, n_chunks, expected_sizes",
         [
             (8, 2, [4, 4]),  # exact split
             (8, 4, [2, 2, 2, 2]),
-            (7, 2, [4, 3]),  # remainder lands on the FIRST chunks
+            (7, 2, [4, 3]),  # the remainder goes to the first chunks
             (7, 3, [3, 2, 2]),
             (10, 4, [3, 3, 2, 2]),
             (1, 1, [1]),
@@ -327,10 +299,9 @@ class TestChunk:
     def test_chunks_are_contiguous_and_concatenate_back_to_the_input(self, n_items, n_chunks):
         items = list(range(n_items))
         parts = chunk(items, n_chunks)
-        # Order is the whole point: the gather concatenates chunk results, so a candidate's
-        # position must survive the round trip exactly.
+        # The gather concatenates chunk results, so the chunks must concatenate back to the input.
         assert [item for part in parts for item in part] == items
-        # Contiguity: each chunk is a slice of the original, never a stride or a shuffle.
+        # Each chunk is a contiguous slice of the input.
         start = 0
         for part in parts:
             assert part == items[start : start + len(part)]
@@ -342,9 +313,7 @@ class TestChunk:
         assert chunk(items, n_chunks) == [[1, 2, 3]]
 
     def test_more_chunks_than_items_pads_with_empties_and_keeps_order(self):
-        # Cannot happen through plan_chunks (it caps the count at n_items // share, so it never
-        # asks for more chunks than items), but chunk() must not crash or drop items when asked
-        # directly.
+        # plan_chunks never asks for more chunks than items, but chunk() still handles it.
         parts = chunk([1, 2], 5)
         assert parts == [[1], [2], [], [], []]
         assert [item for part in parts for item in part] == [1, 2]
@@ -360,33 +329,31 @@ class TestChunk:
         assert items == [1, 2, 3, 4]
 
 
-# --------------------------------------------------------------------------- #
 # plan_chunks() / resolve_workers()
-# --------------------------------------------------------------------------- #
 class TestPlanChunks:
     @pytest.fixture(autouse=True)
     def warm_pool(self, monkeypatch):
-        """These tables describe a pool that is already up.
+        """These tables assume a running pool.
 
-        A cold pool raises the bar to MIN_ITEMS_TO_START_A_POOL, because the first stage to fork
-        also pays every worker's model load. That regime is covered separately below.
+        A cold pool needs MIN_ITEMS_TO_START_A_POOL items, since the first stage to fork also pays
+        each worker's model load; test_a_cold_pool_has_to_earn_its_start_up covers that case.
         """
         monkeypatch.setattr(parallel, "pool_is_warm", lambda: True)
 
     @pytest.mark.parametrize(
         "n_items, workers, expected",
         [
-            # Per-candidate regime: the default floor is MIN_ITEMS_PER_ROW_STAGE = 8.
+            # Per-candidate stage: the default floor is MIN_ITEMS_PER_ROW_STAGE = 8.
             (0, 4, 1),  # empty grid: nothing to fork
             (1, 4, 1),
-            (7, 8, 1),  # one short of the floor -> inline whatever the worker count
-            (8, 1, 1),  # sequential is sequential
+            (7, 8, 1),  # one below the floor: inline at any worker count
+            (8, 1, 1),  # one worker: inline
             (8, 0, 1),
             (8, 2, 2),  # at the floor: 8 // (8//2) = 2 chunks
             (8, 4, 4),  # 8 // (8//4) = 4
             (8, 8, 8),  # 8 // (8//8) = 8
             (9, 4, 4),
-            (100, 4, 4),  # never more chunks than workers
+            (100, 4, 4),  # at most one chunk per worker
             (100, 2, 2),
         ],
     )
@@ -397,25 +364,25 @@ class TestPlanChunks:
     @pytest.mark.parametrize(
         "n_items, expected",
         [
-            (8, 1),  # would fork against a warm pool; not worth starting one
-            (256, 1),  # even a batched-regime grid is not worth a cold start
+            (8, 1),  # would fork with a warm pool; not worth starting one
+            (256, 1),  # still below the cold-start threshold
             (MIN_ITEMS_TO_START_A_POOL - 1, 1),
             (MIN_ITEMS_TO_START_A_POOL, 4),
             (4 * MIN_ITEMS_TO_START_A_POOL, 4),
         ],
     )
     def test_a_cold_pool_has_to_earn_its_start_up(self, n_items, expected, monkeypatch):
-        # Starting workers costs 0.6-2.3 s of model loading each, so the stage that pays for it
-        # has to be big enough to get that back. Once the pool is up the ordinary floors apply.
+        # Each new worker loads its models first, so the stage that starts the pool has to be big
+        # enough to win that back. Once the pool is up the usual floors apply.
         monkeypatch.setattr(parallel, "pool_is_warm", lambda: False)
         assert plan_chunks(n_items, 4) == expected
 
     @pytest.mark.parametrize("workers", [1, 2, 3, 4, 8])
     @pytest.mark.parametrize("min_items", [MIN_ITEMS_PER_ROW_STAGE, 256])
     def test_a_planned_chunk_is_never_starved(self, workers, min_items):
-        # Property over every grid size around the floor: the plan never exceeds the worker count,
-        # always reassembles the input, never forks below the floor, and never hands a worker less
-        # than its share of the floor — that share is what stops a fork costing more than the work.
+        # For grid sizes around the floor: at most one chunk per worker, chunks that give back the
+        # input, no fork below the floor, and no chunk smaller than a worker's share of the floor
+        # (the share keeps a fork from costing more than the work).
         share = max(1, min_items // workers or 1)
         for n_items in list(range(0, 20)) + [min_items - 1, min_items, min_items + 1, 4 * min_items]:
             items = list(range(n_items))
@@ -437,13 +404,11 @@ class TestResolveWorkers:
 
     @pytest.mark.parametrize("requested, expected", [(2, 2), (4, 4), (8, 8), (64, FAKE_CPU_COUNT)])
     def test_clamped_to_the_core_count(self, requested, expected):
-        # os.cpu_count() is pinned at FAKE_CPU_COUNT by the autouse fixture.
+        # os.cpu_count() is fixed at FAKE_CPU_COUNT by the autouse fixture.
         assert resolve_workers(requested) == expected
 
 
-# --------------------------------------------------------------------------- #
-# the pool + the gather
-# --------------------------------------------------------------------------- #
+# the pool and the gather
 class TestPoolAndGather:
     @pytest.mark.parametrize("workers", [1, 0, -1])
     def test_sequential_worker_counts_never_create_a_pool(self, workers):
@@ -457,7 +422,7 @@ class TestPoolAndGather:
         assert parallel._POOL_WORKERS == 0
 
     def test_map_chunks_runs_inline_and_concatenates_in_chunk_order(self):
-        # workers=1 -> no pool; the result must be the payloads' results, in payload order.
+        # workers=1 uses no pool; the results come back in payload order.
         payloads = [[1, 2], [3], [4, 5, 6]]
         assert map_chunks(_double_all, payloads, 1, stage="feasibility") == [2, 4, 6, 8, 10, 12]
 
@@ -465,11 +430,10 @@ class TestPoolAndGather:
         assert map_chunks(_double_all, [], 1, stage="feasibility") == []
 
     def test_a_dead_worker_is_recovered_in_process_not_turned_into_a_different_answer(self, monkeypatch):
-        # A dead pool must not change the answer. Raising would not achieve that: both production
-        # callers wrap a row in `except Exception`, so the error would be laundered into "this
-        # predictor could not handle this job" and the run would finish with a plausible CSV that
-        # is not the answer. So the stage is finished in this process, which IS the sequential
-        # result, the dead pool is dropped, and nothing forks again in this process.
+        # Both callers catch Exception per row, so a raised pool error would read as "this
+        # predictor could not handle the job" and the run would still write a plausible CSV.
+        # The stage finishes in this process instead, the dead pool is dropped and nothing forks
+        # again in this process.
         dead = _DeadPool()
         monkeypatch.setattr(parallel, "_POOL", dead)
         monkeypatch.setattr(parallel, "_POOL_WORKERS", 2)
@@ -477,15 +441,15 @@ class TestPoolAndGather:
 
         recovered = map_chunks(_double_all, [[1, 2], [3, 4]], 2, stage="feasibility")
 
-        assert recovered == [2, 4, 6, 8]  # exactly what the sequential path returns
+        assert recovered == [2, 4, 6, 8]  # the sequential result
         assert dead.shutdown_called
         assert parallel._POOL is None and parallel._POOL_WORKERS == 0
-        assert parallel._FORKING_DISABLED is True  # no second pool after a death
-        assert parallel.get_pool(4) is None  # ... and get_pool honours that
+        assert parallel._FORKING_DISABLED is True  # no new pool after a failure
+        assert parallel.get_pool(4) is None  # and get_pool respects that
 
     def test_work_that_fails_in_a_worker_and_again_in_process_is_raised_with_its_own_type(self, monkeypatch):
-        # Recovery only covers a dead pool. If the work itself is broken it must surface, and with
-        # a type the per-row isolation layers can let through rather than absorb.
+        # Recovery covers a dead pool only. Work that also fails in this process raises
+        # WorkerPoolFailure, a type the per-row error handling can let through.
         dead = _DeadPool()
         monkeypatch.setattr(parallel, "_POOL", dead)
         monkeypatch.setattr(parallel, "_POOL_WORKERS", 2)
@@ -498,9 +462,7 @@ class TestPoolAndGather:
             map_chunks(_always_fails, [[1, 2], [3, 4]], 2, stage="feasibility")
 
 
-# --------------------------------------------------------------------------- #
 # worker-side entry points: picklable by name, rebuilt from config, memoized
-# --------------------------------------------------------------------------- #
 class TestWorkerEntryPoints:
     @pytest.mark.parametrize(
         "func",
@@ -513,8 +475,8 @@ class TestWorkerEntryPoints:
         ids=["feasibility_worker", "simulation_worker", "simulate_chunk", "simulate_one"],
     )
     def test_stage_entry_points_are_module_level_and_pickle_by_name(self, func):
-        # The pool spawns, so a worker must resolve by qualified name. A closure or a method would
-        # pickle-fail only at run time, inside the pool, as an opaque failure.
+        # The pool spawns its workers, so a worker function must resolve by qualified name. A
+        # closure or a method would fail to pickle only at run time, inside the pool.
         assert pickle.loads(pickle.dumps(func)) is func
 
     def test_stage_payloads_survive_a_round_trip(self, context):
@@ -528,8 +490,8 @@ class TestWorkerEntryPoints:
     def test_worker_checker_is_built_from_config_and_memoized_per_config(self):
         rules = parallel.worker_checker({"feasibility": "rules"})
         assert isinstance(rules, RulesFeasibilityChecker)
-        # Same content in a different dict object -> the same checker: the key is a canonical json
-        # of the config, so a worker pays the build cost once per config, not once per chunk.
+        # The cache key is the config as canonical JSON, so an equal dict gets the same checker
+        # and a worker builds each checker once per config.
         assert parallel.worker_checker({"feasibility": "rules"}) is rules
         assert parallel.worker_checker({"feasibility": "rules", "empirical_oom_guard": False}) is not rules
 
@@ -541,18 +503,15 @@ class TestWorkerEntryPoints:
         config = {"performance": "kavier", "energy": "kavier_power"}
         throughput, power = parallel.worker_predictors(config)
         assert throughput is not None and power is not None
-        # Key order must not matter (canonical json with sort_keys).
+        # Key order does not matter (canonical JSON with sort_keys).
         again = parallel.worker_predictors({"energy": "kavier_power", "performance": "kavier"})
         assert again == (throughput, power)
 
 
-# --------------------------------------------------------------------------- #
-# evaluate_chunk — the Protocol-default trap
-# --------------------------------------------------------------------------- #
 class TestEvaluateChunk:
     def test_protocol_carries_no_chunk_default(self):
-        # The trap this free function exists for: FeasibilityChecker is satisfied structurally, so
-        # a check_chunk default written on the Protocol would reach no implementer at all.
+        # No checker inherits the FeasibilityChecker Protocol, so a check_chunk default on the
+        # Protocol would reach none of them. evaluate_chunk is a module-level function for that reason.
         assert not hasattr(FeasibilityChecker, "check_chunk")
         for checker_type in (RulesFeasibilityChecker, NoOpFeasibilityChecker, GuardedFeasibilityChecker):
             assert FeasibilityChecker not in checker_type.__mro__
@@ -574,7 +533,7 @@ class TestEvaluateChunk:
         verdicts = evaluate_chunk(checker, candidates)
 
         assert len(verdicts) == len(candidates)
-        # The oracle is the per-candidate call the sequential pipeline used to make.
+        # Compare with one is_feasible call per candidate.
         assert verdicts == [checker_factory().is_feasible(candidate) for candidate in candidates]
 
     def test_fallback_visits_every_candidate_once_in_input_order(self, context):
@@ -593,14 +552,14 @@ class TestEvaluateChunk:
 
         verdicts = evaluate_chunk(checker, candidates)
 
-        assert checker.chunk_calls == 1  # ONE call for the whole run
-        assert checker.single_calls == 0  # and not one per candidate
+        assert checker.chunk_calls == 1  # one call for the whole run
+        assert checker.single_calls == 0  # and none per candidate
         assert [meta["position"] for _, meta in verdicts] == list(range(len(candidates)))
 
     @pytest.mark.parametrize("n_verdicts", [0, 3, 9], ids=["none", "too_few", "too_many"])
     def test_a_miscounted_chunk_raises_instead_of_silently_misaligning(self, n_verdicts, context):
-        # Verdicts are zipped positionally against the candidates, so a wrong count would pair a
-        # candidate with someone else's verdict. Fail loudly instead.
+        # Verdicts are matched to candidates by position, so a wrong count would pair a candidate
+        # with another candidate's verdict.
         candidates = _candidates(context, batch_sizes=(4, 8))
         assert len(candidates) == 8
         checker = _ChunkingChecker(n_verdicts=n_verdicts)
@@ -617,12 +576,10 @@ class TestEvaluateChunk:
         assert evaluate_chunk(checker_factory(), []) == []
 
     def test_guarded_chunk_matches_the_per_candidate_verdicts_and_metadata(self, context):
-        # The empirical OOM guard is the OUTERMOST checker when enabled, so it has to offer
-        # check_chunk or it would hide the backend's batching. Its chunked answer must be the
-        # per-candidate answer, metadata included — the guard's own keys merged with the
-        # backend's, in input order, with the vetoed candidates still in their own slots.
-        # Threshold 16,384 = 8,192 tokens/device: with tokens_per_sample=1024 it admits batch 8
-        # and vetoes batch 32.
+        # When enabled, the empirical OOM guard is the outermost checker, so it offers check_chunk
+        # to keep the backend's batching. Its chunked verdicts and metadata must equal the
+        # per-candidate ones, in input order. With a budget of 16,384 tokens per device and
+        # tokens_per_sample=1024, batch 8 passes and batch 32 is rejected.
         config = {"feasibility": "rules", "empirical_oom_guard": True, "empirical_oom_token_budget": 16384}
         checker = create_feasibility_checker(config)
         assert isinstance(checker, GuardedFeasibilityChecker)
@@ -632,28 +589,25 @@ class TestEvaluateChunk:
         per_candidate = [create_feasibility_checker(config).is_feasible(c) for c in candidates]
 
         assert chunked == per_candidate
-        # Both verdicts are really present, so the comparison is not vacuous.
+        # Both verdicts occur, so both cases are compared.
         assert {ok for ok, _ in chunked} == {True, False}
         assert [ok for ok, _ in chunked] == [c.batch_size == 8 for c in candidates]
 
 
-# --------------------------------------------------------------------------- #
-# is_expensive — what is worth shipping to a worker
-# --------------------------------------------------------------------------- #
+# is_expensive: what is worth sending to a worker
 class TestIsExpensive:
     def test_the_autoconf_chain_is_expensive(self):
-        # Built directly rather than through create_feasibility_checker: the factory returns the
-        # rules checker when AutoConf is not installed, which would make this assertion depend on
-        # the environment. Constructing the chain loads no model (the predictor is lazy).
+        # Built directly because create_feasibility_checker returns the rules checker when AutoConf
+        # is not installed. Building the chain loads no model (the predictor is lazy).
         chain = _RulesThenAutoconfChecker(model_version=DEFAULT_AUTOCONF_MODEL_VERSION)
         assert is_expensive(chain) is True
 
     def test_the_guard_inherits_the_cost_of_what_it_wraps(self):
         guard = TokenBudgetFeasibilityChecker(60224)
         chain = _RulesThenAutoconfChecker(model_version=DEFAULT_AUTOCONF_MODEL_VERSION)
-        # Wrapping AutoConf: still worth a fork — the guard is two integers, the backend is a model.
+        # Around AutoConf the guard counts as expensive, since the backend is a model.
         assert is_expensive(GuardedFeasibilityChecker(guard, chain)) is True
-        # Wrapping rules: arithmetic on top of arithmetic, never worth a dispatch.
+        # Around rules it is cheap.
         assert is_expensive(GuardedFeasibilityChecker(guard, RulesFeasibilityChecker())) is False
 
     @pytest.mark.parametrize(
@@ -672,15 +626,12 @@ class TestIsExpensive:
         assert is_expensive(checker_factory()) is False
 
     def test_an_unflagged_checker_defaults_to_cheap(self):
-        # Conservative default: an unknown checker runs inline rather than paying a dispatch that
-        # may cost more than the work.
+        # An unknown checker runs inline, since a dispatch may cost more than the work.
         assert is_expensive(_RecordingChecker()) is False
         assert is_expensive(object()) is False
 
 
-# --------------------------------------------------------------------------- #
-# _batches — which fork threshold a feasibility stage is held to
-# --------------------------------------------------------------------------- #
+# _batches: whether a checker decides a whole chunk in one call
 class TestBatchesGate:
     @pytest.mark.parametrize(
         "checker_factory",
@@ -693,12 +644,12 @@ class TestBatchesGate:
         ids=["rules", "none", "test_double", "bare_object"],
     )
     def test_a_checker_that_says_nothing_is_treated_as_per_candidate(self, checker_factory):
-        # The conservative regime: the low floor, which is right for anything costing per call.
+        # Without a batches() method a checker counts as one call per candidate.
         assert parallel._batches(checker_factory()) is False
 
     def test_the_autoconf_chain_batches_only_on_the_verified_model(self, monkeypatch):
-        # The batched-vs-per-row agreement was measured on one model version; any other version
-        # falls back to one call per candidate, and so to the per-candidate fork threshold.
+        # Batched and per-row verdicts were measured to agree on one model version; other versions
+        # use one call per candidate and the per-candidate fork threshold.
         monkeypatch.delenv("COASTLINE_NO_AUTOCONF_BATCH", raising=False)
         verified = _RulesThenAutoconfChecker(model_version=DEFAULT_AUTOCONF_MODEL_VERSION)
         other = _RulesThenAutoconfChecker(model_version="0.0.0-unverified")
@@ -712,8 +663,8 @@ class TestBatchesGate:
         assert parallel._batches(chain) is False
 
     def test_the_guard_reports_the_regime_of_the_backend_it_wraps(self, monkeypatch):
-        # The guard is the outermost checker when the empirical OOM guard is on, so it has to
-        # forward the regime or a batched backend would be held to the wrong threshold.
+        # When enabled, the guard is the outermost checker, so it reports whether its backend
+        # batches.
         monkeypatch.delenv("COASTLINE_NO_AUTOCONF_BATCH", raising=False)
         guard = TokenBudgetFeasibilityChecker(60224)
         chain = _RulesThenAutoconfChecker(model_version=DEFAULT_AUTOCONF_MODEL_VERSION)
@@ -722,24 +673,22 @@ class TestBatchesGate:
         assert parallel._batches(GuardedFeasibilityChecker(guard, RulesFeasibilityChecker())) is False
 
 
-# --------------------------------------------------------------------------- #
-# run_feasibility / run_simulation — fork only when it pays, gather in order
-# --------------------------------------------------------------------------- #
+# run_feasibility and run_simulation: fork only when it pays, gather in order
 class TestRunFeasibility:
     def test_a_cheap_backend_runs_inline(self, context, map_calls, no_pool):
         checker = RulesFeasibilityChecker()
         candidates = _candidates(context, batch_sizes=(4, 8))
-        assert len(candidates) == 8  # enough to fork, if it were worth forking
+        assert len(candidates) == 8  # large enough to fork
 
         verdicts = run_feasibility(checker, {"feasibility": "rules"}, candidates, workers=4)
 
         assert verdicts == [checker.is_feasible(c) for c in candidates]
-        assert map_calls == [], "the rules backend is one modulo; forking it would cost more than the work"
+        assert map_calls == [], "the rules backend is two integer comparisons; forking it would cost more than the work"
         assert no_pool == []
 
     def test_no_predictor_config_means_no_fork(self, context, map_calls, no_pool):
-        # A worker rebuilds its checker from the predictor config; with none to send, the stage
-        # cannot fork however expensive the backend is.
+        # Workers rebuild the checker from the predictor config, so without one the stage cannot
+        # fork, however expensive the backend.
         checker = _ExpensiveRulesChecker()
         candidates = _candidates(context, batch_sizes=(4, 8))
 
@@ -758,9 +707,8 @@ class TestRunFeasibility:
         assert map_calls == []
 
     def test_forked_verdicts_are_the_sequential_verdicts_in_the_same_order(self, context, map_calls, no_pool):
-        # The fake checker is the rules backend flagged expensive, and the config says
-        # feasibility: rules — so the checker a worker rebuilds decides identically, and any
-        # difference in the output is the chunking's fault, not the checker's.
+        # Workers rebuild a rules checker from the config, which decides like the checker marked
+        # expensive, so any difference in the output comes from the chunking.
         candidates = _candidates(context, batch_sizes=(4, 8))
         sequential = run_feasibility(RulesFeasibilityChecker(), {"feasibility": "rules"}, candidates, workers=1)
 
@@ -772,29 +720,26 @@ class TestRunFeasibility:
         assert call["stage"] == "feasibility"
         assert call["worker"] is parallel.feasibility_worker
         assert len(call["payloads"]) == plan_chunks(len(candidates), 4) == 4
-        # Contiguous chunks that reassemble into exactly the candidate list, in order.
+        # The chunks are contiguous and give back the candidate list in order.
         assert [c for _, part in call["payloads"] for c in part] == candidates
         assert all(cfg == {"feasibility": "rules"} for cfg, _ in call["payloads"])
-        assert no_pool == [4]  # it really tried to fork; only the pool itself was stubbed out
+        assert no_pool == [4]  # it tried to fork with 4 workers
 
     @pytest.mark.parametrize("size", [8, 256, 4096])
     def test_a_batched_stage_never_forks_at_any_size(self, context, map_calls, no_pool, size):
-        # One call already decides the whole chunk, and splitting it pays that call's fixed cost k
-        # times over. Measured on the real gate at 840 / 3,360 / 7,680 / 15,360 candidates:
-        # 1.02x / 1.04x / 1.03x / 1.03x at 4 workers -- flat across an 18x range, so there is no
-        # size at which this becomes worth doing.
+        # One call decides a whole chunk, and splitting it pays that call's fixed cost once per
+        # chunk, so forking gains nothing at any size.
         grid = _candidates(context, batch_sizes=(4, 8))
         candidates = (grid * (size // len(grid) + 1))[:size]
 
         verdicts = run_feasibility(_BatchingRulesChecker(), {"feasibility": "rules"}, candidates, workers=4)
 
         assert verdicts == [RulesFeasibilityChecker().is_feasible(c) for c in candidates]
-        assert map_calls == []  # never reached the fork
+        assert map_calls == []  # did not fork
 
     def test_the_same_checker_without_batching_does_fork(self, context, map_calls, no_pool):
-        # The fork is not dead code: strip the batching (an unmeasured AutoConf version, or
-        # COASTLINE_NO_AUTOCONF_BATCH=1) and the stage is back to per-candidate cost, where
-        # forking pays properly -- 3.11x at 840 candidates on the real gate.
+        # Without batching (another AutoConf version, or COASTLINE_NO_AUTOCONF_BATCH=1) the cost
+        # is per candidate, so forking pays.
         grid = _candidates(context, batch_sizes=(4, 8))
         candidates = (grid * 64)[:512]
         sequential = run_feasibility(RulesFeasibilityChecker(), {"feasibility": "rules"}, candidates, workers=1)
@@ -824,9 +769,8 @@ class TestRunSimulation:
     def test_forked_predictions_are_the_sequential_predictions_in_the_same_order(
         self, context, map_calls, no_pool, monkeypatch
     ):
-        # A worker rebuilds its predictors from the config; here it is handed the very same stubs,
-        # so the only thing under test is the chunk/gather. The stub's output is unique per
-        # candidate, so a reordered gather could not pass this.
+        # Workers get the same stubs, so only the chunking and the gather are tested. Each
+        # candidate has its own output, so a reordered gather fails.
         throughput, power = _LinearPredictor(expensive=True), _LinearPredictor()
         monkeypatch.setattr(parallel, "worker_predictors", lambda config: (throughput, power))
         candidates = _candidates(context, batch_sizes=(4, 8))
@@ -842,8 +786,8 @@ class TestRunSimulation:
         assert [c for _, _, part in map_calls[0]["payloads"] for c in part] == candidates
 
     def test_only_the_throughput_predictor_decides_the_fork(self, context, map_calls, no_pool):
-        # Power is read off the throughput call for Kavier-style predictors, so an expensive power
-        # predictor behind a cheap throughput predictor is not a reason to fork.
+        # Kavier-style predictors return the power with the throughput, so an expensive power
+        # predictor behind a cheap throughput predictor does not make the stage fork.
         throughput, power = _LinearPredictor(expensive=False), _LinearPredictor(expensive=True)
         candidates = _candidates(context, batch_sizes=(4, 8))
 
@@ -858,22 +802,19 @@ class TestRunSimulation:
         assert map_calls == []
 
 
-# --------------------------------------------------------------------------- #
-# GridWorkflowPipeline.recommend — the staged loop, end to end
-# --------------------------------------------------------------------------- #
+# GridWorkflowPipeline.recommend end to end
 class TestStagedPipeline:
     def test_from_config_reads_runtime_parallel_workers(self):
         assert _pipeline(_config(workers=4)).workers == 4
-        # Default when the section (or the key) is absent: 1 — a library call must not silently
-        # move a caller's work into subprocesses.
+        # Without the section or the key the default is 1, so a library call stays in the
+        # caller's process.
         assert _pipeline({"grid": {"batch_sizes": [8], "total_gpus": [1]}}).workers == 1
         assert _pipeline({"grid": {"batch_sizes": [8], "total_gpus": [1]}, "runtime": {}}).workers == 1
-        # Clamped to the core count (pinned at 8 here).
+        # Clamped to the core count (8 here).
         assert _pipeline(_config(workers=64)).workers == FAKE_CPU_COUNT
 
     def test_from_config_keeps_the_predictor_config_when_it_built_every_component(self):
-        # Without this a worker has nothing to rebuild its checker from, and the stage silently
-        # never forks however many workers were asked for.
+        # Workers rebuild the checker from this config; without it no stage could fork.
         pipeline = GridWorkflowPipeline.from_config(
             config=_config(workers=4), selection_policy="performance", strategy_name="parallel-stages"
         )
@@ -884,32 +825,30 @@ class TestStagedPipeline:
         ["throughput_predictor", "power_predictor", "feasibility_checker"],
     )
     def test_an_injected_component_withholds_the_predictor_config_so_nothing_forks(self, injected):
-        # A worker can only rebuild what the config names. If the caller handed us a ready-made
-        # object, the fork would quietly run a DIFFERENT one -- so the whole pipeline stays in
-        # this process instead.
+        # A worker can rebuild only what the config names, so with a passed-in object a fork would
+        # run a different one. The whole pipeline then stays in this process.
         component = _ExpensiveRulesChecker() if injected == "feasibility_checker" else _LinearPredictor()
         pipeline = _pipeline(_config(workers=4), **{injected: component})
         assert pipeline.predictor_config is None
 
     def test_one_and_two_workers_return_identical_recommendations(self, workload, context, map_calls):
-        # feasibility: rules needs no AutoConf install, and it is a cheap backend — so this also
-        # pins that the cheap path stays inline at workers=2 rather than paying a dispatch.
+        # The rules backend needs no AutoConf install and is cheap, so it also stays inline at
+        # workers=2.
         one = _pipeline(_config(workers=1)).recommend(workload, context)
         two = _pipeline(_config(workers=2)).recommend(workload, context)
 
-        assert len(one) == 8  # 2 batch sizes × 4 GPU counts, all feasible under rules
+        assert len(one) == 8  # 2 batch sizes x 4 GPU counts, all feasible under rules
         assert _dump(two) == _dump(one)
         assert map_calls == [], "a cheap feasibility backend and a cheap predictor never fork"
 
     def test_a_forked_feasibility_stage_returns_the_sequential_recommendations(
         self, workload, context, map_calls, no_pool, monkeypatch
     ):
-        # Same run, but with the rules backend flagged expensive so the stage really chunks and
-        # gathers (through the real feasibility_worker, which rebuilds a rules checker from the
-        # config). The flag goes on the CLASS, not on an injected instance: an injected component
-        # withholds the predictor config precisely so that nothing forks.
-        # Both sides build every component from the config (Kavier physics: cheap, deterministic,
-        # and identical in the parent and in a rebuilt worker), so the only difference is the fork.
+        # The rules backend is marked expensive so the stage chunks and gathers through the real
+        # feasibility_worker, which rebuilds a rules checker from the config. The flag is set on
+        # the class because an injected instance would withhold the predictor config and stop the
+        # fork. Both runs build every component from the config (Kavier is cheap and
+        # deterministic), so the fork is the only difference.
         def from_config(workers: int):
             config = _config(workers=workers)
             config["predictors"]["performance"] = "kavier"
@@ -925,14 +864,13 @@ class TestStagedPipeline:
         assert _dump(forked) == _dump(sequential)
         assert len(map_calls) == 1 and map_calls[0]["stage"] == "feasibility"
         assert len(map_calls[0]["payloads"]) == 4
-        # Ranking is a whole-set reduction and is never forked.
+        # Ranking runs over the whole set and is never forked.
         assert [r.total_gpus for r in forked] == [r.total_gpus for r in sequential]
 
     @pytest.mark.parametrize("workers", [1, 2])
     def test_an_empty_grid_raises_the_normal_error_at_any_worker_count(self, workload, context, workers):
-        # Non-positive GPU counts are skipped by generate_candidates, so both stages are handed an
-        # empty list. That must surface as the usual "no feasible candidates" RuntimeError, not an
-        # IndexError or a division by zero out of the chunking.
+        # generate_candidates skips non-positive GPU counts, so both stages get an empty list and
+        # the usual "no feasible candidates" RuntimeError is raised.
         pipeline = _pipeline(_config(workers=workers, total_gpus=(0,), batch_sizes=(8,)))
 
         with pytest.raises(RuntimeError, match="no feasible candidates found in grid of 0 configurations"):
@@ -940,10 +878,9 @@ class TestStagedPipeline:
 
     @pytest.mark.parametrize("workers", [1, 4])
     def test_every_candidate_infeasible_raises_at_any_worker_count(self, workload, context, workers):
-        # The feasibility stage empties the set before simulation ever runs; the second stage must
-        # cope with an empty survivor list and the error must still be the normal one. The double
-        # is cheap, so it stays inline and really is the checker that decides (a forked stage
-        # rebuilds its checker from the config instead).
+        # Feasibility rejects every candidate, so simulation gets an empty list and the usual error
+        # is raised. The double is cheap and runs inline, so it is the checker that decides (a
+        # forked stage would rebuild its checker from the config).
         pipeline = _pipeline(
             _config(workers=workers),
             feasibility_checker=_RecordingChecker(reject={1, 2, 4, 8}),

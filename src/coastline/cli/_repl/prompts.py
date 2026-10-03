@@ -1,4 +1,7 @@
-"""Keyboard-driven interactive widgets (arrow-nav + fuzzy selector); cancellable via Ctrl-C/Esc (raises Abort)."""
+"""Keyboard-driven prompts: an arrow-key menu, a fuzzy selector, and text and number entry.
+
+Esc cancels a prompt (raises Abort); q in a menu and Ctrl-C quit (raise Quit).
+"""
 
 from __future__ import annotations
 
@@ -20,7 +23,15 @@ from coastline.cli._repl.theme import console
 
 
 class Abort(Exception):
-    """Raised when the user cancels a prompt (Esc / Ctrl-C)."""
+    """Raised when the user cancels a prompt (Esc); the REPL goes back to the start."""
+
+
+class Quit(KeyboardInterrupt):
+    """Raised when the user quits (q in a menu, or Ctrl-C); the REPL exits.
+
+    Raw mode reads Ctrl-C as a key press instead of a signal. As a KeyboardInterrupt it is not
+    caught by an ``except Exception`` around a prompt.
+    """
 
 
 def read_key() -> str:
@@ -30,9 +41,9 @@ def read_key() -> str:
     try:
         tty.setraw(fd)
         ch = os.read(fd, 1)
-        if not ch:  # EOF — treat as cancel
+        if not ch:  # EOF: treat as cancel
             return "esc"
-        if ch == b"\x1b":  # escape — arrow suffix only if actually pending
+        if ch == b"\x1b":  # Esc, or the start of an arrow-key sequence when more bytes wait
             if select.select([fd], [], [], 0.05)[0]:
                 seq = os.read(fd, 2)
                 return {b"[A": "up", b"[B": "down", b"[C": "right", b"[D": "left"}.get(seq, "esc")
@@ -40,7 +51,7 @@ def read_key() -> str:
         if ch in (b"\r", b"\n"):
             return "enter"
         if ch == b"\x03":  # Ctrl-C
-            raise Abort()
+            raise Quit()
         if ch in (b"\x7f", b"\x08"):
             return "backspace"
         return ch.decode("utf-8", "ignore")
@@ -67,9 +78,9 @@ def menu(
     *,
     accent: str = "cyan",
     default: int = 0,
-    footer: str = "↑↓ move · enter select · q quit",
+    footer: str = "up/down move | enter select | q quit",
 ) -> object:
-    """Arrow-key menu; returns chosen Choice.value; 'q'/Esc raises Abort."""
+    """Arrow-key menu; returns chosen Choice.value; Esc raises Abort, 'q' raises Quit."""
     items = _coerce(choices)
     idx = max(0, min(default, len(items) - 1))
 
@@ -81,7 +92,7 @@ def menu(
         for i, c in enumerate(items):
             sel = i == idx
             table.add_row(
-                Text("❯" if sel else " ", style=f"bold {accent}"),
+                Text(">" if sel else " ", style=f"bold {accent}"),
                 Text(c.label, style=f"bold {accent}" if sel else "white"),
                 Text(c.hint, style="dim"),
             )
@@ -91,7 +102,9 @@ def menu(
     with Live(render(), console=console, auto_refresh=False, screen=False) as live:
         while True:
             key = read_key()
-            if key in ("q", "esc"):
+            if key == "q":
+                raise Quit()
+            if key == "esc":
                 raise Abort()
             if key == "up":
                 idx = (idx - 1) % len(items)
@@ -140,7 +153,7 @@ def fuzzy_select(
         for i, c in enumerate(view, start=win_start):
             sel = i == idx
             table.add_row(
-                Text("❯" if sel else " ", style=f"bold {accent}"),
+                Text(">" if sel else " ", style=f"bold {accent}"),
                 Text(c.label, style=f"bold {accent}" if sel else "white"),
                 Text(c.hint, style="dim"),
             )
@@ -149,10 +162,10 @@ def fuzzy_select(
 
         qline = Text.assemble(
             ("  search ", "dim"),
-            (query or "type to filter…", "white" if query else "dim italic"),
-            ("▏", f"bold {accent}"),
+            (query or "type to filter...", "white" if query else "dim italic"),
+            ("|", f"bold {accent}"),
         )
-        count = Text(f"  {len(rows)}/{len(items)} · ↑↓ move · enter select · esc cancel", style="dim")
+        count = Text(f"  {len(rows)}/{len(items)} | up/down move | enter select | esc cancel", style="dim")
         body = Group(qline, Text(), table, Text(), count)
         return Panel(body, title=f"[bold {accent}]{title}[/]", border_style=accent, padding=(1, 2))
 
@@ -184,7 +197,7 @@ def text_prompt(message: str, *, default: str = "", accent: str = "cyan") -> str
 
     def render() -> Text:
         return Text.assemble(
-            ("  ? ", f"bold {accent}"), (message + "  ", "white"), (buf, "bold white"), ("▏", f"bold {accent}")
+            ("  ? ", f"bold {accent}"), (message + "  ", "white"), (buf, "bold white"), ("|", f"bold {accent}")
         )
 
     with Live(render(), console=console, auto_refresh=False, screen=False) as live:
@@ -210,7 +223,7 @@ def number_prompt(
     maximum: float | None = None,
     integer: bool = True,
 ) -> float | int:
-    """Numeric entry with validation + re-prompt on bad input. Empty == default."""
+    """Numeric entry that re-prompts on bad input; an empty answer returns the default."""
     is_int = integer and isinstance(default, int)
     while True:
         raw = text_prompt(message, default=str(default), accent=accent).strip()
@@ -219,13 +232,13 @@ def number_prompt(
         try:
             val: float | int = int(raw) if is_int else float(raw)
         except ValueError:
-            console.print(f"[red]  ✗ '{raw}' is not a valid number[/]")
+            console.print(f"[red]  '{raw}' is not a valid number[/]")
             continue
         if minimum is not None and val < minimum:
-            console.print(f"[red]  ✗ must be ≥ {minimum}[/]")
+            console.print(f"[red]  must be >= {minimum}[/]")
             continue
         if maximum is not None and val > maximum:
-            console.print(f"[red]  ✗ must be ≤ {maximum}[/]")
+            console.print(f"[red]  must be <= {maximum}[/]")
             continue
         return val
 

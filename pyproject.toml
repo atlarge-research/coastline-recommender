@@ -4,16 +4,20 @@ build-backend = "uv_build"
 
 [project]
 name = "coastline-recommender"
-version = "0.2.2"
-description = "Context-aware GPU/datacenter configuration recommender for LLM fine-tuning"
+version = "0.2.3"
+description = "Coastline: a context-aware recommender system for fine-tuning LLMs"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [
     { name = "Radu Nicolae" },
+    { name = "Daniele Lotito" },
+    { name = "Alexandru Iosup" },
+]
+maintainers = [
     { name = "AtLarge Research", email = "info@atlarge-research.com" },
 ]
-requires-python = ">=3.13,<3.14"
+requires-python = ">=3.11,<3.14"
 keywords = [
     "llm",
     "fine-tuning",
@@ -28,11 +32,11 @@ keywords = [
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
-    # The interactive `coastline recommend-job --interactive` REPL drives the terminal via termios/tty,
-    # so the distribution is POSIX-first; the one-shot subcommands run anywhere.
+    # The interactive REPL (`coastline recommend-job --interactive`) uses termios.
     "Operating System :: POSIX",
-    # 3.13 only — `requires-python = ">=3.13,<3.14"`. Add a classifier when the cap moves, not before:
-    # a 3.14 classifier on a distribution pip refuses to install on 3.14 is just a wrong index entry.
+    # The <3.14 cap comes from ado-autoconf -> autogluon 1.5, which caps pyarrow<21.
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
@@ -47,40 +51,32 @@ dependencies = [
     "typer>=0.9.0",
     "tqdm>=4.66.0",
     "cachetools>=5.3.0",
-    # FastAPI dashboard ships by default — the single `coastline-ui` entrypoint.
+    # The `coastline-ui` dashboard.
     "fastapi>=0.104.0",
     "uvicorn[standard]>=0.24.0",
     "jinja2>=3.1.0",
-    # Kavier — the physics throughput/power engine (first-class dependency, on PyPI).
-    # 0.5 exposes the engines under kavier.sdk.* (library / io / training) plus the top-level
-    # kavier.inference / kavier.training verbs — which is what coastline imports.
-    "kavier>=0.5,<0.6",
-    # AutoConf OOM-feasibility safeguard (open-source `ado`, on public PyPI) — ships by
-    # default so the stock `feasibility: autoconf` check works out of the box.
+    # Throughput and power predictions.
+    "kavier>=0.5.3,<0.6",
+    # The default `feasibility: autoconf` OOM check.
     "ado-autoconf>=1.7,<2",
 ]
 
 [project.optional-dependencies]
-# Heavy native ML backends + the pinned scikit-learn that matches the serialized
-# featv3 model pickles. The default Kavier (physics) path needs none of these.
-# Trained pickles are NOT bundled in the wheel: retrain with the trainer, or point
-# the predictors at your own artifacts (TABPFN_MODEL_PATH, ...).
+# Data-driven predictors. The wheel leaves out some model pickles (see wheel-exclude); retrain them
+# with dev/trainer or point the predictors at your own (TABPFN_MODEL_PATH, ...).
 ml = [
-    "scikit-learn==1.7.2",   # pinned to match the serialized model pickles (no version skew)
+    "scikit-learn==1.7.2",   # tabpfn.pkl was written with scikit-learn 1.8.0, the other pickles with 1.7.2
     "xgboost==3.1.3",
     "lightgbm==4.6.0",
     "catboost==1.2.10",
     "torch>=2.0.0",
     "tabpfn==8.0.3",
 ]
-# DEPRECATED no-op: ado-autoconf moved into the core dependencies (ships by default).
-# Kept so `pip install "coastline-recommender[autoconf]"` keeps working.
+# Empty: ado-autoconf is a core dependency. Kept so `coastline-recommender[autoconf]` still installs.
 autoconf = []
-# Plotting: needed by `coastline utils plot-trace`. matplotlib is imported lazily inside
-# the plot functions so the core stays importable without it.
+# `coastline utils plot-trace`.
 plot = ["matplotlib>=3.5"]
 
-# PEP 735 dev group — synced by default with `uv sync`; not part of the published wheel.
 [dependency-groups]
 dev = [
     "pytest>=7.4.0",
@@ -91,10 +87,9 @@ dev = [
     "types-PyYAML",
     "types-tqdm",
     "types-cachetools",
-    "httpx2>=2.0.0",   # FastAPI/starlette TestClient HTTP backend (test-only)
-    "pre-commit>=4.6.2",   # local git hooks; CI runs the same hooks (.pre-commit-config.yaml)
+    "httpx2>=2.0.0",   # FastAPI TestClient
+    "pre-commit>=4.6.2",
 ]
-# Documentation site (MkDocs Material). Synced on demand: `uv sync --group docs`.
 docs = [
     "mkdocs>=1.6",
     "mkdocs-material>=9.5",
@@ -109,36 +104,14 @@ coastline-ui = "coastline.ui:main"
 Homepage = "https://github.com/atlarge-research/coastline-recommender"
 Repository = "https://github.com/atlarge-research/coastline-recommender"
 Issues = "https://github.com/atlarge-research/coastline-recommender/issues"
+Documentation = "https://atlarge-research.github.io/coastline-recommender/"
 
-# ------------------------------------------------------------------
-#  uv resolver
-# ------------------------------------------------------------------
-[tool.uv]
-# kavier requires pyarrow>=23.0.1 (Arrow-IPC security GHSA); autogluon — pulled by
-# ado-autoconf (a core dependency) — caps pyarrow<21. The install runs pyarrow>=23
-# for kavier, so override autogluon's stale cap to let the lock resolve.
-override-dependencies = ["pyarrow>=23.0.1"]
-
-# The `kavier>=0.5,<0.6` range above resolves to the PyPI wheel 0.5.0.2, which predates the
-# submodule by 14 commits (policy renames, MFU/goodput). The thesis capsule must replicate against
-# the code the results were produced with, so pin the frozen snapshot by tag.
-[tool.uv.sources]
-kavier = { git = "https://github.com/atlarge-research/Kavier.git", tag = "v0.5.1-thesis" }
-
-# ------------------------------------------------------------------
-#  Build backend
-# ------------------------------------------------------------------
-# uv_build ships the entire src/coastline/ tree into the wheel — the bundled
-# sample_raw_trace.csv, the FastAPI templates/ + static/, and the py.typed marker
-# all ride along automatically (no package-data map). Excludes only strip cache noise.
 [tool.uv.build-backend]
-# The distribution is `coastline-recommender` but the import package is `coastline`.
+# The distribution is `coastline-recommender`; the import package is `coastline`.
 module-name = "coastline"
-# The co-located trainer tests are the only tests inside the package tree; keep them
-# (and cache noise) out of the built wheel. All 10 bundled models live under
-# sdk/predictors/performance/data_driven/portfolio/; the 5 parametric ones DO ship, the 5
-# heavy/instance-based ones (tabpfn, random_forest, gaussian_process, svr, knn) are excluded
-# so a plain `pip install coastline[ml]` stays lean.
+# The model pickles are in sdk/predictors/performance/data_driven/portfolio/. The wheel leaves out
+# tabpfn, random_forest, gaussian_process, svr, knn and custom/; the repository and its Zenodo
+# archive hold all of them.
 wheel-exclude = [
     "**/__pycache__/**",
     "**/*.pyc",
@@ -151,44 +124,40 @@ wheel-exclude = [
     "**/portfolio/knn.pkl",
     "**/portfolio/custom/**",
 ]
-source-exclude = ["**/__pycache__/**", "**/*.pyc"]
+# The sdist leaves out the Git LFS pickles, which a checkout without LFS holds only as pointer files.
+source-exclude = [
+    "**/__pycache__/**",
+    "**/*.pyc",
+    "**/portfolio/tabpfn.pkl",
+    "**/portfolio/random_forest.pkl",
+    "**/portfolio/custom/**",
+]
 
-# ------------------------------------------------------------------
-#  Tooling
-# ------------------------------------------------------------------
 [tool.ruff]
 line-length = 120
-target-version = "py313"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
 ignore = []
 
 [tool.ruff.lint.per-file-ignores]
-# Data-driven ML predictors + trainer carry long feature/spec lines (feature lists,
-# label maps, calibration constants) where wrapping hurts readability; and dev tooling
-# is not part of the shipped surface. Line-length stays enforced everywhere else.
+# Long feature lists and label maps.
 "src/coastline/sdk/predictors/performance/data_driven/**" = ["E501"]
 "dev/**" = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# The dev trainer/benchmark suites import the `trainer`/`benchmark` packages by name;
-# they resolve with dev/ on the path (only used when those suites are run explicitly).
-# dev/ado_plugin is the ado plugin's own package root, so `ado_coastline` imports from the
-# root env without a second resolution; its suite is only collected when named explicitly.
-pythonpath = ["dev", "dev/ado_plugin"]
-# Native-ML predictor tests co-load libomp-bundling backends that can crash in one
-# interpreter, so they carry the `ml_isolated` marker and are deselected by default;
-# run them in their own process: `uv run pytest -m ml_isolated -p no:cacheprovider`.
+# dev/trainer/tests and dev/benchmark/tests import `trainer` and `benchmark` from dev/.
+pythonpath = ["dev"]
+# Tests that load several native ML backends (each bundles libomp) can crash one interpreter, so
+# they are deselected by default. Run them one file per process:
+# `uv run pytest -m ml_isolated -p no:cacheprovider FILE` (ci.yml loops over the files).
 addopts = "-q -m 'not ml_isolated'"
 markers = [
     "ml_isolated: native-ML predictor tests; run in their own pytest process",
 ]
 
-# Coverage is measured over the shipped package only (the dev/ trainer + benchmark trees and the
-# tests themselves are not part of the distribution). `uv run pytest --cov` needs no arguments
-# locally; CI adds `--cov-report=xml` for the Codecov upload.
 [tool.coverage.run]
 source = ["coastline"]
 
@@ -196,10 +165,10 @@ source = ["coastline"]
 show_missing = true
 
 [tool.mypy]
-python_version = "3.13"
+python_version = "3.11"
 strict = true
 mypy_path = "src"
 plugins = ["pydantic.mypy"]
-# Strict-clean packages (the full tree is gated incrementally).
+# The strict-clean packages; add one when it passes.
 packages = ["coastline.sdk.models"]
 exclude = ["tests/", "dev/"]

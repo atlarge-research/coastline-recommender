@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate all 10 trained models via predict() in isolated subprocesses (prevents macOS OpenMP co-load crash)."""
+"""Evaluate the 10 trained models through predict(), one subprocess each to avoid the macOS OpenMP co-load crash."""
 
 import argparse
 import json
@@ -23,7 +23,7 @@ from .common import (
     split_data,
 )
 
-# Display name -> canonical predictor name; resolved lazily per subprocess.
+# Display name to predictor name; each subprocess builds only its own predictor.
 _MODELS: dict[str, str] = {
     "RandomForest": "random_forest",
     "SVR": "svr",
@@ -103,7 +103,7 @@ def _row_to_workload(row: pd.Series) -> WorkloadSpec:
 
 
 def _evaluate_one_model(name: str) -> dict:
-    """Evaluate ONE model over the test split. Runs in its own process."""
+    """Evaluate one model on the test split, in its own process."""
     from coastline.sdk.policies import _build_named_ml_predictor
 
     X_cat, X_num, y, _cat, _num = load_and_preprocess_data()
@@ -150,14 +150,14 @@ def _evaluate_one_model(name: str) -> dict:
 
 
 def evaluate_all():
-    """Evaluate all models, each in an isolated subprocess (no native co-load)."""
+    """Evaluate all models, one subprocess each so native ML runtimes never share a process."""
     print("\n" + "=" * 100)
-    print("EVALUATING ALL 10 MODELS USING PUBLIC API (one isolated subprocess per model)")
+    print("Evaluating all 10 models through the public API (one isolated subprocess per model)")
     print("=" * 100)
 
     results = []
     for name in _MODELS:
-        print(f"\n📊 Evaluating {name}...")
+        print(f"\nEvaluating {name}...")
         proc = subprocess.run(
             [
                 sys.executable,
@@ -176,9 +176,9 @@ def evaluate_all():
         )
         results.append(r)
         if r.get("ok"):
-            print(f"  ✅ {name}: MdAPE = {r['mdape']:.2f}%" + (" (train artifact)" if r.get("artifact") else ""))
+            print(f"  {name}: MdAPE = {r['mdape']:.2f}%" + (" (train artifact)" if r.get("artifact") else ""))
         else:
-            print(f"  ❌ {name}: {r.get('status')}")
+            print(f"  {name}: {r.get('status')}")
 
     rows = []
     for r in results:
@@ -187,10 +187,10 @@ def evaluate_all():
                 {
                     "Model": r["Model"],
                     "MdAPE": f"{r['mdape']:.2f}%",
-                    "R²": f"{r['r2']:.4f}",
+                    "R2": f"{r['r2']:.4f}",
                     "MAE": f"{r['mae']:.2f}",
                     "Within 20%": f"{r['within20']:.1f}%",
-                    "Status": "✅ (train artifact)" if r.get("artifact") else "✅",
+                    "Status": "ok (train artifact)" if r.get("artifact") else "ok",
                 }
             )
         else:
@@ -198,10 +198,10 @@ def evaluate_all():
                 {
                     "Model": r["Model"],
                     "MdAPE": "N/A",
-                    "R²": "N/A",
+                    "R2": "N/A",
                     "MAE": "N/A",
                     "Within 20%": "N/A",
-                    "Status": f"❌ {r.get('status')}",
+                    "Status": f"x {r.get('status')}",
                 }
             )
     df_results = pd.DataFrame(rows)
@@ -214,8 +214,8 @@ def evaluate_all():
     valid = [r for r in results if r.get("ok")]
     if valid:
         best = min(valid, key=lambda x: x["mdape"])
-        print(f"\n🏆 Best Model: {best['Model']} (MdAPE: {best['mdape']:.2f}%)")
-    print(f"\n✅ Working Models: {len(valid)}/{len(_MODELS)}")
+        print(f"\nBest Model: {best['Model']} (MdAPE: {best['mdape']:.2f}%)")
+    print(f"\nWorking Models: {len(valid)}/{len(_MODELS)}")
     return df_results
 
 
@@ -224,7 +224,7 @@ def main():
     parser.add_argument("--one", help="Evaluate a single model by name; print its result as JSON.")
     args = parser.parse_args()
     if args.one:
-        # Worker mode: library chatter -> stderr, only the marked JSON result -> stdout.
+        # Worker mode: logs go to stderr so stdout carries only the marked JSON result.
         import logging
 
         logging.basicConfig(stream=sys.stderr, level=logging.WARNING)

@@ -1,8 +1,7 @@
-"""`coastline explain` — show WHY the recommender picked what it picked.
+"""`coastline explain`: show why the recommender picked its configuration.
 
-Renders the ranked candidates with the score components the policy actually used, so the
-recommendation stops being a bare number. Reads what the pipeline already computed; it does not
-recompute or re-rank anything.
+Prints the ranked candidates with the score components and weights the policy used. It reads
+what the pipeline computed and does not re-rank anything.
 """
 
 from __future__ import annotations
@@ -10,8 +9,8 @@ from __future__ import annotations
 import sys
 from typing import Any, Optional, Sequence
 
-from coastline.cli._shared import FriendlyParser
-from coastline.sdk.constants import PRESET_WEIGHTS
+from coastline.cli._shared import FriendlyParser, positive_int, report_errors
+from coastline.sdk.constants import PRESET_WEIGHTS, FeasibilityMode
 
 
 def _build_parser() -> FriendlyParser:
@@ -25,16 +24,15 @@ def _build_parser() -> FriendlyParser:
     p.add_argument("--model", required=True, help="LLM model name (Kavier catalog spelling).")
     p.add_argument("--method", required=True, help="Fine-tuning method: full | lora | qlora.")
     p.add_argument("--gpu-model", required=True, help="GPU model, e.g. NVIDIA-A100-SXM4-80GB.")
-    p.add_argument("--tokens", type=int, required=True, help="Tokens per sample (sequence length).")
-    p.add_argument("--batch-size", type=int, required=True, help="Per-device batch size.")
+    p.add_argument("--tokens", type=positive_int, required=True, help="Tokens per sample (sequence length).")
+    p.add_argument("--batch-size", type=positive_int, required=True, help="Per-device batch size.")
     p.add_argument(
         "--strategy",
         default="multi_objective",
         choices=["multi_objective", "min_gpu"],
         help="Recommendation policy (default: multi_objective).",
     )
-    # choices= matters here: without it a typo silently falls through the strategy's
-    # unconditional balanced fallback and explains a policy the user did not ask for.
+    # choices= rejects a typo at parse time and lists the presets in the usage error.
     p.add_argument(
         "--preset",
         default="balanced",
@@ -42,7 +40,7 @@ def _build_parser() -> FriendlyParser:
         help="Weight preset for multi_objective (the -frontier variants rank only over the "
         "non-dominated Pareto frontier). Ignored by min_gpu.",
     )
-    p.add_argument("--max-gpus", type=int, default=8, help="Largest GPU count to consider (default: 8).")
+    p.add_argument("--max-gpus", type=positive_int, default=8, help="Largest GPU count to consider (default: 8).")
     p.add_argument("--top-k", type=int, default=5, help="How many ranked candidates to show (default: 5).")
     p.add_argument(
         "--predictor",
@@ -53,8 +51,9 @@ def _build_parser() -> FriendlyParser:
     p.add_argument(
         "--feasibility",
         default="autoconf",
+        choices=[mode.value for mode in FeasibilityMode],
         help="Feasibility checker: autoconf (default, real OOM check via AutoConf) "
-        "| rules (divisibility-only, works without AutoConf) | none.",
+        "| rules (structural sanity guards only, no OOM check; works without AutoConf) | none.",
     )
     return p
 
@@ -75,15 +74,14 @@ def _render(recs: list, args: Any) -> str:
         f"workload  {args.model} / {args.method} / {args.gpu_model} / {args.tokens} tok, batch {args.batch_size}",
     ]
     if is_min_gpu:
-        # min_gpu never scores: workflow.py replaces combined_score with a 1/total_gpus ordering
-        # proxy and leaves preset/alpha/beta off the metadata entirely.
+        # min_gpu has no weighted score: workflow.py sets combined_score to 1/total_gpus for
+        # ordering and leaves preset, alpha and beta out of the metadata.
         lines.append("policy    min_gpu  (fewest GPUs among feasible candidates; no weighted score)")
     else:
         alpha, beta = meta.get("alpha"), meta.get("beta")
         weights = "" if alpha is None or beta is None else f"  (alpha={alpha:.2f} power, beta={beta:.2f} time)"
         lines.append(f"policy    {policy}  preset={meta.get('preset', args.preset)}{weights}")
-    # min_gpu has no weighted score: workflow.py overwrites combined_score with a 1/total_gpus
-    # ordering proxy, so showing it under a "combined" heading would be a lie. Drop the column.
+    # Under min_gpu, combined_score is only the 1/total_gpus ordering key, so the column is left out.
     header = "rank  gpus  batch   thr(tok/s)     P(W)  p_score  t_score"
     lines += ["", header if is_min_gpu else header + "  combined"]
 
@@ -110,7 +108,7 @@ def _render(recs: list, args: Any) -> str:
         f"why       {engine.recommendation_rationale(recs, {'preset': meta.get('preset'), 'strategy_name': policy})}",
     ]
     if not is_min_gpu and meta.get("alpha") is not None:
-        # Show the weighted sum the policy actually evaluated: alpha*power + beta*throughput.
+        # The weighted sum the policy computed: alpha * power_score + beta * throughput_score.
         power_score, throughput_score = meta.get("power_score"), meta.get("throughput_score")
         if power_score is not None and throughput_score is not None:
             alpha, beta = meta["alpha"], meta["beta"]
@@ -125,8 +123,8 @@ def _render(recs: list, args: Any) -> str:
         scores = [(r.metadata or {}).get("combined_score") for r in recs]
         ranked = [s for s in scores if s is not None]
         if ranked != sorted(ranked, reverse=True):
-            # selection.py breaks near-ties (within 0.01) toward higher throughput, so the
-            # displayed order is deliberately not combined-score order. Say so.
+            # selection.py breaks near-ties (within 0.01) toward higher throughput, so the rows
+            # can be out of combined-score order; the note says so.
             lines.append(
                 "tie-break scores within 0.01 are reordered by throughput, so `combined` "
                 "is not monotonic down this table."
@@ -135,26 +133,28 @@ def _render(recs: list, args: Any) -> str:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
-    args = _build_parser().parse_args(argv)
+    parser = _build_parser()
+    args = parser.parse_args(argv)
 
     from coastline.sdk.models.context import SystemContext
     from coastline.sdk.recommend.facade import Coastline
 
-    context = SystemContext.for_gpus([args.gpu_model], max_gpus=args.max_gpus)
-    recs = Coastline(predictor=args.predictor, feasibility=args.feasibility).recommend(
-        {
-            "llm_model": args.model,
-            "fine_tuning_method": args.method,
-            "gpu_model": args.gpu_model,
-            "tokens_per_sample": args.tokens,
-            "batch_size": args.batch_size,
-        },
-        context=context,
-        strategy=args.strategy,
-        preset=args.preset,
-        top_k=args.top_k,
-        max_gpus=args.max_gpus,
-    )
+    with report_errors(parser):
+        context = SystemContext.for_gpus([args.gpu_model], max_gpus=args.max_gpus)
+        recs = Coastline(predictor=args.predictor, feasibility=args.feasibility).recommend(
+            {
+                "llm_model": args.model,
+                "fine_tuning_method": args.method,
+                "gpu_model": args.gpu_model,
+                "tokens_per_sample": args.tokens,
+                "batch_size": args.batch_size,
+            },
+            context=context,
+            strategy=args.strategy,
+            preset=args.preset,
+            top_k=args.top_k,
+            max_gpus=args.max_gpus,
+        )
 
     if not recs:
         print("No feasible configuration in the search space; nothing to explain.", file=sys.stderr)

@@ -1,4 +1,4 @@
-"""``python -m coastline.ui`` — launch the FastAPI dashboard."""
+"""``python -m coastline.ui``: start the FastAPI dashboard."""
 
 from coastline.ui import main
 

@@ -22,8 +22,8 @@ from coastline.sdk.recommend._goals import goal_to_strategy_preset
 
 WorkloadInput = Union[WorkloadSpec, dict, str, Path]
 
-# The one input vocabulary: WorkloadSpec field names. A dict or CSV supplies columns by
-# field name (llm_model / fine_tuning_method / gpu_model / ...); no synonyms.
+# Input keys and CSV columns are WorkloadSpec field names (llm_model, fine_tuning_method,
+# gpu_model, ...), with no synonyms.
 _WORKLOAD_FIELDS = set(WorkloadSpec.model_fields)
 
 
@@ -31,7 +31,7 @@ def _coerce_workload(workload: WorkloadInput) -> WorkloadSpec:
     if isinstance(workload, WorkloadSpec):
         return workload
     if isinstance(workload, dict):
-        # Keys are WorkloadSpec field names (the one vocabulary), same as coastline.recommend(batch).
+        # Keys are WorkloadSpec field names, as in coastline.recommend(batch).
         fields = {key: value for key, value in workload.items() if key in _WORKLOAD_FIELDS}
         return WorkloadSpec(**fields)
     if isinstance(workload, (str, Path)):
@@ -57,7 +57,7 @@ def _workload_from_csv(path: WorkloadInput) -> WorkloadSpec:
 
 
 def _default_context(workload: WorkloadSpec, max_gpus: int) -> SystemContext:
-    """Derive a single-GPU-model context from the workload (loud on unknown GPU)."""
+    """A context with only the workload's GPU model; an unknown GPU raises."""
     return SystemContext.for_gpus(
         [workload.gpu_model],
         max_gpus=max_gpus,
@@ -67,9 +67,9 @@ def _default_context(workload: WorkloadSpec, max_gpus: int) -> SystemContext:
 
 
 class Coastline:
-    """A configured recommender: pick a ``predictor`` once, then call it (or ``.recommend(...)``)
-    per workload. Each call returns a ``list[Recommendation]`` (typed objects), best-first — the
-    single-workload counterpart to ``coastline.recommend(batch)``, which returns a DataFrame."""
+    """A configured recommender: choose a ``predictor`` once, then call it (or ``.recommend(...)``)
+    per workload. Each call returns a ``list[Recommendation]``, best first. The batch version,
+    ``coastline.recommend(batch)``, returns a DataFrame."""
 
     def __init__(
         self,
@@ -77,10 +77,20 @@ class Coastline:
         *,
         energy: str = EnergyBackend.KAVIER_POWER.value,
         feasibility: str = FeasibilityMode.AUTOCONF.value,
+        empirical_oom_guard: bool = False,
     ) -> None:
+        """Set the predictor backends.
+
+        ``empirical_oom_guard`` adds the per-device token ceiling ``EMPIRICAL_OOM_TOKEN_BUDGET``
+        (fitted to observed OOMs) on top of the ``feasibility`` backend. It can only turn a
+        feasible candidate infeasible, so it is off by default. It lets a caller without
+        AutoConf, for example on the ``rules`` backend, reject per-device loads that ran out of
+        memory in the measured campaigns.
+        """
         self.predictor = normalize_predictor(predictor)
         self.energy = energy
         self.feasibility = feasibility
+        self.empirical_oom_guard = empirical_oom_guard
 
     def recommend(
         self,
@@ -97,12 +107,12 @@ class Coastline:
         top_k: int = 5,
         max_gpus: int = 16,
     ) -> List[Recommendation]:
-        """Recommend GPU/node configurations for ``workload`` (WorkloadSpec, dict, or CSV path), best-first.
+        """Recommend GPU and node configurations for ``workload`` (WorkloadSpec, dict or CSV path).
 
-        Returns a ``list[Recommendation]`` (typed objects). ``goal`` is the shared, discoverable
-        knob (``"balanced"`` | ``"performance"`` | ``"energy"`` | ``"min_gpu"``) — the same vocabulary
-        as ``coastline.recommend(batch, goal=...)``; it sets ``strategy``/``preset`` for you.
-        ``strategy``/``preset``/``alpha``/``beta`` remain for advanced manual control.
+        Returns a ``list[Recommendation]``, best first. ``goal`` (``"balanced"``,
+        ``"performance"``, ``"energy"`` or ``"min_gpu"``) takes the same values as in
+        ``coastline.recommend(batch, goal=...)`` and sets ``strategy`` and ``preset``. Pass
+        ``strategy``, ``preset``, ``alpha`` and ``beta`` to set them by hand.
         """
         if max_gpus < 1:
             raise ValueError(f"max_gpus must be >= 1, got {max_gpus}")
@@ -119,16 +129,17 @@ class Coastline:
                 "performance": self.predictor,
                 "energy": self.energy,
                 "feasibility": self.feasibility,
+                "empirical_oom_guard": self.empirical_oom_guard,
             },
             "grid": {
-                # No explicit grid -> search the full menu; generate_candidates clips it to max_gpus.
+                # Without a grid, search the defaults; generate_candidates clips them to max_gpus.
                 "batch_sizes": batch_sizes or list(DEFAULT_BATCH_SIZES),
                 "total_gpus": total_gpus or list(GPU_BUDGETS),
                 "top_k": top_k,
             },
         }
-        # Route through the single engine seam (build strategy -> recommend -> normalize).
-        # total_tokens=0: the facade returns raw recs and never derives runtime/energy.
+        # Same path as the other entry points: build the strategy, recommend, return a list.
+        # total_tokens=0: the facade does not derive runtime or energy.
         recs, _ = engine.run_request(
             engine.RecommendRequest(
                 workload=wl,

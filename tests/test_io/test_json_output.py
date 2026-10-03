@@ -1,17 +1,10 @@
-"""Tests for coastline.sdk.io.interface.json_output (the two save helpers).
+"""Tests for ``save_recommendation_to_json`` (coastline.sdk.io.interface.json_output).
 
-These helpers own no arithmetic; their contract is a *schema mapping* that
-downstream consumers (CLI/report/verifier) read by name. So the independent
-oracle here is the spec of that schema: which output key each input field lands
-under, the rename `workers <- number_of_nodes`, and the conditional-block logic
-(energy iff power is truthy, metadata iff the flag, rationale iff truthy).
-
-To make the mapping oracle able to catch a field swap, every source field is
-given a DISTINCT value: e.g. gpus_per_node=8, number_of_nodes=2, total_gpus=16,
-throughput/power/efficiency all mutually distinct. A test that read the wrong
-source field would then produce a different number and go red.
-
-Self-contained: synthetic Recommendations -> tmp_path, no data/model artifacts.
+The helper does no arithmetic; it maps recommendation fields to named JSON keys that other code
+reads. The tests check the key each field lands under, that number_of_nodes is written as
+``workers``, and when the energy, metadata and rationale blocks appear. Every source field has a
+different value (gpus_per_node=8, number_of_nodes=2, total_gpus=16, and so on), so a swapped
+field shows up as a wrong number. The recommendations are synthetic and written to tmp_path.
 """
 
 import json
@@ -49,27 +42,25 @@ def _read(path):
 
 
 def test_single_schema_maps_each_source_field_to_its_named_key(tmp_path):
-    """Schema mapping oracle: each input field lands under its documented key,
-    including the rename workers <- number_of_nodes. Source values are mutually
-    distinct (16, 8, 2, 1234.5, 450.0, 2.74) so a swapped mapping (e.g. workers
-    <- gpus_per_node would give 8, not 2) is caught."""
+    """Each field lands under its documented key, and number_of_nodes is written as workers.
+
+    The source values (16, 8, 2, 1234.5, 450.0, 2.74) all differ, so a swapped field shows up."""
     rec = _make_rec(metadata={"predicted_power_watts": 450.0, "tokens_per_watt": 2.74})
     out = tmp_path / "rec.json"
     save_recommendation_to_json(rec, out)
     data = _read(out)
-    # workers is number_of_nodes(=2), NOT gpus_per_node(=8) nor total_gpus(=16)
+    # workers is number_of_nodes (2); gpus_per_node is 8 and total_gpus 16
     assert data["configuration"] == {"total_gpus": 16, "gpus_per_node": 8, "workers": 2}
     assert data["performance"]["throughput_tokens_per_sec"] == 1234.5
     assert data["strategy"] == "min_gpu"
-    # energy mirrors metadata keys under renamed output keys
+    # the energy block holds the metadata values under its own key names
     assert data["energy"]["power_watts"] == 450.0
     assert data["energy"]["efficiency_tokens_per_watt"] == 2.74
 
 
 def test_single_energy_block_present_iff_power_truthy(tmp_path):
-    """Conditional-block logic: the energy block is gated on the *truthiness* of
-    predicted_power_watts (the code uses metadata.get(...) as a bool), not merely
-    its presence. Oracle: present for 300.0; absent when the key is missing."""
+    """The energy block is written when predicted_power_watts is set (300.0) and left out when
+    the key is missing."""
     out_with = tmp_path / "with.json"
     save_recommendation_to_json(_make_rec(metadata={"predicted_power_watts": 300.0}), out_with)
     assert "energy" in _read(out_with)
@@ -80,19 +71,15 @@ def test_single_energy_block_present_iff_power_truthy(tmp_path):
 
 
 def test_single_energy_block_present_when_power_is_zero(tmp_path):
-    """A present-but-zero power (predicted_power_watts == 0.0) is a real measurement, so the
-    energy block IS emitted with power_watts == 0.0. The gate keys on presence (`is not None`),
-    not truthiness. Regression: the old `if metadata.get('predicted_power_watts')` truthiness
-    gate treated 0.0 as falsy and silently dropped the whole energy block."""
+    """A power of 0.0 W is a value, so the energy block is written with power_watts 0.0."""
     out = tmp_path / "zero.json"
     save_recommendation_to_json(_make_rec(metadata={"predicted_power_watts": 0.0, "tokens_per_watt": 0.0}), out)
     energy = _read(out)["energy"]
-    assert energy["power_watts"] == 0.0  # would be a missing "energy" key under the old truthiness gate
+    assert energy["power_watts"] == 0.0  # 0.0 is falsy, so a truthiness check would drop the block
 
 
 def test_single_efficiency_defaults_to_zero_without_tokens_per_watt(tmp_path):
-    """Documented default: power present but no tokens_per_watt -> efficiency 0
-    (the metadata.get(..., 0) fallback), not a missing key nor None."""
+    """With power but no tokens_per_watt, efficiency_tokens_per_watt is written as 0."""
     out = tmp_path / "rec.json"
     save_recommendation_to_json(_make_rec(metadata={"predicted_power_watts": 300.0}), out)
     energy = _read(out)["energy"]
@@ -101,10 +88,10 @@ def test_single_efficiency_defaults_to_zero_without_tokens_per_watt(tmp_path):
 
 
 def test_single_metadata_block_toggles_with_flag_and_is_independent_of_energy(tmp_path):
-    """include_metadata gates ONLY the metadata block; energy is derived from the
-    same metadata but on a separate branch, so it must survive either way.
-    Oracle: default True -> metadata block equals the input metadata verbatim;
-    False -> no metadata block; both keep energy (power present)."""
+    """include_metadata controls the metadata block alone; the energy block is written either way.
+
+    By default the metadata block equals the input metadata; with include_metadata=False it is
+    left out."""
     md = {"predicted_power_watts": 450.0, "tokens_per_watt": 2.74, "note": "x"}
 
     out_default = tmp_path / "default.json"
@@ -121,8 +108,8 @@ def test_single_metadata_block_toggles_with_flag_and_is_independent_of_energy(tm
 
 
 def test_single_rationale_present_iff_truthy(tmp_path):
-    """rationale ('why this config') is added on a truthiness branch: a non-empty
-    string appears verbatim; None/empty omits the key entirely."""
+    """A non-empty rationale ('why this config') is written as given; None or an empty string
+    leaves the key out."""
     out_with = tmp_path / "why.json"
     save_recommendation_to_json(_make_rec(), out_with, rationale="fewest GPUs")
     assert _read(out_with)["rationale"] == "fewest GPUs"

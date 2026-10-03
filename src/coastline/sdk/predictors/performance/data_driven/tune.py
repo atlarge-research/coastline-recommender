@@ -1,19 +1,18 @@
-"""Tune a data-driven predictor on any measured-runs CSV (``coastline tune``).
+"""Tune a data-driven predictor on a CSV of measured runs (``coastline utils tune``).
 
-The dataset is validated loudly: missing required columns hard-fail with the full
-schema spelled out; quality problems (too few rows, one config, models unknown to
-Kavier's library, ...) are reported after tuning as "Tuning may have produced poor
-results because valid datasets should have these properties: ...".
+Missing required columns are an error that lists the full schema. Quality problems (too few
+rows, one configuration, models unknown to Kavier's library, ...) are reported after tuning as
+"Tuning may have produced poor results because valid datasets should have these properties: ...".
 
-The artifact written is a featv3 pickle with the same shape as ``dev/trainer``'s,
-so a tuned model is served immediately by ``--method tabpfn`` /
-``predictors.performance: tabpfn``.
+The output is a featv3 pickle in the shape ``dev/trainer`` writes, so the tuned model is used
+directly by ``--method tabpfn`` or ``predictors.performance: tabpfn`` (likewise for xgboost).
 """
 
 from __future__ import annotations
 
 import logging
 import pickle
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -21,6 +20,8 @@ from typing import Any, Optional
 import numpy as np
 import pandas as pd
 
+from coastline.sdk.library.hardware import canonical_gpu_name
+from coastline.sdk.models.workload import canonical_method_name
 from coastline.sdk.predictors.performance.data_driven.ml_common import (
     _torch_dtype_category,
     custom_models_dir,
@@ -33,7 +34,7 @@ from coastline.sdk.predictors.performance.data_driven.ml_common import (
 
 logger = logging.getLogger(__name__)
 
-# One measured fine-tuning run per row; these columns are the format contract.
+# One measured fine-tuning run per row; a tuning dataset needs these columns.
 REQUIRED_COLUMNS: dict[str, str] = {
     "model_name": "HF model id (best results when known to Kavier's model library)",
     "method": "fine-tuning method (lora, full, ...)",
@@ -42,8 +43,8 @@ REQUIRED_COLUMNS: dict[str, str] = {
     "number_gpus": "GPUs per node",
     "tokens_per_sample": "sequence length",
     "batch_size": "per-device batch size",
-    "dataset_tokens_per_second": "measured throughput — tuning target",
-    "train_runtime": "measured runtime in seconds — tuning target",
+    "dataset_tokens_per_second": "measured throughput - tuning target",
+    "train_runtime": "measured runtime in seconds - tuning target",
 }
 OPTIONAL_COLUMNS: dict[str, str] = {
     "is_valid": "1.0 keeps the row; anything else drops it",
@@ -56,11 +57,27 @@ TUNABLE_MODELS = ("tabpfn", "xgboost")
 
 
 class DatasetFormatError(ValueError):
-    """The dataset cannot be tuned on at all (missing columns / no usable rows)."""
+    """The dataset cannot be used for tuning (missing columns or no usable rows)."""
+
+
+def _cannot_write(path: Path, exc: OSError) -> OSError:
+    """The error for a tuned model that cannot be saved at ``path``."""
+    return OSError(f"cannot write the tuned model to {path}: {exc.strerror or exc}")
+
+
+def _check_writable(path: Path) -> None:
+    """Fail before training if the tuned model cannot be saved at ``path``. Creates the folder
+    and writes a temporary file there, which is removed again."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryFile(dir=path.parent):
+            pass
+    except OSError as exc:
+        raise _cannot_write(path, exc) from exc
 
 
 def dataset_format_help() -> str:
-    """The tuning-dataset contract, printed whenever validation fails."""
+    """The required and optional dataset columns, printed when validation fails."""
     lines = ["A valid tuning dataset is a CSV with one measured fine-tuning run per row and columns:"]
     width = max(len(c) for c in (*REQUIRED_COLUMNS, *OPTIONAL_COLUMNS))
     for col, meaning in REQUIRED_COLUMNS.items():
@@ -96,7 +113,7 @@ def _quality_warnings(clean: pd.DataFrame, dropped: int) -> list[str]:
     )
     if unknown_models:
         warnings.append(
-            "model names known to Kavier's library — predictions are refused for unknown models "
+            "model names known to Kavier's library - predictions are refused for unknown models "
             f"(unknown here: {', '.join(unknown_models[:5])}{', ...' if len(unknown_models) > 5 else ''})"
         )
     unknown_gpus = sorted(
@@ -125,7 +142,7 @@ def validate_dataset(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     dropped = len(df) - len(clean)
     if clean.empty:
         raise DatasetFormatError(
-            f"cannot tune: no usable rows — all {len(df)} row(s) were dropped "
+            f"cannot tune: no usable rows - all {len(df)} row(s) were dropped "
             f"(is_valid != 1.0, or non-positive/missing values in a required column)\n\n{dataset_format_help()}"
         )
     return clean.reset_index(drop=True), _quality_warnings(clean, dropped)
@@ -138,13 +155,17 @@ def _roce_category(v: Any) -> str:
 
 
 def _feature_frame(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str], list[str]]:
-    """featv3 feature frame (categoricals as str, numericals as float) from clean rows."""
+    """featv3 feature frame (categoricals as str, numericals as float) from clean rows.
+
+    Method and GPU take the spelling WorkloadSpec gives them at prediction time ('LoRA' is
+    'lora', a GPU alias is Kavier's name), so the tuned model sees the same categories.
+    """
     cat_features, num_features = get_feature_lists()
     rows = []
     for _, r in df.iterrows():
         feat: dict[str, Any] = {
-            "method": str(r["method"]),
-            "gpu_model": str(r["gpu_model"]),
+            "method": canonical_method_name(r["method"]),
+            "gpu_model": canonical_gpu_name(str(r["gpu_model"])),
             "model_type": extract_model_family(r["model_name"]),
             "torch_dtype": _torch_dtype_category(r.get("torch_dtype")),
             "enable_roce": _roce_category(r.get("enable_roce")),
@@ -165,7 +186,7 @@ def _feature_frame(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str], list[str]
 
 
 def _as_model_input(X: pd.DataFrame, num_features: list[str]) -> np.ndarray:
-    """Mixed object array (str categoricals, float64 numericals) — what the predictor feeds TabPFN."""
+    """Object array of str categoricals and float64 numericals, the input the predictor gives TabPFN."""
     arr = X.values.astype(object)
     for i, col in enumerate(X.columns):
         if col in num_features:
@@ -207,7 +228,7 @@ def _fit_tabpfn(
         from tabpfn.constants import ModelVersion
     except ImportError as exc:
         raise RuntimeError(
-            "tabpfn is not installed — install the ML extras first: uv sync --extra ml "
+            "tabpfn is not installed - install the ML extras first: uv sync --extra ml "
             '(or pip install "coastline-recommender[ml]")'
         ) from exc
     try:
@@ -218,8 +239,8 @@ def _fit_tabpfn(
         device = "cpu"
 
     if ckpt is not None:
-        # A local checkpoint may embed non-v2 (research-only) weights into the saved pickle —
-        # fine for your own custom/ model; do NOT use it to regenerate the *bundled* tabpfn.pkl.
+        # A local checkpoint may put non-v2 (research-only) weights into the saved pickle. That is
+        # fine for a custom/ model; do not use it to rebuild the bundled tabpfn.pkl.
         ckpt_path = Path(ckpt).expanduser()
         if not ckpt_path.exists():
             raise ValueError(f"--ckpt path does not exist: {ckpt_path}")
@@ -228,7 +249,7 @@ def _fit_tabpfn(
         def make_regressor():
             return TabPFNRegressor(model_path=str(ckpt_path), device=device, ignore_pretraining_limits=True)
     else:
-        # v2 weights are the only redistributable ones — see dev/trainer/train_performance_tabpfn.py.
+        # Only the v2 weights may be redistributed (see dev/trainer/train_performance_tabpfn.py).
         def make_regressor():
             return TabPFNRegressor.create_default_for_version(
                 ModelVersion.V2, device=device, ignore_pretraining_limits=True
@@ -263,8 +284,8 @@ def _fit_tabpfn(
     return artifacts, metrics, fit_seconds, device
 
 
-# Sensible single-fit XGBoost hyperparameters (no GridSearchCV — `tune` runs on small
-# user datasets where a grid search would be slow and unstable). dev/trainer tunes the full grid.
+# Fixed XGBoost hyperparameters for a single fit. `tune` runs on small user datasets, where a
+# grid search would be slow and unstable; dev/trainer searches the full grid.
 _XGB_PARAMS: dict[str, Any] = dict(
     n_estimators=600,
     max_depth=6,
@@ -279,7 +300,7 @@ _XGB_PARAMS: dict[str, Any] = dict(
 
 
 def _fit_encoders(X_train: pd.DataFrame, cat_features: list[str]) -> dict[str, Any]:
-    """One LabelEncoder per categorical, each carrying an explicit 'unknown' class for unseen values."""
+    """One LabelEncoder per categorical, each with an extra 'unknown' class for unseen values."""
     from sklearn.preprocessing import LabelEncoder
 
     encoders: dict[str, Any] = {}
@@ -293,7 +314,7 @@ def _fit_encoders(X_train: pd.DataFrame, cat_features: list[str]) -> dict[str, A
 def _encode_matrix(
     X: pd.DataFrame, cat_features: list[str], num_features: list[str], encoders: dict[str, Any]
 ) -> pd.DataFrame:
-    """LabelEncode the categoricals (unseen -> 'unknown'); columns ordered cat+num as at inference."""
+    """LabelEncode the categoricals (unseen values become 'unknown'); columns in cat+num order, as at inference."""
     X_enc = X.copy()
     for col in cat_features:
         enc = encoders[col]
@@ -315,21 +336,21 @@ def _fit_xgboost(
 ) -> tuple[dict[str, Any], dict[str, float], float, str]:
     """One multi-output XGBRegressor over [log throughput, log runtime]; LabelEncoded categoricals.
 
-    Produces the SAME artifact shape ``XGBoostPredictor`` loads (model + encoders + cat/num_features +
-    best_params), so a tuned model is served immediately by ``--method xgboost``.
+    Writes the artifact shape ``SklearnPortfolioPredictor`` loads (model, encoders, cat/num
+    features, best_params), so ``--method xgboost`` uses the tuned model directly.
     """
     try:
         from xgboost import XGBRegressor
     except ImportError as exc:
         raise RuntimeError(
-            "xgboost is not installed — install the ML extras first: uv sync --extra ml "
+            "xgboost is not installed - install the ML extras first: uv sync --extra ml "
             '(or pip install "coastline-recommender[ml]")'
         ) from exc
 
     step("[1/1] encoding categoricals + fitting the multi-output regressor ...")
     encoders = _fit_encoders(X_train, cat_features)
     X_train_mat = _encode_matrix(X_train, cat_features, num_features, encoders)
-    # Target order is (throughput, runtime) — the order invert_log_targets expects at inference.
+    # Target order (throughput, runtime) is the order invert_log_targets expects at inference.
     y_train = ylog_train[["dataset_tokens_per_second", "train_runtime"]].to_numpy()
 
     t0 = time.perf_counter()
@@ -346,7 +367,7 @@ def _fit_xgboost(
         thr_mdape = _mdape(y_test["dataset_tokens_per_second"].to_numpy(), pred[:, 0])
         rt_mdape = _mdape(y_test["train_runtime"].to_numpy(), pred[:, 1])
         metrics = {"test_mdape_throughput_pct": thr_mdape, "test_mdape_runtime_pct": rt_mdape}
-        test_metrics = {"original_space": {"mdape": thr_mdape}}  # shape XGBoostPredictor logs
+        test_metrics = {"original_space": {"mdape": thr_mdape}}  # shape SklearnPortfolioPredictor logs
 
     artifacts = {
         "model": model,
@@ -372,11 +393,11 @@ def tune(
 ) -> dict[str, Any]:
     """Tune ``model`` on ``data_csv``; return {tune_id, path, rows_*, fit_seconds, metrics, warnings}.
 
-    ``model`` is ``"tabpfn"`` (in-context, single-output-per-target) or ``"xgboost"`` (a multi-output
-    gradient-boosted model — the best non-ICL portfolio model). ``train_percentage=1.0`` uses every
-    valid row (no holdout); below 1.0 the rest becomes a test split and MdAPE for both targets is
-    reported. ``ckpt`` is an optional path to a local TabPFN checkpoint (skips the network download).
-    ``on_step`` (a ``str -> None`` callable, e.g. ``print``) receives live progress lines.
+    ``model`` is ``"tabpfn"`` (in-context learning, one model per target) or ``"xgboost"`` (one
+    multi-output gradient-boosted model, the best non-ICL portfolio model). ``train_percentage=1.0``
+    uses every valid row; below 1.0 the rest is held out and the MdAPE of both targets is reported.
+    ``ckpt`` is an optional local TabPFN checkpoint (skips the download). ``on_step`` (a
+    ``str -> None`` callable such as ``print``) receives progress lines.
     """
     step = on_step or logger.info
     if model not in TUNABLE_MODELS:
@@ -393,13 +414,14 @@ def tune(
     X_train, X_test, ylog_train, y_test = _split(X, y, y_log, train_percentage, seed)
 
     tune_id = f"{model}-{time.strftime('%Y%m%d-%H%M%S')}"
-    # tuned artifacts land in models/custom/ — they shadow the packaged portfolio
+    # Tuned artifacts go to portfolio/custom/ (created here, git-ignored), which shadows the packaged portfolio.
     path = Path(output) if output else custom_models_dir() / f"{model}.pkl"
     step(
-        f"tune id {tune_id} · train {len(X_train)} rows / holdout {0 if X_test is None else len(X_test)} rows "
+        f"tune id {tune_id}, train {len(X_train)} rows / holdout {0 if X_test is None else len(X_test)} rows "
         f"(train-percentage {train_percentage})"
     )
-    step(f"output: {path}" + (" (will OVERWRITE the existing artifact)" if path.exists() else " (new file)"))
+    step(f"output: {path}" + (" (overwrites the existing artifact)" if path.exists() else " (new file)"))
+    _check_writable(path)
 
     if model == "tabpfn":
         artifacts, metrics, fit_seconds, device = _fit_tabpfn(
@@ -412,9 +434,12 @@ def tune(
 
     artifacts.update({"tune_id": tune_id, "tuned_on": str(data_csv), "train_percentage": train_percentage})
     step("saving artifact ...")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "wb") as f:
-        pickle.dump(artifacts, f)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "wb") as f:
+            pickle.dump(artifacts, f)
+    except OSError as exc:
+        raise _cannot_write(path, exc) from exc
     step(f"wrote {path} ({path.stat().st_size / 1e6:.0f} MB)")
 
     return {

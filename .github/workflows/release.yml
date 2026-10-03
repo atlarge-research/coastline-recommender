@@ -1,19 +1,16 @@
 name: Release
 
-# One tag-triggered pipeline. Bump the version in pyproject.toml (`uv version --bump minor`), commit,
-# tag `vX.Y.Z`, and push the tag. Then:
-#   guard (tag == pyproject version) -> gates (reuse ci.yml) -> build the wheel once
-#     -> PyPI (OIDC) + Docker Hub (cli & ui) in parallel -> GitHub release.
-# The version lives ONLY in pyproject.toml; __version__ is read from installed metadata, and the docs
-# and Dockerfile carry no hardcoded version — so a single bump propagates everywhere.
-# Plain semver tags ONLY. GitHub filter patterns are full-ref matches, `[0-9]` is a character class
-# and `+` means "one or more of the preceding element" (filter pattern cheat sheet), so `v0.2.3`
-# starts a release while suffixed freeze/marker tags (`v0.2.2-thesis`, `v0.2.3rc1`) and
-# four-component tags (`v0.2.2.1`) leave the trailing characters unmatched and never trigger it.
+# Release: `uv version --bump patch` (or minor), set the same version in CITATION.cff and .zenodo.json,
+# commit, `git tag vX.Y.Z`, `git push --tags`.
+#   guard (tag == versions) -> gates (ci.yml) -> build -> PyPI and GitHub release in parallel.
+# The GitHub release triggers the Zenodo archive.
+# Filter patterns match the full ref, so `v0.2.3` triggers a release and `v0.2.2-thesis`,
+# `v0.2.3rc1`, and `v0.2.2.1` do not.
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+"]
 
+# Jobs below add the permissions they need.
 permissions:
   contents: read
 
@@ -22,113 +19,71 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # 8. The tag must equal pyproject's version — the single source of truth.
+  # The tag must match the version in pyproject.toml, CITATION.cff and .zenodo.json.
   guard:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 1
     steps:
-      - uses: actions/checkout@v4
-      - name: Tag must equal pyproject.toml version
+      - uses: actions/checkout@v7
+      - name: Tag must equal the package and citation versions
         run: |
-          VERSION="$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
           TAG="${GITHUB_REF_NAME#v}"
-          echo "pyproject=$VERSION  tag=$TAG"
-          [ "$VERSION" = "$TAG" ] || { echo "::error::tag v$TAG != pyproject version $VERSION"; exit 1; }
+          PYPROJECT="$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
+          CFF="$(sed -n 's/^version: *//p' CITATION.cff)"
+          ZENODO="$(python3 -c "import json; print(json.load(open('.zenodo.json'))['version'])")"
+          echo "tag=$TAG pyproject=$PYPROJECT CITATION.cff=$CFF .zenodo.json=$ZENODO"
+          for v in "$PYPROJECT" "$CFF" "$ZENODO"; do
+            [ "$v" = "$TAG" ] || { echo "::error::tag v$TAG does not match version $v"; exit 1; }
+          done
 
-  # 1-4. Reuse the full CI suite (lint + mypy + tests + wheel-smoke + docker-build + docs) as the gate.
+  # The full CI suite (lint, mypy, tests, wheel smoke, docker build, docs) gates publishing.
   gates:
     needs: guard
-    # A called workflow can never hold more than the caller grants it, and ci.yml's test job asks
-    # for `id-token: write` (tokenless Codecov upload). Raise the ceiling here or the gate errors.
-    permissions:
-      contents: read
-      id-token: write
     uses: ./.github/workflows/ci.yml
 
-  # Build the wheel + sdist ONCE; PyPI and the GitHub release consume this exact artifact.
+  # PyPI and the GitHub release publish this one build.
   build:
     needs: gates
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 2
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
       - run: uv build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist
           path: dist/*
           if-no-files-found: error
 
-  # 6. Publish to PyPI via Trusted Publishing (OIDC) — no API token. Configure a PyPI Trusted
-  #    Publisher for this repo with workflow file `release.yml`.
   pypi:
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 2
+    # PyPI Trusted Publishing (OIDC): configured for this repo with workflow `release.yml` and no environment.
     permissions:
-      id-token: write  # mints the Trusted-Publishing OIDC token AND signs the attestations
+      id-token: write  # Trusted Publishing token and attestation signing
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist
-      # PEP 740 attestations: each sdist/wheel is signed with the workflow's Sigstore identity and
-      # uploaded alongside it, so PyPI can prove this exact artifact came from this tag in this repo.
-      # Only works on Trusted-Publishing flows, and needs no permission beyond `id-token: write`.
+      # Uploads PEP 740 attestations (Sigstore) by default under Trusted Publishing.
       - uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          attestations: true
 
-  # 5. Build + push the cli and ui images to Docker Hub — ONLY if configured. Set the secrets
-  #    DOCKERHUB_USERNAME + DOCKERHUB_TOKEN and the repo variable DOCKERHUB_NAMESPACE; if that
-  #    variable is unset, this job skips and the release proceeds with PyPI + notes only.
-  docker:
-    needs: gates
-    if: ${{ vars.DOCKERHUB_NAMESPACE != '' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    strategy:
-      matrix:
-        target: [cli, ui]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: docker.io/${{ vars.DOCKERHUB_NAMESPACE }}/coastline-recommender-${{ matrix.target }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          target: ${{ matrix.target }}
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-
-  # 7. Cut the GitHub release (auto notes + artifacts) once PyPI has published. Runs even when the
-  #    Docker job was skipped (Docker Hub not configured), as long as the PyPI publish succeeded.
+  # Independent of the PyPI job, so the Zenodo archive does not depend on it.
   github-release:
-    needs: [pypi, docker]
-    if: ${{ !cancelled() && needs.pypi.result == 'success' }}
+    needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 2
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
           files: dist/*

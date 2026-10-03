@@ -1,4 +1,4 @@
-"""``python -m coastline.cli`` — same entry as the ``coastline`` console script."""
+"""``python -m coastline.cli``: the same entry point as the ``coastline`` command."""
 
 from coastline.cli.main import main
 

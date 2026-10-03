@@ -1,10 +1,7 @@
 """Integration tests for the RetrievalPredictor exact-match cache.
 
-Oracles here are *recorded values*: the predictor is a SHA256 exact-match lookup
-that returns the FIRST recorded run of a matching configuration verbatim. The
-expected numbers are read straight out of the bundled trace CSV
-(``src/coastline/sdk/io/data/sample_raw_trace.csv``), never copied from predictor
-output, so a bug that fabricates, aggregates, or mis-indexes values goes red.
+The predictor looks a configuration up by its SHA256 hash and returns the first recorded run.
+The expected numbers come from the bundled trace ``src/coastline/sdk/io/data/sample_raw_trace.csv``.
 """
 
 import logging
@@ -22,11 +19,9 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 
-# Ground truth read directly out of the bundled sample trace. Each tuple is a
-# distinct configuration; the predictor maps WorkloadSpec.gpus_per_node onto the
-# trace's ``number_gpus`` column and returns dataset_tokens_per_second /
-# train_runtime of the (single) matching row. All sample rows have number_nodes=1,
-# so total_gpus = number_nodes * number_gpus = gpus_per_node.
+# Rows of the sample trace, one per configuration. The predictor matches
+# WorkloadSpec.gpus_per_node against the trace's number_gpus column. Every row has
+# number_nodes=1, so total_gpus = gpus_per_node.
 #   (gpus_per_node, batch_size, dataset_tokens_per_second, train_runtime, total_gpus)
 SAMPLE_ROWS = [
     (1, 8, 12000.0, 120.0, 1),  # synthetic-sample-0001
@@ -49,11 +44,10 @@ def system_context():
 
 @pytest.fixture
 def sample_predictor():
-    """RetrievalPredictor pinned to the bundled 5-row sample.
+    """RetrievalPredictor on the bundled 5-row sample.
 
-    A bare RetrievalPredictor() resolves a sibling ../trace-archive when one
-    exists (dev layout), whose real trace has no demo-llm-3b row -> spurious miss.
-    Pinning dataset_path keeps every assertion hermetic and reproducible.
+    Without dataset_path it would use a sibling ../trace-archive when one exists, and that
+    trace has no demo-llm-3b row.
     """
     return RetrievalPredictor(dataset_path=sample_raw_trace_path())
 
@@ -77,32 +71,25 @@ def _demo_workload(gpus_per_node: int, batch_size: int) -> WorkloadSpec:
 def test_cache_hit_returns_the_exact_recorded_row(
     sample_predictor, system_context, gpus_per_node, batch_size, exp_throughput, exp_runtime, exp_total_gpus
 ):
-    """Each catalog config resolves to ITS OWN recorded throughput/runtime.
-
-    Oracle: the values are the CSV's dataset_tokens_per_second / train_runtime for
-    that row (independent of the predictor). Because the five configs map to five
-    different recorded values, a bug that returns a constant, the wrong row, or an
-    aggregate (median) instead of the first run cannot pass this parametrization.
-    """
+    """Each configuration returns the throughput and runtime recorded in its own trace row."""
     prediction = sample_predictor.predict(_demo_workload(gpus_per_node, batch_size), system_context)
 
     assert prediction is not None, "exact-match config must cache-hit"
     assert prediction.predicted_throughput == pytest.approx(exp_throughput)
     assert prediction.predicted_runtime_seconds == pytest.approx(exp_runtime)
-    # total_gpus = number_nodes(1) * number_gpus, enforced consistent by the model.
+    # total_gpus = number_nodes (1) * number_gpus
     assert prediction.total_gpus == exp_total_gpus
-    # The prediction echoes the requested layout verbatim.
+    # The prediction keeps the requested layout.
     assert prediction.gpus_per_node == gpus_per_node
     assert prediction.number_of_nodes == 1
     assert prediction.metadata.get("cache_hit") is True
 
 
 def test_single_run_config_reports_zero_spread_metadata(sample_predictor, system_context):
-    """For a config with exactly one recorded run, the spread stats collapse.
+    """A configuration with one recorded run reports run_count=1 and zero spread.
 
-    Row synthetic-sample-0003 (gpus_per_node=4, batch=8) is the ONLY run of its
-    config, so by hand: run_count=1, min=max=first=14000, std=0, cv=std/median=0.
-    Falsifies a bug that mis-counts runs or computes spread over the wrong group.
+    synthetic-sample-0003 (gpus_per_node=4, batch 8) is the only run of its configuration:
+    min = max = 14000, std = 0 and cv = std / median = 0.
     """
     prediction = sample_predictor.predict(_demo_workload(4, 8), system_context)
 
@@ -115,12 +102,10 @@ def test_single_run_config_reports_zero_spread_metadata(sample_predictor, system
 
 
 def test_cache_returns_first_run_not_median_on_duplicate_config(tmp_path, system_context):
-    """When a config has multiple runs, the hit returns the FIRST, not the median.
+    """With several runs of one configuration, a hit returns the first run.
 
-    Two rows of one identical config with throughput 100 then 300 (median 200) and
-    runtime 50 then 70. The documented contract returns the first recorded run, so
-    the oracle is throughput=100 / runtime=50 -- deliberately != the median 200,
-    which a mean/median-returning regression would emit instead.
+    The two runs record throughput 100 then 300 and runtime 50 then 70, so the expected
+    values are 100 and 50; the median throughput would be 200.
     """
     trace = tmp_path / "dup.csv"
     pd.DataFrame(
@@ -150,30 +135,25 @@ def test_cache_returns_first_run_not_median_on_duplicate_config(tmp_path, system
     prediction = RetrievalPredictor(dataset_path=trace).predict(workload, system_context)
 
     assert prediction is not None
-    # first run, not the median (200) or max (300).
+    # the first run; the median is 200 and the maximum 300
     assert prediction.predicted_throughput == pytest.approx(100.0)
     assert prediction.predicted_runtime_seconds == pytest.approx(50.0)
-    # aggregation still spans both runs: min=100, max=300, count=2.
+    # the spread covers both runs: min 100, max 300, count 2
     assert prediction.metadata["run_count"] == 2
     assert prediction.metadata["throughput_min"] == pytest.approx(100.0)
     assert prediction.metadata["throughput_max"] == pytest.approx(300.0)
 
 
 def test_exact_match_discriminates_on_batch_size(sample_predictor, system_context):
-    """A near-miss that differs in only one hashed field must MISS, not hit.
+    """A configuration that differs from a trace row only in batch_size is a miss.
 
-    Config matches synthetic-sample-0003 exactly except batch_size=7 (absent from
-    the trace). A hit here would mean the hash ignores batch_size; the contract is
-    an exact match, so the oracle is None (no fabricated nearest-neighbour result).
+    It matches synthetic-sample-0003 except for batch_size=7, which the trace does not have.
     """
     assert sample_predictor.predict(_demo_workload(4, 7), system_context) is None
 
 
 def test_unknown_model_returns_none(sample_predictor, system_context):
-    """An entirely unknown config returns None so the orchestrator falls back.
-
-    Oracle: contract of a miss is None (never a fabricated prediction).
-    """
+    """An unknown configuration returns None, so the caller can fall back to another predictor."""
     workload = WorkloadSpec(
         llm_model="nonexistent-model",
         fine_tuning_method="full",

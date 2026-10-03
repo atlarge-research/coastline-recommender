@@ -1,10 +1,8 @@
-"""One generic trainer for the sklearn-family performance models.
+"""Generic trainer for the sklearn-family performance models.
 
-Every ``train_performance_*`` script used to be its own ~250-line copy of the same
-skeleton — load, split, encode, tune, score, save. That skeleton lives here once;
-the per-model differences (estimator, hyperparameters, categorical handling,
-artifact keys) are data in ``model_specs.PERFORMANCE_MODELS``. The two genuinely
-distinct runtimes — TabPFN (in-context) and Deep Learning (torch MLP) — keep their
+It loads, splits, encodes, tunes, scores and saves. The per-model parts (estimator,
+hyperparameters, categorical handling, artifact keys) are in
+``model_specs.PERFORMANCE_MODELS``. TabPFN and the deep learning model have their
 own scripts.
 """
 
@@ -77,9 +75,9 @@ class FinalizeCtx:
 
 @dataclass
 class Fitted:
-    """What a per-model ``fit`` returns: the object to pickle, a predictor, and the
-    model-specific artifact keys (everything except model / encoders / features /
-    metrics, which the generic owns)."""
+    """Result of a per-model ``fit``: the object to pickle, a predictor, and the
+    model-specific artifact keys. The generic trainer adds model, encoders, features
+    and metrics."""
 
     model: Any
     predict: Predict
@@ -99,7 +97,7 @@ class ModelSpec:
     fit: Callable[[TrainData], Fitted]
     artifact_keys: frozenset[str]
     runtime_unit: str = "tokens/sec"
-    target_strict: bool = False  # KNN's goal is '<' the threshold, not '<='
+    target_strict: bool = False  # KNN's target is strict: MdAPE < threshold
 
 
 # --------------------------------------------------------------------------- #
@@ -118,11 +116,11 @@ def importance_records(values: Any, feature_names: Any) -> list[dict]:
 
 def report_grid_search(grid: Any, display_params: Optional[dict] = None) -> None:
     """Print the best GridSearchCV parameters and CV score."""
-    print("\n✅ Hyperparameter tuning complete!")
-    print("\n🏆 Best parameters:")
+    print("\nHyperparameter tuning complete!")
+    print("\nBest parameters:")
     for param, value in (display_params or grid.best_params_).items():
         print(f"  {param}: {value}")
-    print(f"\n📊 Best CV MAE (log space): {-grid.best_score_:.4f}")
+    print(f"\nBest CV MAE (log space): {-grid.best_score_:.4f}")
 
 
 # --------------------------------------------------------------------------- #
@@ -141,17 +139,17 @@ def _load_split(spec: ModelSpec) -> TrainData:
     print(spec.title)
     print("=" * 70)
 
-    print("\n📂 Loading data...")
+    print("\nLoading data...")
     X_cat, X_num, y, cat_features, num_features = load_and_preprocess_data()
     y_log = transform_targets(y)
 
-    print(f"  ✓ Loaded {len(y)} samples")
-    print(f"  ✓ Throughput range: {y[THROUGHPUT].min():.0f} – {y[THROUGHPUT].max():.0f} tokens/sec")
-    print(f"  ✓ Runtime range: {y[RUNTIME].min():.0f} – {y[RUNTIME].max():.0f} sec")
-    print(f"  ✓ Categorical features: {cat_features}")
-    print(f"  ✓ Numerical features: {num_features}")
+    print(f"  Loaded {len(y)} samples")
+    print(f"  Throughput range: {y[THROUGHPUT].min():.0f} - {y[THROUGHPUT].max():.0f} tokens/sec")
+    print(f"  Runtime range: {y[RUNTIME].min():.0f} - {y[RUNTIME].max():.0f} sec")
+    print(f"  Categorical features: {cat_features}")
+    print(f"  Numerical features: {num_features}")
 
-    print("\n✂️  Splitting data...")
+    print("\nSplitting data...")
     (
         (Xc_tr, Xn_tr, y_tr, yl_tr),
         (Xc_va, Xn_va, y_va, yl_va),
@@ -160,9 +158,9 @@ def _load_split(spec: ModelSpec) -> TrainData:
     Xc_tr, Xn_tr, y_tr, yl_tr = as_dataframes(Xc_tr, Xn_tr, y_tr, yl_tr)
     Xc_va, Xn_va, y_va, yl_va = as_dataframes(Xc_va, Xn_va, y_va, yl_va)
     Xc_te, Xn_te, y_te, yl_te = as_dataframes(Xc_te, Xn_te, y_te, yl_te)
-    print(f"  ✓ Train: {len(y_tr)} samples")
-    print(f"  ✓ Val:   {len(y_va)} samples")
-    print(f"  ✓ Test:  {len(y_te)} samples")
+    print(f"  Train: {len(y_tr)} samples")
+    print(f"  Val:   {len(y_va)} samples")
+    print(f"  Test:  {len(y_te)} samples")
 
     X_train, X_val, X_test, encoders = _encode(spec.encoding, (Xc_tr, Xc_va, Xc_te), (Xn_tr, Xn_va, Xn_te))
 
@@ -179,17 +177,17 @@ def _encode(
     Xc_tr, Xc_va, Xc_te = cat
     encoders = None
     if encoding is Encoding.LABEL:
-        print("\n🔤 Encoding categorical features...")
+        print("\nEncoding categorical features...")
         Xc_tr, Xc_va, Xc_te, encoders, vocab = encode_categorical_features(Xc_tr, Xc_va, Xc_te)
         for col, size in vocab.items():
-            print(f"  ✓ {col}: {size} classes")
+            print(f"  {col}: {size} classes")
 
-    print("\n🔗 Combining features...")
+    print("\nCombining features...")
     Xn_tr, Xn_va, Xn_te = num
     X_train = pd.concat([Xc_tr.reset_index(drop=True), Xn_tr.reset_index(drop=True)], axis=1)
     X_val = pd.concat([Xc_va.reset_index(drop=True), Xn_va.reset_index(drop=True)], axis=1)
     X_test = pd.concat([Xc_te.reset_index(drop=True), Xn_te.reset_index(drop=True)], axis=1)
-    print(f"  ✓ Feature matrix shape: {X_train.shape}")
+    print(f"  Feature matrix shape: {X_train.shape}")
     return X_train, X_val, X_test, encoders
 
 
@@ -209,7 +207,7 @@ def _score(name: str, predict: Predict, X: pd.DataFrame, y: pd.DataFrame, y_log:
 def _print_samples(y_test: pd.DataFrame, y_pred: np.ndarray, std: Optional[np.ndarray]) -> None:
     y_true = y_test[THROUGHPUT].to_numpy()
     has_std = std is not None
-    print("\n🔍 Sample throughput predictions (first 10):")
+    print("\nSample throughput predictions (first 10):")
     header = f"{'True':>12} {'Predicted':>12}" + (f" {'Std (log)':>12}" if has_std else "") + f" {'Error %':>10}"
     print(header)
     print("-" * (48 if has_std else 36))
@@ -221,7 +219,7 @@ def _print_samples(y_test: pd.DataFrame, y_pred: np.ndarray, std: Optional[np.nd
 
 def _print_feature_importance(records: list[dict]) -> None:
     _bar("FEATURE IMPORTANCE")
-    print("\n📊 Top 10 most important features:")
+    print("\nTop 10 most important features:")
     for row in records[:10]:
         print(f"  {row['feature']:20s}: {row['importance']:>8.4f}")
 
@@ -261,13 +259,13 @@ def _final_status(spec: ModelSpec, test_tput: dict, test_rt: dict, extra: dict) 
     ok = mdape < spec.target_threshold if spec.target_strict else mdape <= spec.target_threshold
 
     _bar("TRAINING COMPLETE")
-    status, emoji = ("✅ SUCCESS", "🎉") if ok else ("⚠️  NEEDS IMPROVEMENT", "🔧")
+    status, emoji = ("SUCCESS", "") if ok else ("NEEDS IMPROVEMENT", "")
     print(f"\n{emoji} {status}")
     print(f"  Target MdAPE: {spec.target_range}")
     print(f"  Achieved throughput MdAPE: {mdape:.2f}%")
     print(f"  Achieved runtime MdAPE: {rt['mdape']:.2f}%")
-    print(f"  Throughput Test R²: {tput['r2']:.4f}")
-    print(f"  Runtime Test R²: {rt['r2']:.4f}")
+    print(f"  Throughput Test R2: {tput['r2']:.4f}")
+    print(f"  Runtime Test R2: {rt['r2']:.4f}")
     print(f"  Throughput Within 20%: {tput['within_20_pct']:.1f}%")
     print(f"  Runtime Within 20%: {rt['within_20_pct']:.1f}%")
     by_target = extra.get("uncertainty_correlation_by_target")
@@ -278,7 +276,7 @@ def _final_status(spec: ModelSpec, test_tput: dict, test_rt: dict, extra: dict) 
 
 
 def run_training(spec: ModelSpec) -> None:
-    """Load → split → encode → fit → score → save, driven entirely by ``spec``."""
+    """Load, split, encode, fit, score and save the model described by ``spec``."""
     data = _load_split(spec)
 
     fitted = spec.fit(data)
@@ -315,10 +313,10 @@ def run_training(spec: ModelSpec) -> None:
     model_path = performance_trained_model_path(spec.stem)
     new_mdape = float(test_tput["original_space"]["mdape"])
     _, save_msg = save_pickled_artifact_if_better(model_path, artifacts, new_mdape)
-    print(f"💾 {save_msg}")
-    print(f"  ✓ Test throughput MdAPE: {test_tput['original_space']['mdape']:.2f}%")
-    print(f"  ✓ Test runtime MdAPE: {test_rt['original_space']['mdape']:.2f}%")
-    print(f"  ✓ Test throughput R²: {test_tput['original_space']['r2']:.4f}")
-    print(f"  ✓ Test runtime R²: {test_rt['original_space']['r2']:.4f}")
+    print(f" {save_msg}")
+    print(f"  Test throughput MdAPE: {test_tput['original_space']['mdape']:.2f}%")
+    print(f"  Test runtime MdAPE: {test_rt['original_space']['mdape']:.2f}%")
+    print(f"  Test throughput R2: {test_tput['original_space']['r2']:.4f}")
+    print(f"  Test runtime R2: {test_rt['original_space']['r2']:.4f}")
 
     _final_status(spec, test_tput, test_rt, extra)

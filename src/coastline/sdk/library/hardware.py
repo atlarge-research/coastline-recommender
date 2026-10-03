@@ -1,43 +1,29 @@
-"""GPU specs database for power prediction and the webapp (NVIDIA datasheets + DGX measurements)."""
+"""GPU specs for power prediction and the web app (NVIDIA datasheets and DGX measurements).
+
+The accepted GPU names are the names in Kavier's GPU catalog, plus the aliases below, so every
+GPU a context accepts can also be predicted.
+"""
 
 from typing import Any, Optional
 
 from coastline.sdk.exceptions import UnsupportedGPUError
 
-# Source: NVIDIA datasheets and DGX measurements.
+try:
+    from kavier.sdk.library import GPU_SPEC_LIBRARY as _KAVIER_GPUS
+except ImportError:  # Kavier is a core dependency; without it only GPU_SPECS is known
+    _KAVIER_GPUS = {}
+
+# Coastline spellings of GPUs that Kavier's catalog names differently (same part, same specs).
+# They are resolved when a workload or a context is built, before any prediction.
+GPU_ALIASES: dict[str, str] = {
+    "A100-SXM4-80GB": "NVIDIA-A100-SXM4-80GB",
+    "A100-PCIE-80GB": "NVIDIA-A100-80GB-PCIe",
+    "A100-PCIE-40GB": "A100-40GB",
+}
+
+# Source: NVIDIA datasheets and DGX measurements, for the GPUs in the traces. Other GPUs in
+# Kavier's catalog take their values from Kavier (see _spec).
 GPU_SPECS: dict[str, dict[str, Any]] = {
-    "A100-SXM4-40GB": {
-        "memory_gb": 40,
-        "tdp_watts": 400,
-        "idle_watts": 75,
-        "compute_tflops_fp16": 312,
-        "memory_bandwidth_gbps": 1555,  # HBM2
-        "nvlink_bandwidth_gbps": 600,  # NVLink 3.0 per GPU
-    },
-    "A100-SXM4-80GB": {
-        "memory_gb": 80,
-        "tdp_watts": 400,
-        "idle_watts": 75,
-        "compute_tflops_fp16": 312,
-        "memory_bandwidth_gbps": 2039,  # HBM2e
-        "nvlink_bandwidth_gbps": 600,
-    },
-    "A100-PCIE-40GB": {
-        "memory_gb": 40,
-        "tdp_watts": 250,
-        "idle_watts": 50,
-        "compute_tflops_fp16": 312,
-        "memory_bandwidth_gbps": 1555,
-        "nvlink_bandwidth_gbps": 0,
-    },
-    "A100-PCIE-80GB": {
-        "memory_gb": 80,
-        "tdp_watts": 300,
-        "idle_watts": 60,
-        "compute_tflops_fp16": 312,
-        "memory_bandwidth_gbps": 2039,
-        "nvlink_bandwidth_gbps": 0,
-    },
     # Names as they appear in the dataset / Kavier libraries / web UI.
     "NVIDIA-A100-SXM4-80GB": {
         "memory_gb": 80,
@@ -74,11 +60,38 @@ GPU_SPECS: dict[str, dict[str, Any]] = {
 }
 
 
+def canonical_gpu_name(gpu_model: str) -> str:
+    """Kavier's name for a GPU: an alias is mapped, any other name is returned unchanged."""
+    return GPU_ALIASES.get(gpu_model, gpu_model)
+
+
+def _kavier_spec(gpu_model: str) -> Optional[dict[str, Any]]:
+    """Specs of a GPU that only Kavier's catalog lists, in the GPU_SPECS layout."""
+    spec = _KAVIER_GPUS.get(gpu_model)
+    if spec is None:
+        return None
+    return {
+        "memory_gb": spec.memory_gb,
+        "tdp_watts": spec.max_power_w,
+        "idle_watts": spec.idle_power_w,
+        "compute_tflops_fp16": spec.fp_16_tensor_core_tflops,
+        "memory_bandwidth_gbps": spec.bandwidth_bps / 1e9,
+    }
+
+
+def _lookup(gpu_model: str) -> Optional[dict[str, Any]]:
+    name = canonical_gpu_name(gpu_model)
+    return GPU_SPECS.get(name) or _kavier_spec(name)
+
+
 def _spec(gpu_model: str) -> dict[str, Any]:
-    """Look up GPU specs; raises UnsupportedGPUError for unknown models (no silent defaults)."""
-    specs = GPU_SPECS.get(gpu_model)
+    """Look up GPU specs; raise UnsupportedGPUError for an unknown model."""
+    specs = _lookup(gpu_model)
     if specs is None:
-        raise UnsupportedGPUError(f"Unknown GPU model {gpu_model!r}. Known models: {sorted(GPU_SPECS)}")
+        aliases = ", ".join(f"{alias} (same as {name})" for alias, name in GPU_ALIASES.items())
+        raise UnsupportedGPUError(
+            f"Unknown GPU model {gpu_model!r}. Known models: {list_supported_gpus()}. Also accepted: {aliases}."
+        )
     return specs
 
 
@@ -99,12 +112,12 @@ def get_gpu_idle_power(gpu_model: str) -> float:
 
 def get_gpu_specs(gpu_model: str) -> Optional[dict[str, Any]]:
     """Complete GPU spec dict, or None if the model is unknown."""
-    return GPU_SPECS.get(gpu_model)
+    return _lookup(gpu_model)
 
 
 def list_supported_gpus() -> list[str]:
-    """All GPU model names with known specs."""
-    return list(GPU_SPECS.keys())
+    """All GPU model names with known specs (aliases not included)."""
+    return sorted({*GPU_SPECS, *_KAVIER_GPUS})
 
 
 # 75W/400W = 0.1875, rounded up to 0.25 for margin.

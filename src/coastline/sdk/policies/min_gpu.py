@@ -1,4 +1,4 @@
-"""MinGPU Strategy — grid + feasibility + simulate, pick minimum feasible GPUs."""
+"""MinGPU strategy: grid, feasibility and simulation, then the fewest feasible GPUs."""
 
 import logging
 from typing import Optional
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 class MinGPUStrategy(BaseStrategy):
-    """Minimum-GPU policy: grid → feasibility → simulate → pick min total_gpus."""
+    """Minimum-GPU policy: picks the feasible candidate with the fewest total GPUs."""
 
     def __init__(
         self,

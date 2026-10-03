@@ -1,9 +1,8 @@
-"""The engine seam (Phase 0): `RecommendRequest` / `build_strategy` / `execute_strategy` /
-`run_request` are the single workflow every door routes through. These tests pin that the
-seam is transparent — `run_pipeline` (the answers-driven wrapper `batch_api` and the
-interactive path use) produces the same result as building a `RecommendRequest` by hand —
-and that the `build_strategy`/`execute_strategy` split lets one strategy serve many rows
-(the build-once reuse `batch_csv` depends on).
+"""The engine entry points: RecommendRequest, build_strategy, execute_strategy and run_request.
+
+run_pipeline (used by batch_api and the interactive path) gives the same result as a
+RecommendRequest built by hand, and one strategy from build_strategy can serve many rows,
+which batch_csv relies on.
 """
 
 from __future__ import annotations
@@ -12,8 +11,7 @@ from coastline.sdk.recommend import engine
 
 
 def _kavier_answers() -> dict:
-    """Analytical-engine answers (no ML unpickle), divisibility-only feasibility so the
-    test is hermetic and needs no AutoConf install."""
+    """Answers for the Kavier predictor with rules feasibility, so no ML model or AutoConf is needed."""
     answers = engine.defaults(engine.resolve_options())
     answers["predictor"] = "kavier"
     answers["llm_model"] = "mistral-7b-v0.1"
@@ -23,7 +21,7 @@ def _kavier_answers() -> dict:
 
 
 def _rec_key(rec) -> tuple:
-    """The salient, comparable fields of a Recommendation."""
+    """The fields of a Recommendation that two runs are compared on."""
     return (
         rec.total_gpus,
         rec.gpus_per_node,
@@ -34,8 +32,8 @@ def _rec_key(rec) -> tuple:
 
 
 def test_run_request_matches_run_pipeline():
-    """Building a RecommendRequest by hand and calling run_request must yield the same
-    recs + meta as the answers-driven run_pipeline — proof the seam is transparent."""
+    """run_request on a RecommendRequest built by hand returns the same recommendations and
+    metadata as run_pipeline."""
     answers = _kavier_answers()
 
     recs_wrapper, meta_wrapper = engine.run_pipeline(answers, top_k=3)
@@ -59,9 +57,8 @@ def test_run_request_matches_run_pipeline():
 
 
 def test_build_strategy_is_reusable_across_rows():
-    """build_strategy returns one strategy object that execute_strategy can drive repeatedly
-    (the build-once/reuse-per-row seam batch_csv relies on). The same inputs twice must give
-    the same recommendation."""
+    """One strategy from build_strategy, run twice by execute_strategy on the same inputs,
+    gives the same recommendations."""
     answers = _kavier_answers()
     config, strategy_name, preset = engine.build_config(answers, top_k=3, feasibility="rules")
     workload = engine.build_workload(answers)
@@ -93,7 +90,7 @@ def test_build_strategy_is_reusable_across_rows():
 
 
 def test_run_pipeline_signature_unchanged():
-    """run_pipeline keeps its (recs, meta) contract so batch_api + interactive need no edits."""
+    """run_pipeline returns (recommendations, metadata), with the metadata keys its callers read."""
     recs, meta = engine.run_pipeline(_kavier_answers(), top_k=2)
     assert isinstance(recs, list)
     assert {"strategy_name", "preset", "predictor", "elapsed_s", "grid", "workload", "total_tokens"} <= set(meta)

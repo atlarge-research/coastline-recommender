@@ -1,11 +1,9 @@
-"""Tests for the ado trace-enrichment deliverable (coastline/sdk/trace/enrich.py).
+"""Tests for the ado trace enrichment (coastline/sdk/trace/recommend.py).
 
-Oracles used here:
-  * _job_total_tokens / estimated_duration are hand-derived arithmetic (shown inline).
-  * The recommended THROUGHPUT comes from Kavier (a black-box analytical engine), so
-    real-engine tests never pin its magic number — they assert INVARIANTS (finite/positive,
-    layout bounded by max_gpus, fallback preserves the original row) and a SCALING law
-    (estimated_duration is linear in the job's actual work).
+_job_total_tokens and estimated_duration are checked with the arithmetic shown inline. The
+recommended throughput comes from Kavier, so tests on the real engine check invariants (finite
+and positive values, layouts within max_gpus, the original row kept on failure) and a scaling law
+(estimated_duration is linear in the job's work).
 """
 
 import pandas as pd
@@ -40,11 +38,9 @@ def _write_csv(tmp_path, rows, name="trace.csv"):
     return path
 
 
-# --------------------------------------------------------------------------- #
 # Per-device batch mode: patch per_device_train_batch_size, recompute metadata.batch_size.
-# --------------------------------------------------------------------------- #
-# _GOOD_ROW plus the per-device columns -> per-device mode. The input already satisfies the
-# invariant: metadata.batch_size 8 == per_device 1 x gpn 8 x nodes 1.
+# _GOOD_ROW plus the per-device columns, which select per-device mode. The input already satisfies
+# metadata.batch_size 8 == per_device 1 x gpn 8 x nodes 1.
 _GOOD_ROW_PD = {
     **_GOOD_ROW,
     "per_device_train_batch_size": 1,
@@ -99,8 +95,8 @@ def test_per_device_mode_uses_the_full_batch_sweep(tmp_path, monkeypatch):
 
 
 def test_per_device_mode_missing_batch_keeps_row_unchanged(tmp_path, monkeypatch):
-    """If the engine returns no batch size in per-device mode, the row is kept UNCHANGED (its
-    original per-device value) rather than reinterpreting the total batch as per-device."""
+    """If the engine returns no batch size in per-device mode, the row keeps its original
+    per-device value; the total batch is not reread as a per-device one."""
 
     def _fake_recommend(workloads, **kw):
         return pd.DataFrame(
@@ -123,7 +119,7 @@ def test_per_device_mode_missing_batch_keeps_row_unchanged(tmp_path, monkeypatch
 
 
 def test_legacy_mode_has_no_per_device_column(tmp_path):
-    """A trace WITHOUT any per-device column stays in legacy mode: metadata.batch_size is written
+    """A trace without a per-device column stays in legacy mode: metadata.batch_size is written
     and no per_device_train_batch_size column is added."""
     df = recommend_trace(str(_write_csv(tmp_path, [_GOOD_ROW])), str(tmp_path / "out.csv"), method="kavier")
     assert "metadata.batch_size" in df.columns
@@ -133,13 +129,9 @@ def test_legacy_mode_has_no_per_device_column(tmp_path):
 def test_estimated_duration_scales_linearly_with_the_jobs_actual_work(tmp_path):
     """estimated_duration = job_total_tokens / recommended_throughput.
 
-    Two rows with an IDENTICAL workload/layout differ only in train_runtime
-    (3600 s vs 7200 s). The recommended throughput depends solely on the
-    workload+GPU (not on the actual runtime), so it is the SAME for both rows;
-    therefore estimated_duration must scale exactly with job_total_tokens =
-    tps * runtime. Doubling the runtime doubles the work, so the second row's
-    duration must be exactly 2x the first — a scaling oracle that needs no
-    knowledge of Kavier's magic throughput number.
+    Two rows with the same workload and layout differ only in train_runtime (3600 s and 7200 s).
+    The throughput depends on the workload and GPU alone, so the second row's duration is twice
+    the first, whatever Kavier's throughput.
     """
     r1 = {**_GOOD_ROW, "metadata.uid": "one-hour", "metadata.train_runtime": 3600.0}
     r2 = {**_GOOD_ROW, "metadata.uid": "two-hour", "metadata.train_runtime": 7200.0}
@@ -151,13 +143,13 @@ def test_estimated_duration_scales_linearly_with_the_jobs_actual_work(tmp_path):
     one = df[df["metadata.uid"] == "KAVIER:one-hour"].iloc[0]
     two = df[df["metadata.uid"] == "KAVIER:two-hour"].iloc[0]
 
-    # Both feasible -> finite, positive durations.
+    # Both rows are feasible, with finite positive durations.
     assert one[col] > 0 and pd.notna(one[col])
-    # 2x the actual work (7200 s vs 3600 s at the same tps) => exactly 2x duration.
+    # Twice the work (7200 s against 3600 s at the same tps) gives twice the duration.
     assert two[col] == pytest.approx(2.0 * one[col])
 
-    # min_gpu picks the FEWEST feasible GPUs, so this single job stays small (<= 8) — well within
-    # the cluster budget (infrastructure.yaml), which is the real ceiling now, not the job's footprint.
+    # min_gpu picks the fewest feasible GPUs, so the job stays at <= 8 GPUs, well within the
+    # cluster budget from infrastructure.yaml, which is the upper limit.
     total = int(df["resources.num_gpus_per_node"].iloc[0]) * int(df["resources.num_nodes"].iloc[0])
     assert 1 <= total <= 8
 
@@ -167,9 +159,9 @@ def test_estimated_duration_scales_linearly_with_the_jobs_actual_work(tmp_path):
 
 
 def test_recommendations_never_exceed_the_cluster_budget(tmp_path):
-    """The cluster GPU budget is a hard ceiling: with cluster_gpus=2, no job — even under the
-    scale-out `performance` goal — is recommended more than 2 GPUs. The cluster size comes from the
-    argument (infrastructure.yaml in production), never from the trace."""
+    """With cluster_gpus=2 no job is recommended more than 2 GPUs, even under the scale-out
+    `performance` goal. The cluster size comes from the argument (infrastructure.yaml in
+    production) and is never read from the trace."""
     rows = [{**_GOOD_ROW, "metadata.uid": f"job-{i}", "resources.num_gpus_per_node": 8} for i in range(3)]
     out = tmp_path / "rec.csv"
     df = recommend_trace(
@@ -185,20 +177,17 @@ def test_recommendations_never_exceed_the_cluster_budget(tmp_path):
     assert (total >= 1).all()
 
 
-# --------------------------------------------------------------------------- #
-# Failure isolation: an unrecommendable / incomplete row must never crash the
-# trace — the job appears UNCHANGED: original layout + observed duration
-# (extrapolated_duration, else train_runtime), so the timeline still receives it.
-# --------------------------------------------------------------------------- #
+# Failure isolation: a row that cannot be recommended, or is incomplete, does not stop the
+# trace. The job is kept unchanged, with its original layout and observed duration
+# (extrapolated_duration, else train_runtime), so the timeline still gets it.
 
 
 def test_incomplete_layout_row_short_circuits_before_the_recommender(tmp_path, monkeypatch):
-    """A row missing an integer layout field (blank gpus_per_node) must never
-    reach coastline.recommend: the guard `not (tokens and batch and gpn and
-    nodes)` keeps the job unchanged — original layout, and the OBSERVED duration
-    (the fixture's train_runtime = 3600 s, since it has no extrapolated_duration).
-    We prove the short-circuit by making recommend a tripwire that fails the test
-    if called (this distinguishes 'guard skipped it' from 'exception was swallowed')."""
+    """A row with a blank integer layout field (gpus_per_node) is kept unchanged without a call
+    to coastline.recommend: the guard `not (tokens and batch and gpn and nodes)` keeps the
+    original layout and the observed duration (train_runtime = 3600 s, as the fixture has no
+    extrapolated_duration). recommend is replaced by a function that fails the test if called,
+    which tells a skipped row from a swallowed exception."""
 
     def _tripwire(*_a, **_k):
         raise AssertionError("recommend must not be called for an incomplete-layout row")
@@ -209,7 +198,7 @@ def test_incomplete_layout_row_short_circuits_before_the_recommender(tmp_path, m
     out = tmp_path / "out.csv"
     df = recommend_trace(str(_write_csv(tmp_path, [row])), str(out), method="kavier")
 
-    # Fallback duration = observed train_runtime (3600.0), not null: the job stays in the replay.
+    # The fallback duration is the observed train_runtime (3600.0), so the job stays in the replay.
     assert df["metadata.estimated_duration_kavier"].iloc[0] == pytest.approx(3600.0)
     # Original layout is preserved untouched (num_nodes stays 1).
     assert int(df["resources.num_nodes"].iloc[0]) == 1
@@ -217,13 +206,11 @@ def test_incomplete_layout_row_short_circuits_before_the_recommender(tmp_path, m
 
 
 def test_mixed_trace_recommends_good_row_and_preserves_the_unrecommendable_one(tmp_path):
-    """One good row + one unrecommendable row (unknown model/GPU Kavier has no
-    library for) in the same trace. The good row gets a positive predicted
-    duration; the bad row appears UNCHANGED — its EXACT original layout
-    (4 gpn x 2 nodes, batch 8) and its OBSERVED duration (extrapolated_duration
-    = 1234.5, which must win over train_runtime = 3600). Contract oracle:
-    per-row failure isolation — one bad row changes nothing about the good one
-    and leaves its own inputs untouched."""
+    """A trace with one good row and one row Kavier cannot model (unknown model and GPU).
+
+    The good row gets a positive predicted duration. The bad row keeps its original layout
+    (4 GPUs per node x 2 nodes, batch 8) and its observed duration (extrapolated_duration =
+    1234.5, which takes precedence over train_runtime = 3600)."""
     good = {**_GOOD_ROW, "metadata.uid": "good"}
     bad = {
         "metadata.model_name": "totally-unknown-model-xyz",
@@ -242,23 +229,21 @@ def test_mixed_trace_recommends_good_row_and_preserves_the_unrecommendable_one(t
     df = recommend_trace(str(_write_csv(tmp_path, [good, bad])), str(out), method="kavier")
 
     assert len(df) == 2 and out.exists()
-    g = df[df["metadata.uid"] == "KAVIER:good"].iloc[0]  # recommended -> method-prefixed uid
-    b = df[df["metadata.uid"] == "bad"].iloc[0]  # kept unchanged (unknown model) -> original uid
+    g = df[df["metadata.uid"] == "KAVIER:good"].iloc[0]  # recommended, so the uid has the method prefix
+    b = df[df["metadata.uid"] == "bad"].iloc[0]  # kept unchanged (unknown model), so the original uid
 
     col = "metadata.estimated_duration_kavier"
     assert g[col] > 0 and pd.notna(g[col])
     # Unchanged job: observed extrapolated_duration wins over train_runtime.
     assert b[col] == pytest.approx(1234.5)
     assert "unchanged" in str(b["metadata.recommendation_note"])
-    # Bad row's original layout AND batch survive verbatim.
+    # The bad row keeps its original layout and batch.
     assert int(b["resources.num_gpus_per_node"]) == 4
     assert int(b["resources.num_nodes"]) == 2
     assert int(b["metadata.batch_size"]) == 8
 
 
-# --------------------------------------------------------------------------- #
-# _job_total_tokens — config-independent "work" = throughput x runtime
-# --------------------------------------------------------------------------- #
+# _job_total_tokens: the work of a job, throughput x runtime, whatever the config
 
 
 def test_job_total_tokens_is_throughput_times_runtime():
@@ -268,8 +253,8 @@ def test_job_total_tokens_is_throughput_times_runtime():
             "metadata.train_runtime": 3600.0,
         }
     )
-    # By hand: 15000 tok/s sustained for 3600 s (one hour) = 54,000,000 tokens.
-    # tot_tokens_col=None triggers the legacy tps×runtime path.
+    # 15000 tok/s for 3600 s is 54,000,000 tokens.
+    # tot_tokens_col=None selects the legacy tps x runtime path.
     assert _job_total_tokens(row, None) == pytest.approx(54_000_000.0)
 
 
@@ -278,8 +263,8 @@ def test_job_total_tokens_is_throughput_times_runtime():
     [
         (None, 3600.0),  # missing throughput
         (15000.0, None),  # missing runtime
-        (0.0, 3600.0),  # zero throughput -> no ground truth
-        (15000.0, 0.0),  # zero runtime -> no ground truth
+        (0.0, 3600.0),  # zero throughput, no ground truth
+        (15000.0, 0.0),  # zero runtime, no ground truth
         (-5.0, 3600.0),  # negative throughput rejected by the >0 guard
         ("n/a", "n/a"),  # unparseable strings coerce to NaN
     ],
@@ -293,13 +278,11 @@ def test_job_total_tokens_returns_none_for_missing_or_nonpositive(tps, rt):
     assert _job_total_tokens(pd.Series(fields), None) is None
 
 
-# --------------------------------------------------------------------------- #
-# _METHOD_TO_PREDICTOR — method-name -> coastline predictor key (incl. xgb alias)
-# --------------------------------------------------------------------------- #
+# _METHOD_TO_PREDICTOR: method name to coastline predictor key (xgb is an alias)
 
 
 def test_method_to_predictor_map_is_exactly_the_declared_aliases():
-    # The exact contract: only these four keys, and xgb is an alias of xgboost.
+    # These four keys alone; xgb is an alias of xgboost.
     assert _METHOD_TO_PREDICTOR == {
         "kavier": "kavier",
         "tabpfn": "tabpfn",
@@ -309,10 +292,9 @@ def test_method_to_predictor_map_is_exactly_the_declared_aliases():
 
 
 def test_enrich_resolves_predictor_and_computes_duration_from_recommended_throughput(tmp_path, monkeypatch):
-    """recommend_trace maps method 'xgb' -> predictor 'xgboost', passes it plus the
-    feasibility choice to coastline.recommend, replaces the layout with the
-    recommendation, and derives estimated_duration = job_total_tokens /
-    recommended_throughput."""
+    """recommend_trace maps method 'xgb' to predictor 'xgboost', passes it and the feasibility
+    choice to coastline.recommend, replaces the layout with the recommendation, and derives
+    estimated_duration = job_total_tokens / recommended_throughput."""
     captured: dict[str, object] = {}
 
     def _fake_recommend(workloads, *, predictor, goal, max_gpus, top_k, feasibility, **_):
@@ -335,37 +317,35 @@ def test_enrich_resolves_predictor_and_computes_duration_from_recommended_throug
 
     df = recommend_trace(str(_write_csv(tmp_path, [_GOOD_ROW])), str(tmp_path / "o1.csv"), method="xgb")
     assert captured["predictor"] == "xgboost"
-    assert captured["feasibility"] == "autoconf"  # default is the real OOM check
+    assert captured["feasibility"] == "autoconf"  # the default is the AutoConf OOM check
     # Layout replaced by the recommendation.
     assert int(df["resources.num_nodes"].iloc[0]) == 1
     assert int(df["resources.num_gpus_per_node"].iloc[0]) == 8
-    # Duration = job_total_tokens / throughput. By hand:
+    # Duration = job_total_tokens / throughput:
     #   job_total_tokens = 15000 tok/s * 3600 s = 54,000,000 tokens
-    #   duration = 54,000,000 / 15000 tok/s = 3600 s  (equals the real runtime,
-    #   as expected when predicted throughput matches the observed throughput).
+    #   duration = 54,000,000 / 15000 tok/s = 3600 s, the observed runtime, since the
+    #   predicted and observed throughputs match.
     assert df["metadata.estimated_duration_xgb"].iloc[0] == pytest.approx(3600.0)
 
     # Caller can opt out to the rules-only feasibility path.
     recommend_trace(str(_write_csv(tmp_path, [_GOOD_ROW])), str(tmp_path / "o2.csv"), method="xgb", feasibility="rules")
     assert captured["feasibility"] == "rules"
 
-    # An unmapped method falls through lowercased, unchanged.
-    recommend_trace(str(_write_csv(tmp_path, [_GOOD_ROW])), str(tmp_path / "o3.csv"), method="SomeModel")
-    assert captured["predictor"] == "somemodel"
+    # An unmapped method falls through lowercased, unchanged (a name no predictor has is rejected
+    # up front, see test_trace_input_errors.py).
+    recommend_trace(str(_write_csv(tmp_path, [_GOOD_ROW])), str(tmp_path / "o3.csv"), method="CatBoost")
+    assert captured["predictor"] == "catboost"
 
 
 def test_setup_time_col_adds_overhead_to_estimated_duration(tmp_path, monkeypatch):
-    """When setup_time_col is provided the duration formula is:
-        estimated_duration = setup_time + extrapolated_num_tokens / throughput
-
-    Oracle (all numbers hand-computed):
+    """With setup_time_col, estimated_duration = setup_time + extrapolated_num_tokens / throughput:
         extrapolated_num_tokens = 54,000,000  (from tot_tokens_col)
         setup_time              = 120.0 s     (from setup_time_col)
         recommended_throughput  = 15000 tok/s (fake recommender)
         training_time           = 54,000,000 / 15000 = 3600 s
         estimated_duration      = 120 + 3600 = 3720 s
 
-    Without setup_time_col the duration must be just 3600 s (regression guard).
+    Without setup_time_col the duration is 3600 s.
     """
 
     def _fake_recommend(workloads, *, predictor, goal, max_gpus, top_k, feasibility, **_):
@@ -401,9 +381,7 @@ def test_setup_time_col_adds_overhead_to_estimated_duration(tmp_path, monkeypatc
     assert df_without["metadata.estimated_duration_kavier"].iloc[0] == pytest.approx(3600.0)
 
 
-# --------------------------------------------------------------------------- #
-# main() / the coastline recommend-trace CLI (via monkeypatched argv)
-# --------------------------------------------------------------------------- #
+# main() and the coastline recommend-trace CLI
 
 
 def test_main_cli_enriches_trace_and_reports_the_derived_row_count(tmp_path, capsys):
@@ -419,7 +397,7 @@ def test_main_cli_enriches_trace_and_reports_the_derived_row_count(tmp_path, cap
         "kavier",
         "--goal",
         "min_gpu",
-        # rules feasibility keeps this test install-agnostic (no AutoConf needed).
+        # rules feasibility needs no AutoConf install.
         "--feasibility",
         "rules",
     ]
@@ -429,7 +407,7 @@ def test_main_cli_enriches_trace_and_reports_the_derived_row_count(tmp_path, cap
 
     assert out.exists()
     enriched = pd.read_csv(out)
-    # throughput is always written; duration is written via legacy tps×runtime fallback
+    # throughput is always written; duration comes from the legacy tps x runtime fallback
     assert "metadata.estimated_throughput_kavier" in enriched.columns
     assert "metadata.estimated_duration_kavier" in enriched.columns
     assert len(enriched) == 1

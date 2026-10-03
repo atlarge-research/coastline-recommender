@@ -1,12 +1,14 @@
-"""`coastline recommend-trace` — recommend a config for every job in a fine-tuning trace CSV."""
+"""`coastline recommend-trace`: recommend a config for every job in a fine-tuning trace CSV."""
 
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 from typing import Optional, Sequence
 
 from coastline.cli._args import add_trace_layout_args
-from coastline.cli._shared import FriendlyParser
+from coastline.cli._shared import FriendlyParser, report_errors
+from coastline.sdk.constants import FeasibilityMode
 from coastline.sdk.trace.recommend import recommend_trace
 
 
@@ -28,8 +30,9 @@ def _build_parser() -> FriendlyParser:
     p.add_argument(
         "--feasibility",
         default="autoconf",
+        choices=[mode.value for mode in FeasibilityMode],
         help="Feasibility checker: autoconf (default, real OOM check via AutoConf) "
-        "| rules (divisibility-only, works without AutoConf).",
+        "| rules (structural sanity guards only, no OOM check; works without AutoConf) | none.",
     )
     p.add_argument(
         "--lookup",
@@ -68,8 +71,8 @@ def _build_parser() -> FriendlyParser:
             "When provided, metadata.estimated_duration_<method> is written as "
             "setup_time + tot_tokens / estimated_throughput (or tot_tokens / throughput "
             "when --setup-time-col is omitted). "
-            "When omitted, falls back to train_tokens_per_second × train_runtime "
-            "(legacy — requires output columns in the trace)."
+            "When omitted, falls back to train_tokens_per_second * train_runtime "
+            "(legacy - requires output columns in the trace)."
         ),
     )
     p.add_argument(
@@ -97,7 +100,13 @@ def _build_parser() -> FriendlyParser:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> None:
-    args = _build_parser().parse_args(argv)
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    with report_errors(parser):
+        _run(args)
+
+
+def _run(args: argparse.Namespace) -> None:
     from coastline.sdk.io.infrastructure import resolve_cluster_caps
     from coastline.sdk.io.run_config import resolve_cli_workers
     from coastline.sdk.trace.recommend import _TOKENS as _DEFAULT_TOKENS
@@ -127,7 +136,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         f"(cluster {cluster_gpus} GPUs)"
     )
     if n_dur < len(df):
-        print(f"note: {len(df) - n_dur} row(s) without a duration — pass --tot-tokens-col to enable duration estimates")
+        print(f"note: {len(df) - n_dur} row(s) without a duration - pass --tot-tokens-col to enable duration estimates")
     if args.visual:
         from coastline.sdk.trace.plot import plot_trace_timeline
 
