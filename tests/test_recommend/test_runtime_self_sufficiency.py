@@ -13,8 +13,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -79,7 +77,6 @@ def test_kavier_self_locates_and_scales_sublinearly_with_minimal_env():
     assert "OK" in proc.stdout
 
 
-@pytest.mark.lfs_model("random_forest")
 def test_random_forest_self_locates_trainer_and_scales_sublinearly_with_minimal_env():
     """random_forest finds trainer and trace-archive without DATA_DIR and predicts a finite
     throughput that rises sub-linearly with GPU count."""

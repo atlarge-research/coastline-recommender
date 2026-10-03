@@ -56,6 +56,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The version is se
 - Loading `tabpfn.pkl`, which scikit-learn 1.8.0 wrote, logs one INFO line with both scikit-learn versions
   instead of a scikit-learn version warning per estimator class.
 
+- `portfolio/tabpfn.pkl` and `portfolio/random_forest.pkl` are plain git files instead of Git LFS objects, so the
+  source archive and its Zenodo record contain every trained model.
+
 ### Removed
 
 - The demo-tuned TabPFN models in `portfolio/custom/`, which took precedence over the bundled model. The

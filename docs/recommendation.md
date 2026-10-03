@@ -52,8 +52,7 @@ The Python API, `simulate`, and `explain` use `kavier` by default; the default c
 `intelligent`. `cache` and `intelligent` read measured runs from the CSV set by `lookup`, else from
 `$DATA_DIR/profiling-dataset/raw_trace.csv`, else from a small bundled sample.
 
-The data-driven models are in `src/coastline/sdk/predictors/performance/data_driven/portfolio/`, the large ones
-via Git LFS. The PyPI wheel leaves out `tabpfn`, `random_forest`, `gaussian_process`, `svr`, `knn`, and `custom/`.
+The data-driven models are in `src/coastline/sdk/predictors/performance/data_driven/portfolio/`. The PyPI wheel leaves out `tabpfn`, `random_forest`, `gaussian_process`, `svr`, `knn`, and `custom/`.
 Use a clone of the repository for those, or tune `tabpfn` or `xgboost` on your own measured runs with
 `coastline utils tune`. TabPFN is orders of magnitude slower than most other models.
 
