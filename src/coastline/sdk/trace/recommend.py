@@ -25,9 +25,10 @@ from typing import Any, Optional
 import pandas as pd
 
 import coastline
-from coastline.sdk.constants import DEFAULT_BATCH_SIZES, FeasibilityMode
+from coastline.sdk.constants import DEFAULT_BATCH_SIZES, DEFAULT_GOAL, FeasibilityMode, Strategy
 from coastline.sdk.io.infrastructure import resolve_cluster_caps
 from coastline.sdk.policies import normalize_predictor
+from coastline.sdk.recommend._goals import normalize_goal
 from coastline.sdk.recommend.engine import StrategyCache
 
 logger = logging.getLogger(__name__)
@@ -47,9 +48,10 @@ _ACT_RUNTIME = "metadata.train_runtime"
 _ACT_DURATION = "metadata.output.extrapolated_duration"
 
 # Kavier's batch_size is per device (it multiplies by the GPU count itself); metadata.batch_size
-# is the total effective batch (per_device x gpn x nodes). VV reads the recommendation from
-# per_device_train_batch_size, and metadata.batch_size is recomputed from it. A trace is in
-# per-device mode when either of these columns is present.
+# is the total effective batch (per_device x gpn x nodes) for every goal. VV reads the
+# recommendation from per_device_train_batch_size, and metadata.batch_size is recomputed from it.
+# A trace is in per-device mode when either of these columns is present; without them (legacy
+# mode) the per-device batch is metadata.batch_size / (gpn x nodes).
 _REC_PER_DEVICE = "per_device_train_batch_size"  # write target for the recommended per-device batch
 _ORIG_PER_DEVICE = "metadata.orig_per_device_train_batch_size"  # seed fallback (original per-device)
 _PER_DEVICE_COLS = (_REC_PER_DEVICE, _ORIG_PER_DEVICE)
@@ -236,9 +238,22 @@ def _recommend_row(
     gpn, nodes = _as_int(row.get(_GPN)), _as_int(row.get(_NODES))
     if not (tokens and batch and gpn and nodes):
         return _unchanged(keep, row, "no recommendation: missing/invalid workload fields")
-    # Kavier's batch_size is per device, so per-device mode seeds with the per-device value (the
-    # DEFAULT_BATCH_SIZES sweep below replaces the seed).
-    seed_batch = seed_pd if (per_device_mode and seed_pd) else batch
+    if goal == Strategy.MIN_GPU:
+        # min_gpu keeps the job's total batch: per-device x gpn x nodes in per-device mode, the
+        # trace's total in legacy mode. The workload below gives no layout, so the engine takes
+        # this seed as the total batch of a 1-GPU job.
+        seed_batch = seed_pd * gpn * nodes if (per_device_mode and seed_pd) else batch
+    elif per_device_mode:
+        # Kavier's batch_size is per device, so per-device mode seeds with the per-device value;
+        # the DEFAULT_BATCH_SIZES sweep below replaces the seed.
+        seed_batch = seed_pd or batch
+    elif batch % (gpn * nodes):
+        return _unchanged(
+            keep, row, f"no recommendation: the total batch {batch} does not split evenly over {gpn * nodes} GPUs"
+        )
+    else:
+        # Legacy mode: the per-device batch of the job's total.
+        seed_batch = batch // (gpn * nodes)
     wl = {
         "llm_model": str(row[_MODEL]),
         "fine_tuning_method": str(row[_METHOD]),
@@ -256,7 +271,7 @@ def _recommend_row(
 
     try:
         # Per-device mode sweeps all of DEFAULT_BATCH_SIZES; legacy mode uses the batch API's
-        # neighbours of the seed.
+        # neighbours of the seed. min_gpu searches no grid.
         sweep = {"batch_sizes": list(DEFAULT_BATCH_SIZES)} if per_device_mode else {}
         out = coastline.recommend(
             [wl],
@@ -314,9 +329,9 @@ def _recommend_row(
         if per_device_mode and rec_pd is None:
             # the total batch is not a per-device batch, so keep the row unchanged
             return _unchanged(keep, row, f"'{predictor}' returned no batch size - kept unchanged")
-        # metadata.batch_size is the total effective batch. Per-device mode recomputes it as
-        # per_device x gpn x nodes; legacy mode keeps the engine's value.
-        total_batch = (rec_pd * rec_gpn * rec_nodes) if per_device_mode else (rec_pd or batch)
+        # metadata.batch_size is the total effective batch: per_device x gpn x nodes. A legacy
+        # row without a recommended batch keeps its total.
+        total_batch = rec_pd * rec_gpn * rec_nodes if rec_pd is not None else batch
         return {
             "nodes": rec_nodes,
             "gpn": rec_gpn,
@@ -335,7 +350,7 @@ def recommend_trace(
     output_csv: str,
     *,
     method: str = "kavier",
-    goal: str = "min_gpu",
+    goal: str = DEFAULT_GOAL,
     feasibility: str = "autoconf",
     lookup: Optional[str] = None,
     cluster_gpus: Optional[int] = None,
@@ -347,6 +362,12 @@ def recommend_trace(
 ) -> pd.DataFrame:
     """Recommend a layout per trace row, write the recommended-trace CSV and return the DataFrame.
 
+    goal: ``"performance"`` (default), ``"balanced"`` and ``"energy"`` rank a grid. ``"min_gpu"``
+        keeps each job's total batch and gives it the first feasible GPU count in 1, 2, 4, ...
+        For every goal, ``metadata.batch_size`` is the job's total batch, written back as the
+        recommended per-device batch x GPUs. In a trace without a per-device batch column, the
+        weighted goals start from ``metadata.batch_size`` / (GPUs per node x nodes), and a row
+        whose total does not split evenly over its GPUs is kept unchanged with a note.
     feasibility: ``"autoconf"`` (default) runs the AutoConf OOM check and raises if AutoConf (the
         ``coastline[autoconf]`` extra) is missing, unless ``COASTLINE_ALLOW_RULES_FALLBACK=1``.
         ``"rules"`` only checks for a positive GPU count and a per-device batch of at least 1.
@@ -368,7 +389,8 @@ def recommend_trace(
     and the measured ``train_tokens_per_second x train_runtime`` without ``tot_tokens_col``
     (needs output data). ``metadata.estimated_throughput_<method>`` is always written.
     """
-    # A wrong mode or method affects every row, so it raises here.
+    # A wrong goal, mode or method affects every row, so it raises here.
+    goal = normalize_goal(goal)
     if feasibility not in {mode.value for mode in FeasibilityMode}:
         raise ValueError(
             f"unknown feasibility mode {feasibility!r}: expected one of {[mode.value for mode in FeasibilityMode]}"

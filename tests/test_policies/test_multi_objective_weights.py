@@ -130,15 +130,16 @@ class TestRatioPreserved:
         assert strat.preset == "custom"
 
     def test_out_of_range_ratio_reranks(self, workload, context):
-        """Weights above 1 still steer the ranking: 1:3 picks P (batch 4) and 3:1 picks Q (batch 8).
+        """Weights above 1 still steer the ranking: 3:1 picks P (batch 4) and 1:3 picks Q (batch 8).
 
-        Over RATIO_TABLE, P has power_score 0 and throughput_score 1, and Q the reverse.
+        Over RATIO_TABLE, P has power_score 0 and throughput_score 1, and Q the reverse. alpha
+        weights the runtime (throughput) score and beta the energy (power) score.
         """
-        perf_heavy = _multi_objective(RATIO_TABLE, grid=RATIO_GRID, alpha=1.0, beta=3.0)
+        perf_heavy = _multi_objective(RATIO_TABLE, grid=RATIO_GRID, alpha=3.0, beta=1.0)
         recs_p = perf_heavy.recommend(workload, context)
         assert recs_p[0].metadata["batch_size"] == 4  # P, high throughput
 
-        energy_heavy = _multi_objective(RATIO_TABLE, grid=RATIO_GRID, alpha=3.0, beta=1.0)
+        energy_heavy = _multi_objective(RATIO_TABLE, grid=RATIO_GRID, alpha=1.0, beta=3.0)
         recs_e = energy_heavy.recommend(workload, context)
         assert recs_e[0].metadata["batch_size"] == 8  # Q, low power
 
@@ -160,11 +161,11 @@ class TestInRangeUnchanged:
         assert strat.beta == pytest.approx(0.1)
         assert strat.alpha + strat.beta == pytest.approx(1.0)
 
-    # Preset weights as (alpha = power, beta = throughput), written out here instead of read from
+    # Preset weights as (alpha = runtime, beta = energy), written out here instead of read from
     # PRESET_WEIGHTS. Each pair sums to 1.
     @pytest.mark.parametrize(
         "preset,exp_alpha,exp_beta",
-        [("energy", 0.8, 0.2), ("balanced", 0.5, 0.5), ("performance", 0.2, 0.8)],
+        [("energy", 0.2, 0.8), ("balanced", 0.5, 0.5), ("performance", 0.8, 0.2)],
     )
     def test_presets_match_spec_weights(self, preset, exp_alpha, exp_beta):
         pred = FakePredictor(THREE_WAY_TABLE)

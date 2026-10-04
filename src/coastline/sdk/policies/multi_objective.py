@@ -1,10 +1,21 @@
-"""Multi-objective strategy: grid, feasibility and simulation, then weighted selection."""
+"""Multi-objective strategy: grid, feasibility and simulation, then weighted selection.
+
+Each feasible candidate scores ``alpha * runtime_score + beta * energy_score``, the thesis score
+S = alpha * s_r + beta * s_e: alpha is the performance (runtime) weight and beta the energy weight.
+"""
 
 import logging
-from enum import Enum
-from typing import List, Optional, Union
+from typing import List, Optional
 
-from coastline.sdk.constants import PRESET_TO_POLICY, PRESET_WEIGHTS, Preset, Strategy
+# normalize_preset is defined in sdk/constants.py with the alias table and re-exported here.
+from coastline.sdk.constants import (
+    DEFAULT_GOAL,
+    PRESET_TO_POLICY,
+    PRESET_WEIGHTS,
+    Preset,
+    Strategy,
+    normalize_preset,
+)
 from coastline.sdk.models.context import SystemContext
 from coastline.sdk.models.recommendation import Recommendation
 from coastline.sdk.models.workload import WorkloadSpec
@@ -18,17 +29,13 @@ logger = logging.getLogger(__name__)
 PolicyPreset = Preset
 
 
-def normalize_preset(preset: Union[str, Preset]) -> str:
-    """The preset key for any letter case; ValueError listing the presets for an unknown one."""
-    value = preset.value if isinstance(preset, Enum) else preset
-    key = str(value).strip().lower()
-    if key not in PRESET_WEIGHTS:
-        raise ValueError(f"unknown preset {preset!r}; choose from {list(PRESET_WEIGHTS)}")
-    return key
-
-
 class MultiObjectiveStrategy(BaseStrategy):
-    """Multi-objective strategy: the grid workflow ranked with preset or custom weights."""
+    """Multi-objective strategy: the grid workflow ranked with preset or custom weights.
+
+    ``alpha`` weights the runtime score and ``beta`` the energy score. Given weights are
+    divided by their sum; a preset sets both (balanced 0.5/0.5, performance 0.8/0.2, energy
+    0.2/0.8). Without either, the preset is performance.
+    """
 
     def __init__(
         self,
@@ -64,15 +71,11 @@ class MultiObjectiveStrategy(BaseStrategy):
                 self.alpha, self.beta = 0.5, 0.5
             self.preset: str = "custom"
             selection = "balanced"
-        elif preset is not None:
-            # preset=None means balanced; an unknown preset raises.
-            self.preset = normalize_preset(preset)
+        else:
+            # preset=None means the default goal's preset; an unknown preset raises.
+            self.preset = normalize_preset(preset if preset is not None else DEFAULT_GOAL)
             self.alpha, self.beta = PRESET_WEIGHTS[self.preset]
             selection = PRESET_TO_POLICY[self.preset]
-        else:
-            self.alpha, self.beta = PRESET_WEIGHTS["balanced"]
-            self.preset = "balanced"
-            selection = "balanced"
 
         strategy_name = f"multi_objective_{self.preset}"
 

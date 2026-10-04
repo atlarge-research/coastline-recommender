@@ -163,9 +163,9 @@ def test_max_slowdown_in_the_yaml_reaches_the_engine_as_the_runtime_guard(tmp_pa
 
 
 def test_max_slowdown_gives_the_same_pick_as_the_batch_csv_path(tmp_path, capsys, logging_on) -> None:
-    """min_gpu alone picks the fewest GPUs; max_slowdown 1.0 allows only the fastest config.
-    The batch CSV path applies the same guard, so both paths pick the same config."""
-    config = _config(strategy={"name": "min_gpu", "max_slowdown": 1.0})
+    """The energy preset alone picks a small, low-power layout; max_slowdown 1.0 allows only the
+    fastest config. The batch CSV path applies the same guard, so both paths pick the same config."""
+    config = _config(strategy={"name": "multi_objective", "preset": "energy", "max_slowdown": 1.0})
     config_path = _write(tmp_path, config)
     rows = tmp_path / "one.csv"
     rows.write_text(",".join(_WORKLOAD) + "\n" + ",".join(str(v) for v in _WORKLOAD.values()) + "\n")
@@ -183,5 +183,5 @@ def test_max_slowdown_gives_the_same_pick_as_the_batch_csv_path(tmp_path, capsys
     unguarded = json.loads(capsys.readouterr().out)
 
     assert guarded["configuration"]["total_gpus"] == int(batch["recommended_total_gpus"])
-    # The guard changed the pick: without it min_gpu keeps the smallest layout.
+    # The guard changed the pick: without it the energy preset keeps the smaller layout.
     assert guarded["configuration"]["total_gpus"] > unguarded["configuration"]["total_gpus"]

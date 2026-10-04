@@ -1,4 +1,5 @@
-"""Candidate grid (batch_size x total_gpus); the node layout is derived from total_gpus."""
+"""Candidate grid (batch_size x total_gpus) and the min-GPU candidate sequence; the node layout is
+derived from total_gpus."""
 
 from __future__ import annotations
 
@@ -6,7 +7,7 @@ import logging
 from dataclasses import dataclass
 from typing import List, Optional
 
-from coastline.sdk.constants import DEFAULT_BATCH_SIZES
+from coastline.sdk.constants import DEFAULT_BATCH_SIZES, DEFAULT_MIN_GPU_TOP_K, DEFAULT_TOP_K, SelectionPolicy
 from coastline.sdk.models.context import SystemContext
 from coastline.sdk.models.workload import WorkloadSpec
 
@@ -33,11 +34,20 @@ def check_top_k(top_k: int) -> None:
 class GridConfig:
     batch_sizes: List[int]
     total_gpus: List[int]
-    top_k: int = 5
+    # None when the config sets no top_k; see top_k_for.
+    top_k: Optional[int] = None
 
     def __post_init__(self) -> None:
         # Otherwise the ranking would quietly turn a top_k below 1 into 1.
-        check_top_k(self.top_k)
+        if self.top_k is not None:
+            check_top_k(self.top_k)
+
+    def top_k_for(self, policy: object) -> int:
+        """The number of configurations to return: the configured top_k, else 1 for min_gpu and
+        DEFAULT_TOP_K for the weighted policies."""
+        if self.top_k is not None:
+            return self.top_k
+        return DEFAULT_MIN_GPU_TOP_K if policy == SelectionPolicy.MIN_GPU else DEFAULT_TOP_K
 
 
 def grid_config_from_dict(config: Optional[dict], max_gpus: Optional[int] = None) -> GridConfig:
@@ -48,10 +58,11 @@ def grid_config_from_dict(config: Optional[dict], max_gpus: Optional[int] = None
         gpu_list = _powers_of_two(max_gpus)
     else:
         gpu_list = []
+    top_k = grid.get("top_k")
     return GridConfig(
         batch_sizes=list(grid.get("batch_sizes", DEFAULT_BATCH_SIZES)),
         total_gpus=gpu_list,
-        top_k=int(grid.get("top_k", 5)),
+        top_k=None if top_k is None else int(top_k),
     )
 
 
@@ -101,20 +112,51 @@ def generate_candidates(
             if key in seen:
                 continue
             seen.add(key)
-            candidates.append(
-                WorkloadSpec(
-                    llm_model=workload.llm_model,
-                    fine_tuning_method=workload.fine_tuning_method,
-                    gpu_model=workload.gpu_model,
-                    tokens_per_sample=workload.tokens_per_sample,
-                    batch_size=batch_size,
-                    gpus_per_node=gpus_per_node,
-                    number_of_nodes=num_nodes,
-                    torch_dtype=workload.torch_dtype,
-                    enable_roce=workload.enable_roce,
-                    feasibility_model=workload.feasibility_model,
-                )
-            )
+            candidates.append(_variant(workload, batch_size, gpus_per_node, num_nodes))
 
     logger.info("Grid: %d candidates within context limits", len(candidates))
     return candidates
+
+
+def job_total_batch(workload: WorkloadSpec) -> int:
+    """The job's total batch: its per-device batch times its GPUs (gpus_per_node x
+    number_of_nodes, 1 when the workload gives no layout)."""
+    return workload.batch_size * workload.total_gpus
+
+
+def min_gpu_candidates(workload: WorkloadSpec, context: SystemContext) -> List[WorkloadSpec]:
+    """The candidates of the thesis min-GPU algorithm, as in IBM AutoConf's min-GPU recommender, in
+    the order it checks them.
+
+    For g = 1, 2, 4, ... while g <= ``context.max_gpus``, the candidate is the workload with g GPUs
+    in total and the job's total batch (:func:`job_total_batch`) split evenly over them. A g that
+    does not divide the total, gives less than 1 per device, or needs more than ``max_nodes``
+    nodes is skipped. The layout is the grid's exact one (fewest nodes within ``gpus_per_node``).
+    """
+    total_batch = job_total_batch(workload)
+    max_gpus_per_node = context.constraints.gpus_per_node
+    max_nodes = context.constraints.max_nodes
+    candidates: List[WorkloadSpec] = []
+    for n_gpus in _powers_of_two(context.max_gpus):
+        if total_batch % n_gpus or total_batch // n_gpus < 1:
+            continue
+        gpus_per_node, num_nodes = _derive_node_layout(n_gpus, max_gpus_per_node)
+        if num_nodes <= max_nodes:
+            candidates.append(_variant(workload, total_batch // n_gpus, gpus_per_node, num_nodes))
+    return candidates
+
+
+def _variant(workload: WorkloadSpec, batch_size: int, gpus_per_node: int, num_nodes: int) -> WorkloadSpec:
+    """The workload with the given per-device batch size and node layout."""
+    return WorkloadSpec(
+        llm_model=workload.llm_model,
+        fine_tuning_method=workload.fine_tuning_method,
+        gpu_model=workload.gpu_model,
+        tokens_per_sample=workload.tokens_per_sample,
+        batch_size=batch_size,
+        gpus_per_node=gpus_per_node,
+        number_of_nodes=num_nodes,
+        torch_dtype=workload.torch_dtype,
+        enable_roce=workload.enable_roce,
+        feasibility_model=workload.feasibility_model,
+    )

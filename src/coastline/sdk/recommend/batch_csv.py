@@ -45,7 +45,9 @@ def recommend_csv(config_path, input_csv, output_csv, *, cluster_gpus=None) -> N
 
     The GPU search is bounded by ``cluster_gpus`` (the ``--cluster-gpus`` flag) or, when unset,
     the total in ``infrastructure.yaml``. The config's ``grid.total_gpus`` still applies, capped
-    to the cluster.
+    to the cluster. ``min_gpu`` uses no grid: it keeps each row's total batch, ``batch_size`` x
+    ``gpus_per_node`` x ``number_of_nodes`` (1 GPU when the row gives no layout), and tries 1, 2,
+    4, ... GPUs with that total split over them.
 
     A row that cannot be used, or has no feasible configuration, gets ``feasible=False`` and the
     reason in ``error``; the other rows still run. An unknown ``predictors.performance`` name, or a
@@ -96,7 +98,7 @@ def _load_config(path) -> dict[str, Any]:
         # A section whose keys are all commented out loads as None; it gets the defaults.
         config[section] = config.get(section) or {}
     # max_slowdown (keep configs at most X times slower than the fastest feasible one) is the
-    # engine's runtime_guard_k. A blank value sets no cap.
+    # engine's runtime_guard_k. A blank value sets no cap. min_gpu ignores it.
     if config["strategy"].get("max_slowdown") is not None:
         config["strategy"]["runtime_guard_k"] = float(config["strategy"]["max_slowdown"])
     # An unknown predictor name fails here, before any row runs; any letter case resolves.

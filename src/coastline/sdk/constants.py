@@ -8,6 +8,7 @@ search space used when a config's ``grid`` does not set its own.
 from __future__ import annotations
 
 from enum import Enum
+from typing import Final
 
 
 class FeasibilityMode(str, Enum):
@@ -42,7 +43,8 @@ class Strategy(str, Enum):
 
 class Preset(str, Enum):
     """Multi-objective weight preset. The ``*_FRONTIER`` variants share their base weights and
-    differ only in the score-normalization set (the non-dominated frontier)."""
+    differ only in the score-normalization set (the non-dominated frontier). Other spellings,
+    such as ``energy-saver`` for ``energy``, are in PRESET_ALIASES."""
 
     ENERGY = "energy"
     BALANCED = "balanced"
@@ -53,8 +55,8 @@ class Preset(str, Enum):
 
 
 class SelectionPolicy(str, Enum):
-    """How the winning candidate is chosen: ``min_gpu`` = fewest feasible GPUs; the rest rank on
-    the weighted throughput and energy score."""
+    """How the winning candidate is chosen: ``min_gpu`` = the first feasible GPU count in 1, 2,
+    4, ... for the job's total batch; the rest rank on the weighted runtime and energy score."""
 
     MIN_GPU = "min_gpu"
     PERFORMANCE = "performance"
@@ -69,17 +71,81 @@ class NormalizationMode(str, Enum):
     FRONTIER = "frontier"
 
 
-# (alpha, beta) per base preset: alpha weights power, beta weights throughput. The -frontier
-# variants reuse these weights with frontier normalization.
+# (alpha, beta) per base preset, as in the thesis preset table: the score is
+# alpha * runtime_score + beta * energy_score, so alpha is the performance (runtime) weight and
+# beta the energy weight. The -frontier variants reuse these weights with frontier normalization.
 _BASE_PRESET_WEIGHTS: dict[str, tuple[float, float]] = {
-    Preset.ENERGY: (0.8, 0.2),
+    Preset.ENERGY: (0.2, 0.8),
     Preset.BALANCED: (0.5, 0.5),
-    Preset.PERFORMANCE: (0.2, 0.8),
+    Preset.PERFORMANCE: (0.8, 0.2),
 }
 PRESET_WEIGHTS: dict[str, tuple[float, float]] = {
     **{p.value: w for p, w in _BASE_PRESET_WEIGHTS.items()},
     **{f"{p.value}-frontier": w for p, w in _BASE_PRESET_WEIGHTS.items()},
 }
+
+# Other spellings of the goals (performance, balanced, energy, min_gpu), the one alias table of
+# every entry point. Keys are lowercase with "_" between words; "-" or a space reads as "_", so
+# "min-gpu" and "Energy Saver" match too.
+GOAL_ALIASES: dict[str, str] = {
+    "runtime": "performance",
+    "lowest_runtime": "performance",
+    "throughput": "performance",
+    "energy_saver": "energy",  # the thesis name of the energy preset
+    "min_gpus": "min_gpu",
+    "fewest": "min_gpu",
+}
+
+# The aliases of the multi-objective goals, which are also presets, spelled with "-" as the
+# presets are.
+PRESET_ALIASES: dict[str, str] = {
+    alias.replace("_", "-"): goal for alias, goal in GOAL_ALIASES.items() if goal in PRESET_WEIGHTS
+}
+
+_FRONTIER_SUFFIX = "-frontier"
+
+
+def _name_key(name: object) -> str:
+    """``name`` in lowercase, with "-" and spaces read as "_"."""
+    value = name.value if isinstance(name, Enum) else name
+    return str(value).strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def goal_key(name: object) -> str:
+    """A goal name in lowercase with its alias resolved. The result may still be unknown."""
+    key = _name_key(name)
+    return GOAL_ALIASES.get(key, key)
+
+
+def preset_key(name: object) -> str:
+    """A preset name in lowercase with its alias resolved, also before ``-frontier``. The result
+    may still be unknown."""
+    key = _name_key(name).replace("_", "-")
+    base = key.removesuffix(_FRONTIER_SUFFIX)
+    base = PRESET_ALIASES.get(base, base)
+    return base + _FRONTIER_SUFFIX if key.endswith(_FRONTIER_SUFFIX) else base
+
+
+def normalize_preset(preset: object) -> str:
+    """The preset for any letter case or alias ('energy-saver' is 'energy'); ValueError listing
+    the presets for an unknown one."""
+    key = preset_key(preset)
+    if key not in PRESET_WEIGHTS:
+        raise ValueError(
+            f"unknown preset {preset!r}; choose from {list(PRESET_WEIGHTS)} (aliases: {sorted(PRESET_ALIASES)})"
+        )
+    return key
+
+
+# The goal every entry point uses when none is given: multi_objective with the performance preset
+# (Preset.PERFORMANCE). A literal, so it also fits a Literal-typed field.
+DEFAULT_GOAL: Final = "performance"
+
+# How many configurations a recommendation returns when the caller sets no top_k: the weighted
+# policies return a ranked shortlist, min_gpu its single pick.
+DEFAULT_TOP_K: int = 5
+DEFAULT_MIN_GPU_TOP_K: int = 1
+
 
 # Ranking policy per base preset; each -frontier variant uses its base preset's policy.
 _BASE_PRESET_TO_POLICY: dict[str, "SelectionPolicy"] = {

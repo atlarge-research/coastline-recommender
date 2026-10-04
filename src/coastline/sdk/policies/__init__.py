@@ -8,7 +8,7 @@ from typing import Optional, Union
 
 import yaml
 
-from coastline.sdk.constants import EnergyBackend, SelectionPolicy, Strategy
+from coastline.sdk.constants import DEFAULT_GOAL, EnergyBackend, SelectionPolicy, Strategy
 from coastline.sdk.io.run_config import builtin_default_config
 from coastline.sdk.io.sample_data import default_run_database_path
 from coastline.sdk.pipeline.feasibility import create_feasibility_checker
@@ -80,6 +80,13 @@ class PolicyFactory:
         beta: Optional[float] = None,
         config: Optional[dict] = None,
     ) -> BaseStrategy:
+        """Build the strategy the arguments or ``config`` name.
+
+        For multi_objective, ``alpha`` is the performance (runtime) weight and ``beta`` the
+        energy weight; given weights (arguments, else ``strategy.alpha`` and ``strategy.beta``)
+        override the preset. Without weights or a preset, the preset is performance. min_gpu
+        reads neither.
+        """
         if config is None:
             config = PolicyFactory.load_config()
 
@@ -241,9 +248,9 @@ class PolicyFactory:
             )
             preset = None
 
-        # Use a preset only when no weights were given.
+        # Use a preset only when no weights were given; without one, the default goal's.
         if preset is None and not weights_set:
-            preset = strategy_config.get("preset", "balanced")
+            preset = strategy_config.get("preset") or DEFAULT_GOAL
 
         return MultiObjectiveStrategy(
             throughput_predictor=throughput_predictor,

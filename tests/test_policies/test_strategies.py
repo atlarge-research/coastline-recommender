@@ -1,7 +1,7 @@
 """Unit tests for the recommendation policies in ``coastline.sdk.policies``:
 
     - ``base.BaseStrategy``: the strategy interface
-    - ``min_gpu.MinGPUStrategy``: the config with the fewest GPUs
+    - ``min_gpu.MinGPUStrategy``: the first feasible GPU count for the job's total batch
     - ``multi_objective.MultiObjectiveStrategy``: alpha/beta weighted ranking and presets
     - ``PolicyFactory``: strategy by name and preset
 
@@ -126,7 +126,7 @@ def _pipeline(
 #   1: (100, 200)
 #   2: (500, 100), the lowest per-GPU power
 #   4: (900, 380), the highest throughput
-# min_gpu picks 1 GPU, the energy and performance presets pick 2, and alpha=0, beta=1 picks 4.
+# min_gpu picks 1 GPU, the energy and performance presets pick 2, and alpha=1, beta=0 picks 4.
 THREE_WAY_TABLE = {
     (1, 4): (100.0, 200.0),
     (2, 4): (500.0, 100.0),
@@ -134,13 +134,20 @@ THREE_WAY_TABLE = {
 }
 THREE_WAY_GRID = {"batch_sizes": [4], "total_gpus": [1, 2, 4], "top_k": 3}
 
+# min_gpu splits the job's total batch (4, on 1 GPU) over 1, 2 and 4 GPUs: 4, 2 and 1 per device.
+MIN_GPU_TABLE = {
+    (1, 4): (100.0, 200.0),
+    (2, 2): (400.0, 100.0),
+    (4, 1): (700.0, 380.0),
+}
+
 
 # base.BaseStrategy
 class TestBaseStrategy:
     def test_recommendation_strategy_field_equals_strategy_name(self, workload, context):
         """Both strategies return all 3 configs, each with Recommendation.strategy equal to the
         strategy's get_name()."""
-        pred = FakePredictor(THREE_WAY_TABLE)
+        pred = FakePredictor({**THREE_WAY_TABLE, **MIN_GPU_TABLE})
         min_gpu = MinGPUStrategy(
             pipeline=_pipeline(
                 grid=THREE_WAY_GRID,
@@ -184,14 +191,14 @@ class TestPolicyFactoryDispatch:
         assert isinstance(strat, MultiObjectiveStrategy)
         assert strat.get_name() == "multi_objective_balanced"
 
-    # Preset weights as (alpha = power, beta = throughput), written out here instead of read from
+    # Preset weights as (alpha = runtime, beta = energy), written out here instead of read from
     # PRESET_WEIGHTS and PRESET_TO_POLICY.
     @pytest.mark.parametrize(
         "preset, exp_alpha, exp_beta, exp_policy",
         [
             ("balanced", 0.5, 0.5, "balanced"),
-            ("performance", 0.2, 0.8, "performance"),
-            ("energy", 0.8, 0.2, "energy"),
+            ("performance", 0.8, 0.2, "performance"),
+            ("energy", 0.2, 0.8, "energy"),
         ],
     )
     def test_multi_objective_presets_select_expected_weights(self, preset, exp_alpha, exp_beta, exp_policy):
@@ -234,11 +241,18 @@ class TestPolicyFactoryDispatch:
             PolicyFactory.create_strategy(strategy_name="min_gpu", config=cfg)
 
 
-# MinGPUStrategy: the config with the fewest GPUs
+class _RejectOneGpu:
+    """Feasibility checker that rejects the 1-GPU candidate and admits the rest."""
+
+    def is_feasible(self, workload: WorkloadSpec) -> tuple[bool, dict]:
+        return workload.total_gpus != 1, {}
+
+
+# MinGPUStrategy: the first feasible GPU count in 1, 2, 4, ...
 class TestMinGPUStrategy:
     def test_selects_fewest_gpus(self, workload, context):
-        """Among feasible candidates, MinGPUStrategy ranks the one with the fewest GPUs first."""
-        pred = FakePredictor(THREE_WAY_TABLE)
+        """With every count feasible, MinGPUStrategy returns 1 GPU first, then 2 and 4."""
+        pred = FakePredictor(MIN_GPU_TABLE)
         strat = MinGPUStrategy(
             pipeline=_pipeline(
                 grid=THREE_WAY_GRID,
@@ -248,36 +262,34 @@ class TestMinGPUStrategy:
             )
         )
         recs = strat.recommend(workload, context)
-        # top_k is 3; the other configs follow in increasing GPU count.
+        # top_k is 3; the next feasible counts follow in doubling order.
         assert recs[0].total_gpus == 1
         assert recs[0].strategy == "min_gpu"
-        assert [r.total_gpus for r in recs] == [1, 2, 4]
+        assert [(r.total_gpus, r.metadata["batch_size"]) for r in recs] == [(1, 4), (2, 2), (4, 1)]
 
     def test_skips_infeasible_smallest_and_picks_next(self, workload, context):
-        """If the 1-GPU config cannot be predicted, the 2-GPU config is chosen."""
-        # Without the 1-GPU entry the predictor returns None and the workflow skips that config.
-        table = {k: v for k, v in THREE_WAY_TABLE.items() if k != (1, 4)}
-        pred = FakePredictor(table)
-        strat = MinGPUStrategy(
-            pipeline=_pipeline(
-                grid=THREE_WAY_GRID,
-                selection_policy="min_gpu",
-                strategy_name="min_gpu",
-                predictor=pred,
-            )
+        """If the 1-GPU config is infeasible, the 2-GPU config is chosen."""
+        pred = FakePredictor(MIN_GPU_TABLE)
+        pipeline = GridWorkflowPipeline.from_config(
+            config=_config(THREE_WAY_GRID),
+            selection_policy="min_gpu",
+            strategy_name="min_gpu",
+            throughput_predictor=pred,
+            power_predictor=pred,
+            feasibility_checker=_RejectOneGpu(),
         )
-        recs = strat.recommend(workload, context)
+        recs = MinGPUStrategy(pipeline=pipeline).recommend(workload, context)
         assert recs[0].total_gpus == 2
+        # A total batch of 4 has no third count: 8 GPUs would get half a sample each.
         assert [r.total_gpus for r in recs] == [2, 4]
 
-    def test_tie_break_prefers_higher_throughput(self, workload, context):
-        """At equal total_gpus, min_gpu puts the higher throughput first."""
-        # Two candidates on 2 GPUs, with batch 4 and batch 8.
+    def test_keeps_the_jobs_batch_size(self, workload, context):
+        """min_gpu does not explore batch sizes: a faster batch in the grid is not picked."""
         table = {
-            (2, 4): (300.0, 100.0),  # lower throughput
-            (2, 8): (700.0, 100.0),  # higher throughput, picked
+            (1, 4): (300.0, 100.0),  # the job's batch, picked
+            (1, 8): (700.0, 100.0),  # faster, at a batch the job does not use
         }
-        grid = {"batch_sizes": [4, 8], "total_gpus": [2], "top_k": 3}
+        grid = {"batch_sizes": [4, 8], "total_gpus": [1], "top_k": 1}
         pred = FakePredictor(table)
         strat = MinGPUStrategy(
             pipeline=_pipeline(
@@ -288,12 +300,12 @@ class TestMinGPUStrategy:
             )
         )
         recs = strat.recommend(workload, context)
-        assert recs[0].total_gpus == 2
-        assert recs[0].metadata["batch_size"] == 8
-        assert recs[0].predicted_throughput == pytest.approx(700.0)
+        assert recs[0].total_gpus == 1
+        assert recs[0].metadata["batch_size"] == 4
+        assert recs[0].predicted_throughput == pytest.approx(300.0)
 
     def test_no_feasible_candidates_raises(self, workload, context):
-        """With an empty prediction table every candidate is skipped and recommend() raises a
+        """With an empty prediction table the pick gets no prediction, and recommend() raises a
         RuntimeError (no usable prediction)."""
         pred = FakePredictor({})  # predicts nothing
         strat = MinGPUStrategy(
@@ -319,11 +331,11 @@ class TestMultiObjectiveStrategy:
         )
 
     def test_performance_preset_is_weighted_sum_not_pure_throughput(self, workload, context):
-        # performance is a weighted sum with alpha=0.2 on total power and beta=0.8 on time. The
+        # performance is a weighted sum with alpha=0.8 on time and beta=0.2 on total power. The
         # 4-GPU config is the fastest but draws 380 x 4 = 1520 W (power_score 0.0), so 2 GPUs win:
-        #   2 GPUs: 0.2 * 1.0 + 0.8 * 0.9 = 0.92
-        #   4 GPUs: 0.2 * 0.0 + 0.8 * 1.0 = 0.80
-        #   1 GPU:  0.2 * 1.0 + 0.8 * 0.0 = 0.20
+        #   2 GPUs: 0.8 * 0.9 + 0.2 * 1.0 = 0.92
+        #   4 GPUs: 0.8 * 1.0 + 0.2 * 0.0 = 0.80
+        #   1 GPU:  0.8 * 0.0 + 0.2 * 1.0 = 0.20
         pred = FakePredictor(THREE_WAY_TABLE)
         strat = self._multi_objective(pred, grid=THREE_WAY_GRID, preset="performance")
         recs = strat.recommend(workload, context)
@@ -332,18 +344,18 @@ class TestMultiObjectiveStrategy:
         assert recs[0].strategy == "multi_objective_performance"
         assert recs[0].metadata["combined_score"] == pytest.approx(0.92)
 
-        # With alpha=0 and beta=1 power is ignored and the fastest config (4 GPUs) wins.
-        pure = self._multi_objective(FakePredictor(THREE_WAY_TABLE), grid=THREE_WAY_GRID, alpha=0.0, beta=1.0)
+        # With alpha=1 and beta=0 power is ignored and the fastest config (4 GPUs) wins.
+        pure = self._multi_objective(FakePredictor(THREE_WAY_TABLE), grid=THREE_WAY_GRID, alpha=1.0, beta=0.0)
         recs_pure = pure.recommend(workload, context)
         assert recs_pure[0].total_gpus == 4
         assert recs_pure[0].predicted_throughput == pytest.approx(900.0)
         assert recs_pure[0].metadata["combined_score"] == pytest.approx(1.0)
 
     def test_energy_preset_picks_lowest_power(self, workload, context):
-        # energy: alpha=0.8 on power, beta=0.2 on time. For 1, 2 and 4 GPUs:
+        # energy: alpha=0.2 on time, beta=0.8 on power. For 1, 2 and 4 GPUs:
         #   power_cost = watts * gpus: 200, 200, 1520, so power_score = 1.0, 1.0, 0.0
         #   time = 1 / throughput, so thr_score = 0.0, 0.9, 1.0
-        #   combined = 0.8 * power_score + 0.2 * thr_score = 0.80, 0.98, 0.20
+        #   combined = 0.2 * thr_score + 0.8 * power_score = 0.80, 0.98, 0.20
         pred = FakePredictor(THREE_WAY_TABLE)
         strat = self._multi_objective(pred, grid=THREE_WAY_GRID, preset="energy")
         recs = strat.recommend(workload, context)
@@ -373,14 +385,14 @@ class TestMultiObjectiveStrategy:
         }
         grid = {"batch_sizes": [4, 8], "total_gpus": [2], "top_k": 3}
 
-        # alpha=0.9 on power: Q scores 0.9 and P 0.1.
-        energy_heavy = self._multi_objective(FakePredictor(table), grid=grid, alpha=0.9, beta=0.1)
+        # beta=0.9 on power: Q scores 0.9 and P 0.1.
+        energy_heavy = self._multi_objective(FakePredictor(table), grid=grid, alpha=0.1, beta=0.9)
         recs_e = energy_heavy.recommend(workload, context)
         assert recs_e[0].metadata["batch_size"] == 8  # Q
         assert recs_e[0].metadata["combined_score"] == pytest.approx(0.9)
 
-        # beta=0.9 on throughput: P scores 0.9 and Q 0.1.
-        perf_heavy = self._multi_objective(FakePredictor(table), grid=grid, alpha=0.1, beta=0.9)
+        # alpha=0.9 on throughput: P scores 0.9 and Q 0.1.
+        perf_heavy = self._multi_objective(FakePredictor(table), grid=grid, alpha=0.9, beta=0.1)
         recs_p = perf_heavy.recommend(workload, context)
         assert recs_p[0].metadata["batch_size"] == 4  # P
         assert recs_p[0].metadata["combined_score"] == pytest.approx(0.9)
@@ -394,7 +406,7 @@ class TestMultiObjectiveStrategy:
 
         For 1, 2 and 4 GPUs: power_cost = 200, 200, 1520, so power_score = (1520 - cost) / 1320 =
         1.0, 1.0, 0.0; thr_score = (1/100 - 1/thr) / (1/100 - 1/900) = 0.0, 0.9, 1.0; and
-        combined = 0.5 * power_score + 0.5 * thr_score = 0.50, 0.95, 0.50.
+        combined = 0.5 * thr_score + 0.5 * power_score = 0.50, 0.95, 0.50.
         """
         pred = FakePredictor(THREE_WAY_TABLE)
         strat = self._multi_objective(pred, grid=THREE_WAY_GRID, preset="balanced")
@@ -409,7 +421,7 @@ class TestMultiObjectiveStrategy:
         assert by_gpus[1]["throughput_score"] == pytest.approx(0.0)
         assert by_gpus[2]["throughput_score"] == pytest.approx(0.9)
         assert by_gpus[4]["throughput_score"] == pytest.approx(1.0)
-        # combined_score = 0.5 * power + 0.5 * throughput
+        # combined_score = 0.5 * throughput + 0.5 * power
         assert by_gpus[1]["combined_score"] == pytest.approx(0.50)
         assert by_gpus[2]["combined_score"] == pytest.approx(0.95)
         assert by_gpus[4]["combined_score"] == pytest.approx(0.50)

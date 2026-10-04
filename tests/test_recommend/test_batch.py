@@ -1,8 +1,8 @@
 """End-to-end tests for the CSV-to-CSV batch recommender (Kavier predictor, rules feasibility).
 
 The checks rest on facts that hold whatever numbers Kavier produces:
-  * min_gpu ranks feasible configs by (total_gpus asc, throughput desc), so with the runtime
-    guard off it picks the fewest GPUs in the grid.
+  * min_gpu returns the first feasible GPU count in 1, 2, 4, ... for the row's total batch, so with
+    every count feasible it picks 1 GPU with that whole batch; it ignores max_slowdown.
   * The rules checker admits any valid per-device workload (there is no divisibility rule).
   * tokens_per_watt = predicted_throughput / per-GPU power.
   * Per-GPU power lies in [idle, TDP] of the recommended GPU.
@@ -27,12 +27,9 @@ def _write_csv(path, header, rows):
 
 
 def _base_config():
-    """min_gpu with the runtime guard on (max_slowdown=3).
-
-    Configs slower than a third of the fastest are dropped, which excludes the slow 1-GPU layout.
-    """
+    """min_gpu with a grid it does not read: it splits the row's total batch over 1, 2, 4, ... GPUs."""
     return {
-        "strategy": {"name": "min_gpu", "max_slowdown": 3.0},
+        "strategy": {"name": "min_gpu"},
         "predictors": {"performance": "kavier", "energy": "kavier_power", "feasibility": "rules"},
         "grid": {
             "gpu_models": ["NVIDIA-A100-SXM4-80GB"],
@@ -42,10 +39,18 @@ def _base_config():
     }
 
 
-def _guardless_config():
-    """The same grid without max_slowdown, so min_gpu picks the fewest feasible GPUs."""
+def _guarded_config():
+    """The same config with max_slowdown=3, which min_gpu ignores."""
     cfg = _base_config()
-    del cfg["strategy"]["max_slowdown"]
+    cfg["strategy"]["max_slowdown"] = 3.0
+    return cfg
+
+
+def _performance_config():
+    """The performance preset over the same grid. It picks a multi-GPU config, since alpha (the
+    runtime weight) is 0.8."""
+    cfg = _base_config()
+    cfg["strategy"] = {"name": "multi_objective", "preset": "performance"}
     return cfg
 
 
@@ -81,13 +86,12 @@ def test_one_output_row_per_input_row_with_input_echoed(tmp_path):
 
 
 # min_gpu selection.
-def test_min_gpu_selects_single_gpu_when_runtime_guard_disabled(tmp_path):
-    # The rules backend only checks per-device batch >= 1 and total_gpus >= 1, so every
-    # total_gpus in [1, 2, 4, 8] is feasible. Without the runtime guard min_gpu ranks by
-    # total_gpus ascending and picks 1 GPU on 1 node.
+def test_min_gpu_selects_single_gpu_when_every_count_is_feasible(tmp_path):
+    # The rules backend only checks per-device batch >= 1 and total_gpus >= 1, so 1 GPU, the
+    # first count min_gpu checks, is feasible and is the pick, on 1 node.
     _, rows = _run_batch(
         tmp_path,
-        _guardless_config(),
+        _base_config(),
         CANONICAL_HEADER,
         [["mistral-7b-v0.1", "lora", "NVIDIA-A100-SXM4-80GB", 1024, 16]],
     )
@@ -96,32 +100,28 @@ def test_min_gpu_selects_single_gpu_when_runtime_guard_disabled(tmp_path):
     assert int(r["recommended_total_gpus"]) == 1
     assert int(r["recommended_gpus_per_node"]) == 1
     assert int(r["recommended_number_of_nodes"]) == 1
-    # At equal GPU count min_gpu prefers the higher throughput, and Kavier throughput rises
-    # with batch size, so batch 16 beats batch 8.
+    # A row without a layout is a 1-GPU job, so 1 GPU runs its whole batch.
     assert int(r["recommended_batch_size"]) == 16
 
 
-def test_runtime_guard_forces_faster_config_than_min_gpu_alone(tmp_path):
-    # Without the guard min_gpu picks 1 GPU, the slowest feasible config. max_slowdown=3
-    # removes every config slower than a third of the fastest. On this A100/mistral grid
-    # the 8-GPU config is more than 3x the 1-GPU one, so the pick moves to a larger, faster config.
+def test_min_gpu_ignores_max_slowdown(tmp_path):
+    # The runtime guard needs every configuration simulated; min_gpu picks by feasibility alone,
+    # so max_slowdown=3 leaves its 1-GPU pick unchanged.
     row_in = [["mistral-7b-v0.1", "lora", "NVIDIA-A100-SXM4-80GB", 1024, 16]]
-    _, off = _run_batch(tmp_path, _guardless_config(), CANONICAL_HEADER, row_in, name="off")
-    _, guarded = _run_batch(tmp_path, _base_config(), CANONICAL_HEADER, row_in, name="guard")
+    _, off = _run_batch(tmp_path, _base_config(), CANONICAL_HEADER, row_in, name="off")
+    _, guarded = _run_batch(tmp_path, _guarded_config(), CANONICAL_HEADER, row_in, name="guard")
 
-    thr_off = float(off[0]["predicted_throughput"])
-    thr_guard = float(guarded[0]["predicted_throughput"])
-    assert thr_guard > thr_off  # the guard removed the slow pick
-    assert int(guarded[0]["recommended_total_gpus"]) > int(off[0]["recommended_total_gpus"])
+    assert int(guarded[0]["recommended_total_gpus"]) == int(off[0]["recommended_total_gpus"]) == 1
+    assert guarded[0]["predicted_throughput"] == off[0]["predicted_throughput"]
 
 
 # Derived metrics and the GPU power range.
 def test_tokens_per_watt_equals_throughput_divided_by_per_gpu_power(tmp_path):
-    # tokens_per_watt = throughput / per-GPU power. The base config picks a multi-GPU
+    # tokens_per_watt = throughput / per-GPU power. The performance config picks a multi-GPU
     # config, where dividing by total power (power * N) would give a value N times lower.
     _, rows = _run_batch(
         tmp_path,
-        _base_config(),
+        _performance_config(),
         CANONICAL_HEADER,
         [["mistral-7b-v0.1", "lora", "NVIDIA-A100-SXM4-80GB", 1024, 16]],
     )
@@ -136,10 +136,10 @@ def test_tokens_per_watt_equals_throughput_divided_by_per_gpu_power(tmp_path):
 def test_per_gpu_power_within_a100_sxm4_envelope(tmp_path):
     # A100-SXM4-80GB datasheet: idle 75 W, TDP 400 W (coastline.sdk.library.hardware).
     # predicted_power_watts is per GPU, so it lies in [75, 400] W for any GPU count. The
-    # base config picks a multi-GPU config, whose total power would exceed 400 W.
+    # performance config picks a multi-GPU config, whose total power would exceed 400 W.
     _, rows = _run_batch(
         tmp_path,
-        _base_config(),
+        _performance_config(),
         CANONICAL_HEADER,
         [["mistral-7b-v0.1", "lora", "NVIDIA-A100-SXM4-80GB", 1024, 16]],
     )
@@ -152,7 +152,7 @@ def test_custom_column_override_maps_headers(tmp_path):
     # By default each column is named after its WorkloadSpec field. input.columns adds other
     # spellings: here the_model maps to llm_model and the_gpu to gpu_model. If the mapping
     # were ignored, the row would come back feasible=False.
-    cfg = _guardless_config()
+    cfg = _base_config()
     cfg["input"] = {"columns": {"the_model": "llm_model", "the_gpu": "gpu_model"}}
     _, rows = _run_batch(
         tmp_path,
@@ -230,3 +230,14 @@ def test_unknown_gpu_row_is_marked_feasible_false_not_crash(tmp_path):
     assert rows[1]["feasible"] == "False"
     assert rows[1]["recommended_total_gpus"] == ""
     assert rows[1]["predicted_throughput"] == ""
+
+
+def test_min_gpu_reads_the_rows_layout(tmp_path):
+    # 4 per device on 4 GPUs is a total batch of 16, which the rules check admits on 1 GPU.
+    header = [*CANONICAL_HEADER, "gpus_per_node", "number_of_nodes"]
+    _, rows = _run_batch(
+        tmp_path, _base_config(), header, [["mistral-7b-v0.1", "lora", "NVIDIA-A100-SXM4-80GB", 1024, 4, 4, 1]]
+    )
+    r = rows[0]
+    assert r["feasible"] == "True", r["error"]
+    assert (int(r["recommended_total_gpus"]), int(r["recommended_batch_size"])) == (1, 16)

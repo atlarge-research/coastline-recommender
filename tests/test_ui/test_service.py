@@ -496,9 +496,9 @@ def test_load_strategy_config_uses_repo_experiment_yaml(clean_strategy_env):
     assert experiment.is_file(), f"expected {experiment} to exist"
 
     config = _load_strategy_config()
-    # experiment.yaml declares multi_objective/balanced and a predictors block.
+    # experiment.yaml declares multi_objective/performance and a predictors block.
     assert config["strategy"]["name"] == "multi_objective"
-    assert config["strategy"]["preset"] == "balanced"
+    assert config["strategy"]["preset"] == "performance"
     assert config["predictors"]["performance"] == "intelligent"
 
 

@@ -317,3 +317,9 @@ def test_recommend_is_deterministic():
 
 if __name__ == "__main__":  # pragma: no cover - manual run convenience
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+def test_a_zero_max_gpus_fails_the_row_with_its_name():
+    out = coastline.recommend([{**_ROW, "max_gpus": 0}], predictor="kavier", feasibility="rules")
+    assert not bool(out.iloc[0]["feasible"])
+    assert out.iloc[0]["error"] == "max_gpus must be >= 1, got 0"

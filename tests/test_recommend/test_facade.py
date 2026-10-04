@@ -17,9 +17,9 @@ from coastline import Coastline
 from coastline.sdk.constants import EMPIRICAL_OOM_TOKEN_BUDGET
 from coastline.sdk.models.recommendation import Recommendation
 
-# Preset to (alpha = power weight, beta = throughput weight), copied from
+# Preset to (alpha = runtime weight, beta = energy weight), as in the thesis, copied from
 # coastline.sdk.pipeline.selection.PRESET_WEIGHTS so that a change to that table fails here.
-SPEC_PRESET_WEIGHTS = {"energy": (0.8, 0.2), "balanced": (0.5, 0.5), "performance": (0.2, 0.8)}
+SPEC_PRESET_WEIGHTS = {"energy": (0.2, 0.8), "balanced": (0.5, 0.5), "performance": (0.8, 0.2)}
 
 
 def _workload():
@@ -174,7 +174,7 @@ def _top_total_gpus(recs):
 def test_energy_preset_favors_fewer_gpus_than_performance_preset():
     """The energy preset picks fewer GPUs than the performance preset.
 
-    power_cost = per-GPU watts x GPU count, so a power weight of 0.8 favours fewer GPUs.
+    power_cost = per-GPU watts x GPU count, so an energy weight (beta) of 0.8 favours fewer GPUs.
     """
     rec = Coastline("kavier")
     budget = [1, 2, 4, 8]
@@ -189,19 +189,19 @@ def test_energy_preset_favors_fewer_gpus_than_performance_preset():
 
 
 def test_explicit_alpha_beta_override_preset_and_reproduce_extremes():
-    """Given alpha and beta override the preset: alpha=0.8 picks like the energy preset,
-    beta=0.8 like the performance preset, and the preset is recorded as 'custom'."""
+    """Given alpha and beta override the preset: beta=0.8 picks like the energy preset,
+    alpha=0.8 like the performance preset, and the preset is recorded as 'custom'."""
     rec = Coastline("kavier")
     budget = [1, 2, 4, 8]
-    energy_like = rec.recommend(_workload(), total_gpus=budget, alpha=0.8, beta=0.2, top_k=1)
-    perf_like = rec.recommend(_workload(), total_gpus=budget, alpha=0.2, beta=0.8, top_k=1)
+    energy_like = rec.recommend(_workload(), total_gpus=budget, alpha=0.2, beta=0.8, top_k=1)
+    perf_like = rec.recommend(_workload(), total_gpus=budget, alpha=0.8, beta=0.2, top_k=1)
     assert energy_like and perf_like
     assert _top_total_gpus(energy_like) <= _top_total_gpus(perf_like)
     assert _top_total_gpus(energy_like) != _top_total_gpus(perf_like)
     # 0.8 + 0.2 = 1, so normalization leaves the weights unchanged.
-    assert (energy_like[0].metadata["alpha"], energy_like[0].metadata["beta"]) == (0.8, 0.2)
+    assert (energy_like[0].metadata["alpha"], energy_like[0].metadata["beta"]) == (0.2, 0.8)
     assert energy_like[0].metadata["preset"] == "custom"
-    assert (perf_like[0].metadata["alpha"], perf_like[0].metadata["beta"]) == (0.2, 0.8)
+    assert (perf_like[0].metadata["alpha"], perf_like[0].metadata["beta"]) == (0.8, 0.2)
 
 
 # Input validation: an empty CSV raises ValueError, a wrong type TypeError

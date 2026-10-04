@@ -10,10 +10,12 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from coastline.sdk.constants import (
     DEFAULT_BATCH_SIZES,
+    DEFAULT_GOAL,
     DEFAULT_GPUS_PER_NODE,
     DEFAULT_TOKENS_PER_SAMPLE,
     GPU_BUDGETS,
     Method,
+    goal_key,
 )
 from coastline.sdk.models.context import SystemContext
 from coastline.sdk.models.recommendation import Recommendation
@@ -110,20 +112,21 @@ def defaults(opts: dict[str, list]) -> dict[str, Any]:
         "dataset_size": 50_000,
         "epochs": 1,
         "max_gpus": 16,
-        "goal_label": "Multi-objective balanced",
+        "goal_label": _goals.goal_to_label(DEFAULT_GOAL),
         "predictor": "intelligent",
     }
 
 
 def build_config(
     answers: dict[str, Any],
-    top_k: int,
+    top_k: Optional[int],
     max_slowdown: Optional[float] = None,
     feasibility: str = "autoconf",
     workers: Optional[int] = None,
 ) -> tuple[dict, str, Optional[str]]:
     """Build strategy-config dict for PolicyFactory; max_slowdown maps to runtime_guard_k.
 
+    ``top_k`` None leaves it to the policy: 5 configurations, or 1 for min_gpu.
     ``feasibility`` selects the checker (``autoconf`` | ``rules`` | ``none``); the
     answers dict may override it via a ``feasibility`` key.
     ``workers`` sets ``runtime.parallel_workers``, the per-stage worker count the pipeline
@@ -131,7 +134,7 @@ def build_config(
     """
     strategy_name, preset = GOALS[answers["goal_label"]]
     predictor = answers["predictor"]
-    strategy: dict[str, Any] = {"name": strategy_name, "preset": preset or "balanced"}
+    strategy: dict[str, Any] = {"name": strategy_name, "preset": preset or DEFAULT_GOAL}
     if max_slowdown is not None:
         strategy["runtime_guard_k"] = float(max_slowdown)
     predictors: dict[str, Any] = {
@@ -168,19 +171,27 @@ def _gpus_per_node(answers: dict[str, Any]) -> int:
 
 
 def build_workload(answers: dict[str, Any]) -> WorkloadSpec:
+    """The job, with its own layout when ``answers`` gives ``gpus_per_node`` or ``number_of_nodes``.
+
+    Without one it is a 1-GPU job; min_gpu reads the layout for the job's total batch, and the
+    weighted policies search their grid whatever it is.
+    """
     return WorkloadSpec(
         llm_model=answers["llm_model"],
         fine_tuning_method=answers["fine_tuning_method"],
         gpu_model=answers["gpu_model"],
         tokens_per_sample=int(answers["tokens_per_sample"]),
         batch_size=int(answers["batch_size"]),
-        gpus_per_node=_gpus_per_node(answers),
-        number_of_nodes=1,
+        gpus_per_node=answers.get("gpus_per_node"),
+        number_of_nodes=answers.get("number_of_nodes"),
     )
 
 
 def build_context(answers: dict[str, Any]) -> SystemContext:
     max_gpus = int(answers["max_gpus"])
+    if max_gpus < 1:
+        # The same check and text as the facade's.
+        raise ValueError(f"max_gpus must be >= 1, got {max_gpus}")
     return SystemContext.for_gpus([answers["gpu_model"]], max_gpus=max_gpus, gpus_per_node=_gpus_per_node(answers))
 
 
@@ -330,7 +341,7 @@ def run_request(
 
 def run_pipeline(
     answers: dict[str, Any],
-    top_k: int,
+    top_k: Optional[int],
     max_slowdown: Optional[float] = None,
     feasibility: str = "autoconf",
     strategy_cache: Optional[StrategyCache] = None,
@@ -393,12 +404,19 @@ def recommendation_rationale(recs: list[Recommendation], meta: dict[str, Any]) -
         return "No feasible configuration in the search space."
     top = recs[0]
     # The phrase comes from the preset (balanced, performance, energy) or, for min_gpu, the
-    # strategy name; both are goals in `_goals`.
-    goal = (
-        _goals.rationale_phrase(meta.get("preset"))
-        or _goals.rationale_phrase(meta.get("strategy_name"))
-        or "the best throughput/energy trade-off"
-    )
+    # strategy name; both are goals in `_goals`. The preset the pipeline stored on the pick is the
+    # one it ranked with: the default goal's when the caller gave none, 'custom' for given weights.
+    strategy = meta.get("strategy_name")
+    preset = (top.metadata or {}).get("preset") or meta.get("preset")
+    if strategy and goal_key(strategy) == "min_gpu":
+        # min_gpu picks by GPU count, so a preset left in the config does not describe its pick.
+        goal = _goals.rationale_phrase(strategy) or "the fewest GPUs that fit"
+    else:
+        goal = (
+            _goals.rationale_phrase(preset)
+            or _goals.rationale_phrase(strategy)
+            or "the best throughput/energy trade-off"
+        )
     plural = "s" if top.total_gpus != 1 else ""
     top_batch = (top.metadata or {}).get("batch_size")
     config = f"{top.gpus_per_node}x{top.number_of_nodes}" + (f", batch {top_batch}" if top_batch else "")

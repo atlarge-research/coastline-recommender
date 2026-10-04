@@ -7,9 +7,11 @@
     coastline.recommend_csv(...)   a CSV of workloads and a config file in; a CSV of recommendations out
 
 A workload sets llm_model, fine_tuning_method, gpu_model, tokens_per_sample, and batch_size
-(per device). The goal is balanced, performance, energy, or min_gpu. Here, the three entry points
-search the same grid and pick the same configuration. The `coastline` CLI and the `coastline-ui`
-dashboard call the same engine.
+(per device). The goal is performance (the default), balanced, energy, or min_gpu. Here, the three
+entry points search the same grid and pick the same configuration. min_gpu searches no grid: it
+keeps the job's total batch (batch_size on 1 GPU here, since the jobs set no gpus_per_node or
+number_of_nodes) and returns the first feasible GPU count in 1, 2, 4, ... with that batch split over
+the GPUs. The `coastline` CLI and the `coastline-ui` dashboard call the same engine.
 
 Run with: python docs/usage.py
 """
@@ -33,8 +35,9 @@ batch_sizes = [4, 8, 16, 32]  # per-device batch sizes to search
 gpu_counts = [1, 2, 4, 8]  # GPU counts to search
 
 # 1) One workload. Kavier predicts throughput and power; AutoConf checks feasibility (the default).
+# Without a goal, the recommender ranks for performance.
 recommender = coastline(predictor="kavier")
-ranked = recommender.recommend(job, goal="balanced", batch_sizes=batch_sizes, total_gpus=gpu_counts)
+ranked = recommender.recommend(job, batch_sizes=batch_sizes, total_gpus=gpu_counts)
 for rank, rec in enumerate(ranked[:3], start=1):
     print(f"{rank}. {rec.total_gpus} GPUs, batch {rec.metadata['batch_size']}, {rec.predicted_throughput:.0f} tokens/s")
 
@@ -42,7 +45,7 @@ for rank, rec in enumerate(ranked[:3], start=1):
 # runtime_s and energy_wh cover dataset_size samples for the given number of epochs.
 other = {**job, "llm_model": "granite-3.3-8b", "fine_tuning_method": "full", "tokens_per_sample": 4096, "batch_size": 4}
 jobs = pd.DataFrame([job, other])
-for goal in ("balanced", "performance", "energy", "min_gpu"):
+for goal in ("performance", "balanced", "energy", "min_gpu"):
     picks = coastline.recommend(
         jobs, goal=goal, predictor="kavier", batch_sizes=batch_sizes, max_gpus=8, dataset_size=50_000, epochs=1
     )
@@ -52,7 +55,7 @@ for goal in ("balanced", "performance", "energy", "min_gpu"):
 # 3) CSV in, CSV out. The config file sets the policy, the predictors, and the search grid.
 tmp = Path(tempfile.mkdtemp())
 config = {
-    "strategy": {"name": "multi_objective", "preset": "balanced"},
+    "strategy": {"name": "multi_objective", "preset": "performance"},
     "predictors": {"performance": "kavier", "energy": "kavier_power", "feasibility": "autoconf"},
     "grid": {"batch_sizes": batch_sizes, "total_gpus": gpu_counts},
 }

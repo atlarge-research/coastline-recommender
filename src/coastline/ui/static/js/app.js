@@ -121,17 +121,18 @@ function initHwToggle() {
 }
 const hwMode = () => document.querySelector("#hwMode .seg.active").dataset.mode;
 
+// alpha weights the runtime score and beta the energy score.
 const PRESET_NOTE = {
   balanced: "Balanced: weights runtime and power equally (alpha/beta = 0.5 / 0.5).",
-  performance: "Performance: favours throughput over power (alpha/beta = 0.2 / 0.8).",
-  energy: "Energy-saver: favours lower power over throughput (alpha/beta = 0.8 / 0.2).",
+  performance: "Performance: favours a short runtime over power (alpha/beta = 0.8 / 0.2).",
+  energy: "Energy-saver: favours lower power over runtime (alpha/beta = 0.2 / 0.8).",
 };
 function syncPolicy() {
   const isMultiObjective = val("rec_strategy") === "multi_objective";
   $("presetField").style.display = isMultiObjective ? "" : "none";
   $("policyNote").textContent = isMultiObjective
     ? PRESET_NOTE[val("rec_preset")]
-    : "Minimum GPUs: the fewest total GPUs that remain feasible for the workload.";
+    : "Minimum GPUs: the first of 1, 2, 4, ... GPUs that is feasible with your batch split evenly over them.";
 }
 
 function recPayload() {
@@ -208,7 +209,7 @@ function renderRec(data) {
   const ws = data.workload_summary || {};
   const label = data.strategy === "min_gpu"
     ? "Minimum GPUs"
-    : `Multi-objective (${(data.preset || "balanced").replace(/^\w/, (c) => c.toUpperCase())})`;
+    : `Multi-objective (${(data.preset || "performance").replace(/^\w/, (c) => c.toUpperCase())})`;
   const cands = data.candidates || [];
   $("recSub").textContent = `${ws.llm_model}, ${ws.fine_tuning_method}, ${ws.gpu_model}`;
   $("recSummary").innerHTML = `

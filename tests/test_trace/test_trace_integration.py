@@ -81,14 +81,14 @@ def test_recommend_trace_rules_estimate_equals_total_tokens_over_throughput(tmp_
     in_csv = _write_trace(tmp_path, [_trace_row()])
     out_csv = str(tmp_path / "enriched.csv")
 
-    df = recommend_trace(in_csv, out_csv, method="kavier", feasibility="rules")
+    df = recommend_trace(in_csv, out_csv, method="kavier", goal="min_gpu", feasibility="rules")
 
     # enriched CSV round-trips to disk with the single input row
     assert (tmp_path / "enriched.csv").exists(), "enriched CSV not written"
     on_disk = pd.read_csv(out_csv)
     assert len(on_disk) == len(df) == 1, "row count must match the 1-row input"
 
-    # min_gpu with max_gpus = num_gpus_per_node * num_nodes = 1 leaves one layout: 1 GPU on 1 node.
+    # min_gpu: the rules check admits the job's total batch of 8 on 1 GPU.
     assert int(on_disk["resources.num_nodes"].iloc[0]) == 1
     assert int(on_disk["resources.num_gpus_per_node"].iloc[0]) == 1
 
@@ -115,25 +115,34 @@ def test_recommend_trace_estimated_duration_scales_linearly_with_runtime(tmp_pat
 
 
 def test_recommend_trace_autoconf_default_does_not_fall_back_to_rules(tmp_path):
-    """The default feasibility='autoconf' runs the AutoConf OOM check, which limits a full
-    fine-tune of a 7B model on one 80GB A100 to a smaller batch than the 'rules' path allows.
+    """The default feasibility='autoconf' runs the AutoConf OOM check, which rejects a full
+    fine-tune of a 7B model on one 80GB A100 that the 'rules' path admits.
 
-    The smaller batch gives a lower throughput and a longer estimated_duration. Equal estimates
-    would mean autoconf fell back to the rules path.
+    min_gpu then moves on to 2 GPUs, which give a higher throughput and a shorter
+    estimated_duration. Equal estimates would mean autoconf fell back to the rules path.
     """
     from coastline.sdk.trace.recommend import recommend_trace
 
     in_csv = _write_trace(tmp_path, [_trace_row()])
 
-    df_auto = recommend_trace(in_csv, str(tmp_path / "auto.csv"), method="kavier")  # default = autoconf
-    df_rules = recommend_trace(in_csv, str(tmp_path / "rules.csv"), method="kavier", feasibility="rules")
+    # feasibility defaults to autoconf.
+    df_auto = recommend_trace(in_csv, str(tmp_path / "auto.csv"), method="kavier", goal="min_gpu")
+    df_rules = recommend_trace(
+        in_csv, str(tmp_path / "rules.csv"), method="kavier", goal="min_gpu", feasibility="rules"
+    )
 
     est_auto = float(pd.to_numeric(df_auto["metadata.estimated_duration_kavier"], errors="coerce").iloc[0])
     est_rules = float(pd.to_numeric(df_rules["metadata.estimated_duration_kavier"], errors="coerce").iloc[0])
 
     assert math.isfinite(est_auto) and est_auto > 0, "autoconf path produced no positive estimate"
-    # The OOM-aware batch cap lowers the throughput, so the estimate is longer than with rules.
-    assert est_auto > est_rules, "autoconf must not collapse onto the rules estimate"
+
+    def gpus(df: pd.DataFrame) -> int:
+        return int(df["resources.num_gpus_per_node"].iloc[0]) * int(df["resources.num_nodes"].iloc[0])
+
+    # The OOM check rejects 1 GPU, so the autoconf pick has more GPUs and a shorter estimate.
+    assert gpus(df_rules) == 1
+    assert gpus(df_auto) > 1, "autoconf must not collapse onto the rules pick"
+    assert est_auto < est_rules, "autoconf must not collapse onto the rules estimate"
 
 
 # recommend(feasibility='rules') without AutoConf / without the fallback env

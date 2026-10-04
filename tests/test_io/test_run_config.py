@@ -88,12 +88,12 @@ class TestValidConfig:
     def test_strategy_partial_merge_keeps_default_preset_keys(self, tmp_path):
         """A strategy section with only ``name`` merges over the default.
 
-        The default strategy is ``{name: multi_objective, preset: balanced}``, so
-        ``preset: balanced`` is kept.
+        The default strategy is ``{name: multi_objective, preset: performance}``, so
+        ``preset: performance`` is kept.
         """
         payload = {"strategy": {"name": "multi_objective"}}
         cfg = load_strategy_config(_write_yaml(tmp_path, payload))
-        assert cfg["strategy"] == {"name": "multi_objective", "preset": "balanced"}
+        assert cfg["strategy"] == {"name": "multi_objective", "preset": "performance"}
 
     def test_grid_partial_merge_keeps_other_default_keys(self, tmp_path):
         """Overriding one grid key keeps the remaining default grid keys."""
@@ -118,11 +118,12 @@ class TestDefaults:
         """A missing file returns the default strategy config."""
         cfg = load_strategy_config(tmp_path / "does_not_exist.yaml")
         assert cfg["strategy"]["name"] == "multi_objective"
-        assert cfg["strategy"]["preset"] == "balanced"
+        assert cfg["strategy"]["preset"] == "performance"
         assert cfg["predictors"]["performance"] == "intelligent"
         assert cfg["predictors"]["energy"] == "kavier_power"
         assert cfg["predictors"]["feasibility"] == "autoconf"
-        assert cfg["grid"]["top_k"] == 5
+        # Unset, so each policy uses its own default (5 configurations, 1 for min_gpu).
+        assert "top_k" not in cfg["grid"]
 
     def test_directory_path_treated_as_missing(self, tmp_path):
         """A directory path (``is_file()`` False) returns the defaults."""
@@ -140,7 +141,7 @@ class TestDefaults:
         """Unknown top-level keys are ignored; recognised defaults remain intact."""
         payload = {"totally_unknown": {"x": 1}, "another": 2}
         cfg = load_strategy_config(_write_yaml(tmp_path, payload))
-        assert cfg["strategy"] == {"name": "multi_objective", "preset": "balanced"}
+        assert cfg["strategy"] == {"name": "multi_objective", "preset": "performance"}
         assert "totally_unknown" not in cfg
 
 
@@ -157,7 +158,7 @@ class TestEnvScoping:
         after = load_strategy_config(path)
 
         # strategy.name comes from the file and preset from the default.
-        assert baseline["strategy"] == {"name": "multi_objective", "preset": "balanced"}
+        assert baseline["strategy"] == {"name": "multi_objective", "preset": "performance"}
         # The environment variables leave the output unchanged.
         assert after == baseline
 
@@ -197,13 +198,13 @@ class TestNoGlobalMutation:
         assert a is not b
         assert a["grid"] is not b["grid"]
         a["grid"]["top_k"] = -999
-        assert b["grid"]["top_k"] != -999
+        assert b["grid"].get("top_k") != -999
 
     def test_full_config_returns_fresh_nested_objects(self, tmp_path):
         """A supplied section is merged into a new dict (``_merge_dict``), so changing it leaves
         the module default unchanged."""
         cfg = load_strategy_config(_write_yaml(tmp_path, {"grid": {"top_k": 7}}))
         assert cfg["grid"] is not _DEFAULT_STRATEGY_CONFIG["grid"]
-        before = _DEFAULT_STRATEGY_CONFIG["grid"]["top_k"]
+        before = _DEFAULT_STRATEGY_CONFIG["grid"].get("top_k")
         cfg["grid"]["top_k"] = -1
-        assert _DEFAULT_STRATEGY_CONFIG["grid"]["top_k"] == before
+        assert _DEFAULT_STRATEGY_CONFIG["grid"].get("top_k") == before

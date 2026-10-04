@@ -80,11 +80,11 @@ def test_an_unset_predictor_still_means_the_intelligent_default():
 @pytest.mark.parametrize(
     "given,canonical,weights",
     [
-        ("Performance", "performance", (0.2, 0.8)),
-        ("ENERGY", "energy", (0.8, 0.2)),
+        ("Performance", "performance", (0.8, 0.2)),
+        ("ENERGY", "energy", (0.2, 0.8)),
         (" Balanced ", "balanced", (0.5, 0.5)),
-        ("Energy-Frontier", "energy-frontier", (0.8, 0.2)),
-        (Preset.ENERGY, "energy", (0.8, 0.2)),
+        ("Energy-Frontier", "energy-frontier", (0.2, 0.8)),
+        (Preset.ENERGY, "energy", (0.2, 0.8)),
     ],
 )
 def test_preset_resolves_regardless_of_case(given, canonical, weights):
@@ -101,10 +101,10 @@ def test_unknown_preset_raises_and_lists_the_options(preset):
     assert "performance" in str(excinfo.value) and "balanced" in str(excinfo.value)
 
 
-def test_no_preset_still_means_balanced():
+def test_no_preset_means_the_default_goal():
     strat = _strategy()
-    assert strat.preset == "balanced"
-    assert (strat.alpha, strat.beta) == (0.5, 0.5)
+    assert strat.preset == "performance"
+    assert (strat.alpha, strat.beta) == (0.8, 0.2)
 
 
 def test_explicit_weights_still_win_over_a_preset():

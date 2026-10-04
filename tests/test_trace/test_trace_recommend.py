@@ -148,8 +148,8 @@ def test_estimated_duration_scales_linearly_with_the_jobs_actual_work(tmp_path):
     # Twice the work (7200 s against 3600 s at the same tps) gives twice the duration.
     assert two[col] == pytest.approx(2.0 * one[col])
 
-    # min_gpu picks the fewest feasible GPUs, so the job stays at <= 8 GPUs, well within the
-    # cluster budget from infrastructure.yaml, which is the upper limit.
+    # min_gpu picks the first feasible GPU count in 1, 2, 4, ..., so the job stays at <= 8 GPUs,
+    # well within the cluster budget from infrastructure.yaml, which is the upper limit.
     total = int(df["resources.num_gpus_per_node"].iloc[0]) * int(df["resources.num_nodes"].iloc[0])
     assert 1 <= total <= 8
 

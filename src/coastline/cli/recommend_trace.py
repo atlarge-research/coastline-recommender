@@ -7,8 +7,9 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from coastline.cli._args import add_trace_layout_args
-from coastline.cli._shared import FriendlyParser, report_errors
-from coastline.sdk.constants import FeasibilityMode
+from coastline.cli._shared import FriendlyParser, name_type, report_errors
+from coastline.sdk.constants import DEFAULT_GOAL, FeasibilityMode
+from coastline.sdk.recommend._goals import normalize_goal
 from coastline.sdk.trace.recommend import recommend_trace
 
 
@@ -23,9 +24,12 @@ def _build_parser() -> FriendlyParser:
     p.add_argument("--output", required=True, help="Output (recommended trace) CSV.")
     p.add_argument(
         "--goal",
-        default="min_gpu",
-        choices=["min_gpu", "performance", "energy", "balanced"],
-        help="Optimisation goal for recommendations (default: min_gpu).",
+        default=DEFAULT_GOAL,
+        type=name_type(normalize_goal),
+        help="Optimisation goal for recommendations (default: performance). performance, balanced and "
+        "energy (or energy-saver) rank the grid on alpha * runtime score + beta * energy score. min_gpu "
+        "(or min-gpu) keeps each job's total batch, metadata.batch_size, and gives it the first feasible GPU "
+        "count of 1, 2, 4 and so on.",
     )
     p.add_argument(
         "--feasibility",

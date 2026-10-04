@@ -17,7 +17,7 @@ from coastline.sdk.pipeline.parallel import (
     resolve_workers,
 )
 
-# Built-in policy (multi_objective, balanced) for the CLI, the Python API and the UI, used when
+# Built-in policy (multi_objective, performance) for the CLI, the Python API and the UI, used when
 # no config file is found.
 _BUILTIN_DEFAULT_PATH = Path(__file__).parent / "default_experiment.yaml"
 

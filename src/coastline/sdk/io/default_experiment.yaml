@@ -4,7 +4,7 @@
 # only. Keep the two in sync.
 strategy:
   name: "multi_objective"
-  preset: "balanced"
+  preset: "performance"
 
 predictors:
   performance: "intelligent"
@@ -14,7 +14,7 @@ predictors:
 grid:
   batch_sizes: [4, 8, 16, 32, 64]
   total_gpus: [1, 2, 4, 8, 16, 32]
-  top_k: 5
+  # top_k: 5      # configurations returned; unset, multi_objective returns 5 and min_gpu 1
 
 # Settings for the machine Coastline runs on (the cluster is described in infrastructure.yaml).
 # Each pipeline stage splits its candidates across this many processes; 1 runs in one process.

@@ -11,6 +11,43 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The version is se
 ### Added
 
 - The Zenodo DOI (10.5281/zenodo.23119267, all versions) in the README, `CITATION.cff` and the docs.
+- One table of other goal and preset names for every entry point (`coastline.recommend`, `coastline(...).recommend`,
+  `recommend_csv`, `recommend-job`, `recommend-trace`, `explain` and the dashboard): `energy-saver`, the thesis
+  name of `energy`, `runtime` and `throughput` for `performance`, and `min-gpu` and `fewest` for `min_gpu`. Letter
+  case does not matter, and `-`, `_` and a space between words read alike.
+- `coastline.recommend` reads a row's `gpus_per_node` and `number_of_nodes` as the job's own layout under `min_gpu`;
+  the other goals ignore them.
+- `NoFeasibleGPUCountError`, a `RuntimeError` raised when `min_gpu` finds no feasible GPU count; the dashboard
+  says so.
+
+### Changed
+
+- The default goal is `performance` on every entry point: `coastline.recommend`, `coastline(...).recommend`,
+  `explain`, `recommend-trace`, `recommend-job`, `recommend_csv`, the bundled configs and the dashboard. A config
+  without a preset ranks with it, and the rationale names it.
+- `alpha` is the performance (runtime) weight and `beta` the energy weight, as in the thesis: performance
+  0.8/0.2, balanced 0.5/0.5, energy 0.2/0.8. The presets rank the same configurations first; a caller's own
+  `alpha` and `beta` swap meaning.
+- `min_gpu` follows IBM AutoConf's min-GPU recommender, as in the thesis. It keeps the job's total batch
+  (per-device batch x `gpus_per_node` x `number_of_nodes`, 1 GPU without a layout) and returns the first feasible
+  GPU count in 1, 2, 4, ... with that batch split evenly. It simulates only its picks, drops a pick it cannot
+  predict, and ignores the grid and `max_slowdown`.
+- `min_gpu` returns one configuration unless `top_k` is set. `experiment.yaml` and the packaged
+  `default_experiment.yaml` leave `top_k` unset, so multi-objective returns 5 with them.
+- `recommend-trace` reads `metadata.batch_size` as each job's total batch for every goal and writes back the
+  recommended per-device batch x GPUs. Without a per-device batch column, the weighted goals start from the total
+  over the job's GPUs, and a row whose total does not split evenly is kept unchanged with a note. `--goal min_gpu`
+  keeps each job's total batch, and an unknown goal fails before any row runs. The totals in `sample_trace.csv`
+  split evenly over their GPUs.
+- `explain` renames the score columns `t_score` to `r_score` (runtime) and `p_score` to `e_score` (energy) and
+  prints them in the order of the weights. Its `min_gpu` table has no score columns.
+- `GridWorkflowPipeline` checks its selection policy when it is built, in any letter case, and raises `ValueError`
+  listing the valid ones. `rank_candidates` raises `ValueError` for a policy other than energy, balanced or
+  performance.
+- `coastline.recommend` and the REPL fail a `max_gpus` below 1 with `max_gpus must be >= 1`, as
+  `coastline(...).recommend` does.
+- In `coastline.recommend`, an integer column takes a whole number written as a float, such as `8.0`. A value below
+  1 or a fraction fails the row with a message that names the column.
 
 ## [0.2.3] - 2026-10-03
 
