@@ -141,7 +141,7 @@ class TestGridConfigFromDict:
         gc = grid_config_from_dict(None, max_gpus=8)
         assert gc.total_gpus == [1, 2, 4, 8]
         assert gc.batch_sizes == DEFAULT_BATCH_SIZES
-        assert gc.top_k == 5  # default
+        assert gc.top_k is None  # unset: each policy uses its own default
 
     def test_explicit_list_overrides_max_gpus(self):
         gc = grid_config_from_dict({"grid": {"total_gpus": [3, 6]}}, max_gpus=8)
@@ -156,7 +156,18 @@ class TestGridConfigFromDict:
         gc = grid_config_from_dict(None)
         assert gc.total_gpus == []
         assert gc.batch_sizes == DEFAULT_BATCH_SIZES
-        assert gc.top_k == 5
+        assert gc.top_k is None
+
+    def test_an_unset_top_k_is_5_for_the_weighted_policies_and_1_for_min_gpu(self):
+        gc = grid_config_from_dict(None)
+        assert gc.top_k_for("performance") == 5
+        assert gc.top_k_for("balanced") == 5
+        assert gc.top_k_for("min_gpu") == 1
+
+    def test_a_set_top_k_applies_to_every_policy(self):
+        gc = grid_config_from_dict({"grid": {"top_k": 3}})
+        assert gc.top_k_for("performance") == 3
+        assert gc.top_k_for("min_gpu") == 3
 
 
 # generate_candidates: batch_sizes x total_gpus, clipped to the context

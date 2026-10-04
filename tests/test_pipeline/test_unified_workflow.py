@@ -110,22 +110,6 @@ def test_grid_drops_layout_exceeding_max_nodes(workload):
     assert {c.total_gpus for c in candidates} == {8}  # 16 needs 2 nodes > max_nodes=1
 
 
-# min_gpu
-
-
-def test_min_gpu_ranks_by_gpu_count_then_throughput():
-    rows = [
-        _cand(total_gpus=4, throughput=100),
-        _cand(total_gpus=2, throughput=60),
-        _cand(total_gpus=2, throughput=90),
-        _cand(total_gpus=8, throughput=200),
-    ]
-    ranked = rank_candidates(rows, "min_gpu", top_k=4)
-
-    # Sorted by total_gpus ascending, then by throughput descending.
-    assert [(c.total_gpus, c.throughput) for c in ranked] == [(2, 90), (2, 60), (4, 100), (8, 200)]
-
-
 # normalize
 
 
@@ -166,13 +150,13 @@ def test_normalize_frontier_marks_pareto_dominated():
 
 
 def test_rank_energy_preset_weights_power_heavily():
-    # combined = alpha * power_score + beta * throughput_score, with energy weights 0.8 and 0.2.
+    # combined = alpha * throughput_score + beta * power_score, with energy weights 0.2 and 0.8.
     a = _cand(total_gpus=1, throughput=100, power_score=1.0, throughput_score=0.0)
     b = _cand(total_gpus=2, throughput=300, power_score=0.6, throughput_score=0.9)
     c = _cand(total_gpus=4, throughput=400, power_score=0.0, throughput_score=1.0)
-    ranked = rank_candidates([a, b, c], "energy", alpha=0.8, beta=0.2, top_k=3)
+    ranked = rank_candidates([a, b, c], "energy", alpha=0.2, beta=0.8, top_k=3)
 
-    # a = 0.8, b = 0.48 + 0.18 = 0.66, c = 0.2
+    # a = 0.8, b = 0.18 + 0.48 = 0.66, c = 0.2
     assert a.combined_score == pytest.approx(0.80)
     assert b.combined_score == pytest.approx(0.66)
     assert c.combined_score == pytest.approx(0.20)
@@ -181,13 +165,13 @@ def test_rank_energy_preset_weights_power_heavily():
 
 
 def test_rank_performance_preset_penalizes_extra_gpus():
-    # The same candidates with performance weights alpha=0.2, beta=0.8.
+    # The same candidates with performance weights alpha=0.8, beta=0.2.
     a = _cand(total_gpus=1, throughput=100, power_score=1.0, throughput_score=0.0)
     b = _cand(total_gpus=2, throughput=300, power_score=0.6, throughput_score=0.9)
     c = _cand(total_gpus=4, throughput=400, power_score=0.0, throughput_score=1.0)
-    ranked = rank_candidates([a, b, c], "performance", alpha=0.2, beta=0.8, top_k=3)
+    ranked = rank_candidates([a, b, c], "performance", alpha=0.8, beta=0.2, top_k=3)
 
-    # a = 0.2, b = 0.12 + 0.72 = 0.84, c = 0.8
+    # a = 0.2, b = 0.72 + 0.12 = 0.84, c = 0.8
     assert a.combined_score == pytest.approx(0.20)
     assert b.combined_score == pytest.approx(0.84)
     assert c.combined_score == pytest.approx(0.80)
@@ -208,10 +192,10 @@ def test_rank_breaks_near_ties_toward_higher_throughput():
 
 
 def test_preset_weights_match_documented_spec():
-    # Presets are (power weight, throughput weight).
-    assert PRESET_WEIGHTS["energy"] == (0.8, 0.2)
+    # Presets are (runtime weight, energy weight), as in the thesis.
+    assert PRESET_WEIGHTS["energy"] == (0.2, 0.8)
     assert PRESET_WEIGHTS["balanced"] == (0.5, 0.5)
-    assert PRESET_WEIGHTS["performance"] == (0.2, 0.8)
+    assert PRESET_WEIGHTS["performance"] == (0.8, 0.2)
 
 
 # feasibility
@@ -280,12 +264,11 @@ def test_workflow_min_gpu_end_to_end_picks_fewest_gpus(workload, context):
     )
     recs = pipeline.recommend(workload, context)
 
-    # Kavier supports mistral-7b-v0.1/lora/A100, so 1 and 2 GPUs are both feasible and
-    # min_gpu returns one recommendation, on 1 GPU.
+    # Every GPU count is feasible, so min_gpu returns one recommendation, on 1 GPU.
     assert len(recs) == 1
     assert recs[0].total_gpus == 1
     assert recs[0].strategy == "min_gpu"
-    assert recs[0].metadata["workflow"] == "grid_feasibility_simulate_policy"
+    assert recs[0].metadata["workflow"] == "min_gpu_doubling_feasibility_simulate"
     # A supported config has a finite, positive throughput.
     assert recs[0].predicted_throughput is not None
     assert math.isfinite(recs[0].predicted_throughput) and recs[0].predicted_throughput > 0
@@ -424,14 +407,3 @@ def test_the_tie_break_does_not_depend_on_the_order_the_grid_enumerated():
         shuffled = [fresh()[i] for i in order]
         got = [(c.throughput, c.total_gpus, c.batch_size) for c in rank_candidates(shuffled, "balanced", top_k=4)]
         assert got == expected, order
-
-
-def test_min_gpu_keeps_its_own_primary_then_shares_the_tie_break():
-    # min_gpu sorts by GPU count first and then by the shared tie-break.
-    a = _cand(total_gpus=2, throughput=200.0, batch_size=32)
-    b = _cand(total_gpus=2, throughput=200.0, batch_size=8)
-    c = _cand(total_gpus=1, throughput=50.0, batch_size=64)
-
-    ranked = rank_candidates([a, b, c], "min_gpu", top_k=3)
-
-    assert [(x.total_gpus, x.batch_size) for x in ranked] == [(1, 64), (2, 8), (2, 32)]

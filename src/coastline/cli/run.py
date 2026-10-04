@@ -10,6 +10,7 @@ import sys
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -28,14 +29,19 @@ logger = logging.getLogger(__name__)
 
 _JSON_JOB_SHAPE = '{"workload": {...}, "context": {...}}'
 
+# A workload without gpus_per_node and number_of_nodes is a 1-GPU job; min_gpu reads that
+# layout for the job's total batch, and the weighted policies search their grid whatever it is.
 _DEFAULT_WORKLOAD = {
     "llm_model": "llama3.1-70b",
     "fine_tuning_method": "lora",
     "tokens_per_sample": 1024,
     "batch_size": 32,
-    "gpus_per_node": 8,
-    "number_of_nodes": 1,
 }
+
+
+def _optional_int(value: Any) -> int | None:
+    """``value`` as an int, or None for a missing, null or zero value."""
+    return int(value) if value else None
 
 
 def _workload_and_context(
@@ -64,8 +70,8 @@ def _workload_and_context(
         # instead of failing in int(None), e.g. config/coastline_functionality/experiment.yaml.
         tokens_per_sample=int(wl.get("tokens_per_sample") or _DEFAULT_WORKLOAD["tokens_per_sample"]),
         batch_size=int(wl.get("batch_size") or _DEFAULT_WORKLOAD["batch_size"]),
-        gpus_per_node=int(wl.get("gpus_per_node") or _DEFAULT_WORKLOAD["gpus_per_node"]),
-        number_of_nodes=int(wl.get("number_of_nodes") or _DEFAULT_WORKLOAD["number_of_nodes"]),
+        gpus_per_node=_optional_int(wl.get("gpus_per_node")),
+        number_of_nodes=_optional_int(wl.get("number_of_nodes")),
     )
 
     # Cluster budget: --cluster-gpus if given, else infrastructure.yaml. The config grid still

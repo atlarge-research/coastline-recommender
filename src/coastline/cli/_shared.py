@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from typing import NoReturn, Optional
 
@@ -36,6 +36,19 @@ def positive_int(text: str) -> int:
     if value < 1:
         raise argparse.ArgumentTypeError(f"must be at least 1, got {value}")
     return value
+
+
+def name_type(normalize: Callable[[str], str]) -> Callable[[str], str]:
+    """argparse ``type=`` that maps a name with ``normalize``. Its ValueError, which lists the
+    choices, becomes the usage error."""
+
+    def parse(text: str) -> str:
+        try:
+            return normalize(text)
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError(str(exc)) from None
+
+    return parse
 
 
 def error_message(exc: BaseException) -> str:

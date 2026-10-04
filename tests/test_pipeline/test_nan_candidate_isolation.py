@@ -81,11 +81,12 @@ class _StubPredictor(BasePredictor):
 
 def _pipeline(throughput_predictor, power_predictor):
     # One batch size gives one candidate per total_gpus, and top_k=5 returns every survivor.
-    # With no preset or weights in the config, from_config uses balanced weights (alpha = beta = 0.5).
+    # The balanced preset sets alpha = beta = 0.5.
     return GridWorkflowPipeline.from_config(
         config={"grid": {"batch_sizes": [8], "total_gpus": [1, 2, 4], "top_k": 5}},
-        selection_policy="performance",
+        selection_policy="balanced",
         strategy_name="test",
+        preset="balanced",
         throughput_predictor=throughput_predictor,
         power_predictor=power_predictor,
         feasibility_checker=NoOpFeasibilityChecker(),

@@ -1,4 +1,10 @@
-"""MinGPU strategy: grid, feasibility and simulation, then the fewest feasible GPUs."""
+"""Min-GPU strategy: the thesis min-GPU algorithm, as in IBM AutoConf's min-GPU recommender.
+
+The job's total batch (per-device batch x its GPUs, 1 GPU without a layout) is kept. For g = 1, 2,
+4, ... up to the context's maximum GPUs, the workload with g GPUs and that total split evenly over
+them is checked for feasibility; the first feasible one is returned. Only the returned
+configurations are simulated. See ``GridWorkflowPipeline._recommend_min_gpu``.
+"""
 
 import logging
 from typing import Optional
@@ -15,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 class MinGPUStrategy(BaseStrategy):
-    """Minimum-GPU policy: picks the feasible candidate with the fewest total GPUs."""
+    """Minimum-GPU policy: the first feasible GPU count in 1, 2, 4, ... for the job's total batch."""
 
     def __init__(
         self,
@@ -36,7 +42,7 @@ class MinGPUStrategy(BaseStrategy):
                 throughput_predictor=throughput_predictor,
                 power_predictor=power_predictor,
             )
-        logger.info("MinGPUStrategy using unified grid workflow (policy=min_gpu)")
+        logger.info("MinGPUStrategy: first feasible GPU count in 1, 2, 4, ... (policy=min_gpu)")
 
     def recommend(
         self,

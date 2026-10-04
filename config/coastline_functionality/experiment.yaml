@@ -11,10 +11,14 @@ workload:
   tokens_per_sample: 2048
   batch_size: 8
 
-# Ranking: multi_objective with the balanced preset (the default), or min_gpu.
+# Ranking: multi_objective with the performance preset (the default), or min_gpu. Presets weigh
+# alpha x runtime score + beta x energy score: performance 0.8/0.2, balanced 0.5/0.5, energy
+# (also energy-saver) 0.2/0.8. min_gpu keeps the job's total batch (batch_size x gpus_per_node x
+# number_of_nodes, 1 GPU without a layout), takes the first feasible GPU count in 1, 2, 4, ...
+# with that total split over the GPUs, and does not use the grid.
 strategy:
   name: "multi_objective"
-  preset: "balanced"
+  preset: "performance"
 
 # The models for throughput, energy and feasibility.
 predictors:
@@ -30,7 +34,7 @@ predictors:
 grid:
   batch_sizes: [4, 8, 16, 32, 64]
   total_gpus: [1, 2, 4, 8, 16, 32]
-  top_k: 3
+  # top_k: 5      # configurations returned; unset, multi_objective returns 5 and min_gpu 1
 
 # The machine Coastline runs on (the cluster is described in infrastructure.yaml). A pipeline
 # stage may split its candidates across up to parallel_workers processes, and the next stage

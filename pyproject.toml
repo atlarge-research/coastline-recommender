@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "coastline-recommender"
-version = "0.2.3"
+version = "0.2.4"
 description = "Coastline: a context-aware recommender system for fine-tuning LLMs"
 readme = "README.md"
 license = "MIT"

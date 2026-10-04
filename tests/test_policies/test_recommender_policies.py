@@ -18,7 +18,8 @@ from coastline.sdk.predictors.performance.physics import KavierPredictor
 
 
 def _min_gpu_strategy(*, batch_sizes, total_gpus, top_k) -> MinGPUStrategy:
-    """MinGPUStrategy with a NoOp feasibility checker, so only the SystemContext limits the grid."""
+    """MinGPUStrategy with a NoOp feasibility checker, so only the SystemContext limits the GPU
+    counts. min_gpu reads only top_k from the grid."""
     pipeline = GridWorkflowPipeline.from_config(
         config={"grid": {"batch_sizes": batch_sizes, "total_gpus": total_gpus, "top_k": top_k}},
         selection_policy="min_gpu",
@@ -72,8 +73,8 @@ def restricted_context():
 
 
 def test_min_gpu_over_context_clamped_grid_returns_ascending_feasible_configs(test_workload, restricted_context):
-    """With max_gpus=4 the grid [1, 2, 4, 8, 16] keeps 1, 2 and 4 GPUs, each on one node, and
-    min_gpu returns them in ascending order."""
+    """With max_gpus=4 min_gpu checks 1, 2 and 4 GPUs, each on one node, and returns them in
+    doubling order."""
     recs = _min_gpu_strategy(batch_sizes=[4], total_gpus=[1, 2, 4, 8, 16], top_k=3).recommend(
         test_workload, restricted_context
     )
@@ -85,22 +86,15 @@ def test_min_gpu_over_context_clamped_grid_returns_ascending_feasible_configs(te
     ]
 
 
-def test_min_gpu_breaks_ties_within_equal_gpu_count_by_higher_throughput(test_workload, test_context):
-    """Within one GPU count, min_gpu puts the higher throughput first.
+def test_min_gpu_keeps_the_jobs_total_batch_on_every_gpu_count(test_workload, test_context):
+    """min_gpu explores GPU counts only: the grid's batch sizes and GPU counts are not used, and
+    every returned configuration splits the job's total batch (4 per device on 8 GPUs, so 32)
+    over its GPUs, with Kavier's predictions."""
+    recs = _min_gpu_strategy(batch_sizes=[2, 8], total_gpus=[1, 2], top_k=10).recommend(test_workload, test_context)
 
-    Kavier throughput rises with batch size at a fixed GPU count (at 1 GPU: 3464.5, 3603.9 and
-    3743.2 tok/s for batch 2, 4 and 8), so each GPU group lists batch 8, 4, 2.
-    """
-    recs = _min_gpu_strategy(batch_sizes=[2, 4, 8], total_gpus=[1, 2], top_k=10).recommend(test_workload, test_context)
-
-    assert [(r.total_gpus, r.metadata["batch_size"]) for r in recs] == [
-        (1, 8),
-        (1, 4),
-        (1, 2),
-        (2, 8),
-        (2, 4),
-        (2, 2),
-    ]
+    # max_gpus is 16, so the doubling stops there.
+    assert [(r.total_gpus, r.metadata["batch_size"]) for r in recs] == [(1, 32), (2, 16), (4, 8), (8, 4), (16, 2)]
+    assert all(r.predicted_throughput and r.predicted_throughput > 0 for r in recs)
 
 
 def test_energy_preset_diverges_toward_lower_power_than_performance_preset(test_workload, test_context):

@@ -8,6 +8,7 @@ from typing import Any, List, Optional, Union
 
 from coastline.sdk.constants import (
     DEFAULT_BATCH_SIZES,
+    DEFAULT_GOAL,
     DEFAULT_GPUS_PER_NODE,
     GPU_BUDGETS,
     EnergyBackend,
@@ -99,20 +100,32 @@ class Coastline:
         goal: Optional[str] = None,
         context: Optional[SystemContext] = None,
         strategy: str = "multi_objective",
-        preset: str = "balanced",
+        preset: str = DEFAULT_GOAL,
         alpha: Optional[float] = None,
         beta: Optional[float] = None,
         total_gpus: Optional[List[int]] = None,
         batch_sizes: Optional[List[int]] = None,
-        top_k: int = 5,
+        top_k: Optional[int] = None,
         max_gpus: int = 16,
     ) -> List[Recommendation]:
         """Recommend GPU and node configurations for ``workload`` (WorkloadSpec, dict or CSV path).
 
-        Returns a ``list[Recommendation]``, best first. ``goal`` (``"balanced"``,
-        ``"performance"``, ``"energy"`` or ``"min_gpu"``) takes the same values as in
+        Returns a ``list[Recommendation]``, best first. ``goal`` (``"performance"``, the default,
+        ``"balanced"``, ``"energy"`` or ``"min_gpu"``) takes the same values as in
         ``coastline.recommend(batch, goal=...)`` and sets ``strategy`` and ``preset``. Pass
         ``strategy``, ``preset``, ``alpha`` and ``beta`` to set them by hand.
+
+        The multi-objective score is ``alpha * runtime_score + beta * energy_score``: ``alpha``
+        is the performance (runtime) weight and ``beta`` the energy weight. The presets are
+        balanced (0.5, 0.5), performance (0.8, 0.2) and energy, also named energy-saver
+        (0.2, 0.8). Given weights override the preset and are divided by their sum.
+
+        ``min_gpu`` ignores ``total_gpus`` and ``batch_sizes``. It keeps the job's total batch,
+        ``batch_size`` times the workload's GPUs (``gpus_per_node`` x ``number_of_nodes``, 1 when
+        not given), and returns the first feasible count of 1, 2, 4, ... GPUs up to ``max_gpus``
+        (or the context's maximum) with that total split over them.
+
+        ``top_k`` is how many configurations to return: by default 5, and 1 for ``min_gpu``.
         """
         if max_gpus < 1:
             raise ValueError(f"max_gpus must be >= 1, got {max_gpus}")

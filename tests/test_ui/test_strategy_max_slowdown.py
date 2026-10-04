@@ -1,7 +1,8 @@
 """The dashboard applies the policy file's `strategy.max_slowdown`, like the batch CSV path does.
 
-`max_slowdown: 1.0` keeps only the fastest configuration, so under min_gpu the pick moves from the
-fewest GPUs to the fastest layout. Kavier and the `rules` checker need no AutoConf or ML install.
+`max_slowdown: 1.0` keeps only the fastest configuration, so under the energy preset the pick moves
+from a small, low-power layout to the fastest one. Kavier and the `rules` checker need no AutoConf or
+ML install. (min_gpu ignores max_slowdown; it picks by feasibility alone.)
 """
 
 from __future__ import annotations
@@ -21,7 +22,8 @@ _BODY = {
     "hardware_mode": "total",
     "total_gpus": 8,
     "prediction_model": "kavier",
-    "strategy": "min_gpu",
+    "strategy": "multi_objective",
+    "preset": "energy",
 }
 
 
@@ -44,8 +46,8 @@ def _candidates(tmp_path, monkeypatch, strategy: dict) -> list[dict]:
 
 
 def test_max_slowdown_in_the_policy_file_guards_the_dashboard(tmp_path, monkeypatch) -> None:
-    unguarded = _candidates(tmp_path, monkeypatch, {"name": "min_gpu"})
-    guarded = _candidates(tmp_path, monkeypatch, {"name": "min_gpu", "max_slowdown": 1.0})
+    unguarded = _candidates(tmp_path, monkeypatch, {"name": "multi_objective"})
+    guarded = _candidates(tmp_path, monkeypatch, {"name": "multi_objective", "max_slowdown": 1.0})
 
     fastest = max(c["predicted_throughput"] for c in unguarded + guarded)
     assert all(c["predicted_throughput"] == pytest.approx(fastest) for c in guarded)

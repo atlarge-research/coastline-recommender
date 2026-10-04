@@ -38,8 +38,8 @@ workload:
   tokens_per_sample: 2048           # sequence length
   batch_size: 8                     # per device
 strategy:
-  name: multi_objective             # or min_gpu
-  preset: balanced                  # balanced | performance | energy
+  name: multi_objective             # or min_gpu, which uses no grid
+  preset: performance               # performance (default) | balanced | energy (or energy-saver)
 predictors:
   performance: kavier               # kavier | cache | intelligent | a data-driven model
   energy: kavier_power
@@ -69,8 +69,11 @@ coastline recommend-trace --input config/coastline_functionality/sample_trace.cs
 ```
 
 The workloads CSV has the columns `llm_model`, `fine_tuning_method`, `gpu_model`, `tokens_per_sample`, and
-`batch_size`. `recommend-trace` reads a fine-tuning trace with the columns of `sample_trace.csv`; `--goal` sets the
-goal (default `min_gpu`), and `--visual` also draws the cluster timeline (needs the `[plot]` extra).
+`batch_size`, and optionally the job's layout, `gpus_per_node` and `number_of_nodes`. `recommend-trace` reads a
+fine-tuning trace with the columns of `sample_trace.csv`, where `metadata.batch_size` is each job's total batch; a
+row whose total does not split evenly over its GPUs is kept unchanged under the weighted goals. `--goal` sets the
+goal (default `performance`; `min_gpu` keeps each job's total batch), and `--visual` also draws the cluster
+timeline (needs the `[plot]` extra).
 
 ### Infrastructure
 

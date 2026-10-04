@@ -128,7 +128,7 @@ def _recommend_inputs(seed: Optional[dict[str, Any]] = None) -> dict[str, Any]:
     }
 
 
-def _run_and_show(answers: dict[str, Any], top_k: int) -> tuple[list, dict[str, Any]]:
+def _run_and_show(answers: dict[str, Any], top_k: Optional[int]) -> tuple[list, dict[str, Any]]:
     with render.spinner("Predicting throughput & energy, ranking configurations..."):
         recs, meta = engine.run_pipeline(answers, top_k)
     console.print()
@@ -176,7 +176,7 @@ def _save_top(recs: list, rationale: Optional[str] = None) -> None:
     _save_to(recs[0], Path(path), rationale)
 
 
-def _followups(answers: dict[str, Any], recs: list, meta: dict[str, Any], top_k: int) -> str:
+def _followups(answers: dict[str, Any], recs: list, meta: dict[str, Any], top_k: Optional[int]) -> str:
     """Loop after a run. Returns 'new' (fresh workload) or 'quit'. Esc raises Abort, which takes
     the REPL back to the start as at any other prompt."""
     while True:
@@ -211,7 +211,7 @@ def _followups(answers: dict[str, Any], recs: list, meta: dict[str, Any], top_k:
             _save_top(recs, engine.recommendation_rationale(recs, meta))
 
 
-def _repl(top_k: int) -> None:
+def _repl(top_k: Optional[int]) -> None:
     seed: Optional[dict[str, Any]] = None
     while True:
         try:
@@ -232,7 +232,7 @@ def _repl(top_k: int) -> None:
     console.print("\n[cyan]  thanks for using Coastline[/]\n")
 
 
-def _run_noninteractive(top_k: int, save: Optional[Path]) -> None:
+def _run_noninteractive(top_k: Optional[int], save: Optional[Path]) -> None:
     answers = engine.defaults(engine.resolve_options())
     console.print("[dim]  non-interactive defaults[/]")
     recs, meta = _run_and_show(answers, top_k)
@@ -247,7 +247,14 @@ def main(
         "--interactive/--no-interactive",
         help="Run the guided REPL (default) or a one-shot run with defaults.",
     ),
-    top_k: int = typer.Option(5, "--top-k", "-k", min=1, max=20, help="How many configurations to rank."),
+    top_k: Optional[int] = typer.Option(
+        None,
+        "--top-k",
+        "-k",
+        min=1,
+        max=20,
+        help="How many configurations to rank (default: 5, and 1 for the fewest-GPUs goal).",
+    ),
     save: Optional[Path] = typer.Option(
         None, "--save", help="Write the top recommendation to this JSON file.", dir_okay=False, writable=True
     ),

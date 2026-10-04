@@ -7,4 +7,5 @@ Configs the code loads to run, and two example inputs. Edit with care.
 - **infrastructure.yaml**: the cluster's GPUs (total, per node, nodes). The CLI and the dashboard keep every
   recommendation within them. Edit with care.
 - **sample_workloads.csv**: example input for `coastline recommend-job --input ... --output ...`.
-- **sample_trace.csv**: example fine-tuning trace for `coastline recommend-trace`.
+- **sample_trace.csv**: example fine-tuning trace for `coastline recommend-trace`. `metadata.batch_size` is each job's
+  total batch, which splits evenly over the job's GPUs.

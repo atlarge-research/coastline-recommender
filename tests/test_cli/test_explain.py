@@ -41,52 +41,56 @@ def test_explain_renders_the_ranked_candidates_with_score_components(capsys) -> 
     main([*_BASE, "--top-k", "4"])
     out = capsys.readouterr().out
 
-    assert "rank  gpus  batch" in out
-    for column in ("p_score", "t_score", "combined"):
-        assert column in out
+    # The runtime score (alpha's) comes before the energy score (beta's), as in the score line.
+    assert "rank  gpus  batch   thr(tok/s)     P(W)  r_score  e_score  combined" in out
 
     rows = _rows(out)
     assert 1 <= len(rows) <= 4
     # Ranks are dense and ascending from 1.
     assert [int(r[0]) for r in rows] == list(range(1, len(rows) + 1))
-    # combined_score is the ranking key, so it must be non-increasing down the table.
+    # combined_score is the ranking key, so it is non-increasing down the table, unless near-ties
+    # were reordered by throughput, which the output then says.
     combined = [float(r[-1]) for r in rows]
-    assert combined == sorted(combined, reverse=True)
+    assert combined == sorted(combined, reverse=True) or "tie-break" in out
 
 
 def test_explain_shows_the_weighted_sum_the_policy_evaluated(capsys) -> None:
     main([*_BASE, "--preset", "balanced", "--top-k", "1"])
     out = capsys.readouterr().out
 
-    assert "alpha=0.50 power, beta=0.50 time" in out
-    # The printed terms add up: alpha*power + beta*time == combined.
+    assert "alpha=0.50 runtime, beta=0.50 energy" in out
+    # The printed terms add up: alpha*runtime + beta*energy == combined.
     match = re.search(
-        r"score\s+([\d.]+) x ([\d.]+) \(power\) \+ ([\d.]+) x ([\d.]+) \(time\) = ([\d.]+)",
+        r"score\s+([\d.]+) x ([\d.]+) \(runtime\) \+ ([\d.]+) x ([\d.]+) \(energy\) = ([\d.]+)",
         out,
     )
     assert match is not None, out
-    alpha, power_score, beta, throughput_score, combined = (float(g) for g in match.groups())
-    assert alpha * power_score + beta * throughput_score == pytest.approx(combined, abs=5e-3)
+    alpha, throughput_score, beta, power_score, combined = (float(g) for g in match.groups())
+    assert alpha * throughput_score + beta * power_score == pytest.approx(combined, abs=5e-3)
+    # The table row shows the same two scores, runtime first.
+    r_score, e_score = (float(cell) for cell in _rows(out)[0][-3:-1])
+    assert (r_score, e_score) == pytest.approx((throughput_score, power_score), abs=5e-3)
 
 
 def test_explain_presets_shift_the_weights(capsys) -> None:
-    """alpha weighs power and beta weighs time (selection.py), so energy is alpha-heavy."""
+    """alpha weighs runtime and beta weighs energy (selection.py), so energy is beta-heavy."""
     main([*_BASE, "--preset", "energy", "--top-k", "1"])
     energy_out = capsys.readouterr().out
     main([*_BASE, "--preset", "performance", "--top-k", "1"])
     performance_out = capsys.readouterr().out
 
-    assert "alpha=0.80 power, beta=0.20 time" in energy_out
-    assert "alpha=0.20 power, beta=0.80 time" in performance_out
+    assert "alpha=0.20 runtime, beta=0.80 energy" in energy_out
+    assert "alpha=0.80 runtime, beta=0.20 energy" in performance_out
 
 
 def test_explain_min_gpu_hides_the_score_it_does_not_have(capsys) -> None:
-    """min_gpu ranks on GPU count; its combined_score is a 1/total_gpus ordering proxy."""
+    """min_gpu picks by feasibility; it has no scores, so the table shows only predictions."""
     main([*_BASE, "--strategy", "min_gpu", "--top-k", "3"])
     out = capsys.readouterr().out
 
     assert "no weighted score" in out
     assert "combined" not in out
+    assert "r_score" not in out and "e_score" not in out
     assert "alpha=" not in out
     # It still reports the winner and the raw predictions.
     assert "winner" in out

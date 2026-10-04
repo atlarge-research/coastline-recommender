@@ -28,8 +28,8 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, field_validator
 
 from coastline import __version__
-from coastline.sdk.constants import DEFAULT_GPUS_PER_NODE, Strategy
-from coastline.sdk.exceptions import UnsupportedGPUError
+from coastline.sdk.constants import DEFAULT_GOAL, DEFAULT_GPUS_PER_NODE, Strategy, preset_key
+from coastline.sdk.exceptions import NoFeasibleGPUCountError, UnsupportedGPUError
 from coastline.sdk.io.infrastructure import Infrastructure, load_infrastructure
 from coastline.sdk.io.options_loader import load_available_options
 from coastline.sdk.io.run_config import (
@@ -56,7 +56,7 @@ INFRA: Optional[Infrastructure] = None
 STRATEGY_CONFIG: dict[str, Any] = {}
 
 # Prediction models offered in the UI (id and display name), in the order of the thesis
-# model-mapping table (tab:exp1:model_mapping): retrieval (PR), analytical (PA), data-driven (PD).
+# model-mapping table: retrieval (PR), analytical (PA), data-driven (PD).
 _PREDICTORS = [
     {"id": "cache", "name": "Cache lookup"},
     {"id": "kavier", "name": "Kavier (analytical)"},
@@ -114,7 +114,15 @@ class RecommendRequest(BaseModel):
     gpus_per_node: int = Field(default=8, gt=0)
     prediction_model: str = "kavier"
     strategy: Literal["min_gpu", "multi_objective"] = "multi_objective"
-    preset: Literal["energy", "balanced", "performance"] = "balanced"
+    # performance (default): alpha 0.8, beta 0.2; balanced: 0.5, 0.5; energy: 0.2, 0.8 (alpha
+    # weights runtime, beta energy).
+    preset: Literal["energy", "balanced", "performance"] = DEFAULT_GOAL
+
+    @field_validator("preset", mode="before")
+    @classmethod
+    def _canonical_preset(cls, value: Any) -> Any:
+        """Any letter case and any alias, such as 'energy-saver' for 'energy'."""
+        return preset_key(value) if isinstance(value, str) else value
 
     @field_validator("llm_model", "fine_tuning_method", "gpu_model")
     @classmethod
@@ -141,7 +149,7 @@ class BatchRecommendRequest(BaseModel):
 
     workloads: list[dict[str, Any]] = Field(..., min_length=1, max_length=_MAX_BATCH_WORKLOADS)
     top_k: int = Field(default=1, gt=0, le=20)
-    goal: str = "balanced"
+    goal: str = DEFAULT_GOAL
     predictor: str = "kavier"
     max_gpus: Optional[int] = Field(default=None, gt=0)
     # A finite cap of at least 1, as the library requires: below 1 not even the fastest config qualifies.
@@ -544,14 +552,14 @@ def recommend(body: RecommendRequest):
             gpus_per_node = min(_node_width() or DEFAULT_GPUS_PER_NODE, body.total_gpus)
             max_nodes = max(1, math.ceil(body.total_gpus / gpus_per_node))
 
+        # The hardware fields set the search budget. The form gives no job layout, so the job is a
+        # 1-GPU job and min_gpu takes its batch as the total batch.
         workload = WorkloadSpec(
             llm_model=body.llm_model,
             fine_tuning_method=body.fine_tuning_method,
             gpu_model=body.gpu_model,
             tokens_per_sample=body.tokens_per_sample,
             batch_size=body.batch_size,
-            gpus_per_node=gpus_per_node,
-            number_of_nodes=1,
         )
 
         gpu_model = body.gpu_model
@@ -615,6 +623,15 @@ def recommend(body: RecommendRequest):
     except ValueError as exc:
         logger.warning("Recommendation validation error: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except NoFeasibleGPUCountError as exc:
+        logger.warning("min_gpu: %s", exc)
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Minimum GPUs found no feasible GPU count: a total batch of {exc.total_batch} fails the "
+                f"feasibility check on {exc.gpu_counts_text()}. Try a smaller batch size or more GPUs."
+            ),
+        ) from exc
     except RuntimeError as exc:
         # The grid pipeline raises RuntimeError("no feasible candidates ...") when Kavier does
         # not know the (model, GPU, method), e.g. a misspelt or uncalibrated model. Answer 404
@@ -693,7 +710,7 @@ class RecommendCSVRequest(BaseModel):
     """CSV text in, recommendations as CSV text out (the IBM file pipeline over HTTP)."""
 
     csv: str = Field(..., max_length=5_000_000, description="Input CSV (one workload per row).")
-    goal: str = "balanced"
+    goal: str = DEFAULT_GOAL
     predictor: str = "kavier"
     max_gpus: Optional[int] = Field(default=None, gt=0)
     # Feasibility checker: autoconf | rules | none.

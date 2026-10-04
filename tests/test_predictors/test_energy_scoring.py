@@ -6,9 +6,9 @@ Scoring model:
     time_cost(c)     = 1 / c.throughput                           # runtime proxy
     power_score      = (p_max - power_cost) / (p_max - p_min)     # min-max, higher is better
     throughput_score = (t_max - time_cost) / (t_max - t_min)      # min-max over 1/throughput
-    combined_score   = alpha * power_score + beta * throughput_score
-alpha weights power and beta throughput. Preset weights (alpha, beta): energy (0.8, 0.2),
-balanced (0.5, 0.5), performance (0.2, 0.8).
+    combined_score   = alpha * throughput_score + beta * power_score
+alpha weights runtime (throughput) and beta energy (power), as in the thesis. Preset weights
+(alpha, beta): energy (0.2, 0.8), balanced (0.5, 0.5), performance (0.8, 0.2).
 
 Predictors report power per GPU, which barely changes with GPU count, so the score uses total
 cluster power. ``EvaluatedCandidate.power`` (shown as predicted_power_watts) stays per GPU.
@@ -88,14 +88,14 @@ def _pipeline(table, *, total_gpus, policy="balanced", alpha=0.5, beta=0.5):
 
 def test_energy_weighting_prefers_lower_total_power_regardless_of_gpu_count():
     """Power cost is total watts (watts per GPU x GPU count). With equal throughput, 2 GPUs at
-    100 W (200 W total) beat 1 GPU at 390 W (390 W total) under alpha=0.9, beta=0.1.
+    100 W (200 W total) beat 1 GPU at 390 W (390 W total) under alpha=0.1, beta=0.9.
 
         power_score: 2 GPUs (390 - 200) / 190 = 1.0, 1 GPU (390 - 390) / 190 = 0.0
         throughput_score: 1.0 for both (equal throughput)
-        combined: 2 GPUs 0.9 x 1.0 + 0.1 x 1.0 = 1.0, 1 GPU 0.9 x 0.0 + 0.1 x 1.0 = 0.1
+        combined: 2 GPUs 0.1 x 1.0 + 0.9 x 1.0 = 1.0, 1 GPU 0.1 x 1.0 + 0.9 x 0.0 = 0.1
     """
     table = {(1, 4): (500.0, 390.0), (2, 4): (500.0, 100.0)}
-    recs = _pipeline(table, total_gpus=[1, 2], alpha=0.9, beta=0.1).recommend(_workload(), _context())
+    recs = _pipeline(table, total_gpus=[1, 2], alpha=0.1, beta=0.9).recommend(_workload(), _context())
     by_gpus = {r.total_gpus: r.metadata for r in recs}
     assert recs[0].total_gpus == 2
     assert by_gpus[2]["power_score"] == pytest.approx(1.0)  # 200 W total, the lowest
@@ -107,15 +107,15 @@ def test_energy_weighting_prefers_lower_total_power_regardless_of_gpu_count():
 
 
 def test_performance_weighting_prefers_higher_throughput_despite_higher_total_power():
-    """Under alpha=0.2, beta=0.8 the higher-throughput config wins although it draws more total
+    """Under alpha=0.8, beta=0.2 the higher-throughput config wins although it draws more total
     power.
 
         LOW: 1 GPU at 100 W (100 W total), 300 tok/s. HIGH: 2 GPUs at 250 W (500 W total), 600 tok/s.
         power_score: LOW 1.0, HIGH 0.0. throughput_score: HIGH 1.0, LOW 0.0.
-        combined: HIGH 0.2 x 0.0 + 0.8 x 1.0 = 0.8, LOW 0.2 x 1.0 + 0.8 x 0.0 = 0.2
+        combined: HIGH 0.8 x 1.0 + 0.2 x 0.0 = 0.8, LOW 0.8 x 0.0 + 0.2 x 1.0 = 0.2
     """
     table = {(1, 4): (300.0, 100.0), (2, 4): (600.0, 250.0)}
-    recs = _pipeline(table, total_gpus=[1, 2], policy="performance", alpha=0.2, beta=0.8).recommend(
+    recs = _pipeline(table, total_gpus=[1, 2], policy="performance", alpha=0.8, beta=0.2).recommend(
         _workload(), _context()
     )
     by_gpus = {r.total_gpus: r.metadata for r in recs}
@@ -134,7 +134,7 @@ def test_power_score_is_linear_minmax_of_total_power_with_interior_point():
         power_score: (400 - 100) / 300 = 1.0, (400 - 250) / 300 = 0.5, (400 - 400) / 300 = 0.0
     """
     table = {(1, 4): (500.0, 100.0), (2, 4): (500.0, 125.0), (4, 4): (500.0, 100.0)}
-    recs = _pipeline(table, total_gpus=[1, 2, 4], policy="energy", alpha=0.8, beta=0.2).recommend(
+    recs = _pipeline(table, total_gpus=[1, 2, 4], policy="energy", alpha=0.2, beta=0.8).recommend(
         _workload(), _context()
     )
     by_gpus = {r.total_gpus: r.metadata for r in recs}
@@ -155,7 +155,7 @@ def test_throughput_score_is_minmax_of_inverse_throughput_not_throughput():
         Min-max over throughput itself would give (400 - 300) / (600 - 300) = 1/3.
     """
     table = {(1, 4): (300.0, 300.0), (2, 4): (400.0, 150.0), (4, 4): (600.0, 75.0)}
-    recs = _pipeline(table, total_gpus=[1, 2, 4], policy="performance", alpha=0.2, beta=0.8).recommend(
+    recs = _pipeline(table, total_gpus=[1, 2, 4], policy="performance", alpha=0.8, beta=0.2).recommend(
         _workload(), _context()
     )
     by_gpus = {r.total_gpus: r.metadata for r in recs}
@@ -171,11 +171,11 @@ def test_throughput_score_is_minmax_of_inverse_throughput_not_throughput():
 def test_lone_feasible_candidate_gets_degenerate_scores_of_one():
     """With one feasible candidate both min-max denominators are zero, and each score is 1.0."""
     table = {(2, 4): (500.0, 137.0)}
-    recs = _pipeline(table, total_gpus=[2], policy="energy", alpha=0.8, beta=0.2).recommend(_workload(), _context())
+    recs = _pipeline(table, total_gpus=[2], policy="energy", alpha=0.2, beta=0.8).recommend(_workload(), _context())
     assert len(recs) == 1
     assert recs[0].metadata["power_score"] == pytest.approx(1.0)
     assert recs[0].metadata["throughput_score"] == pytest.approx(1.0)
-    # combined = 0.8 x 1.0 + 0.2 x 1.0 = 1.0
+    # combined = 0.2 x 1.0 + 0.8 x 1.0 = 1.0
     assert recs[0].metadata["combined_score"] == pytest.approx(1.0)
 
 

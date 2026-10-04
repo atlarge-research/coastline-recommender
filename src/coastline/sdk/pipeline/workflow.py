@@ -1,4 +1,5 @@
-"""Recommendation workflow: grid search, feasibility check, simulation, policy selection."""
+"""Recommendation workflow: grid search, feasibility check, simulation, policy selection, and the
+thesis min-GPU algorithm."""
 
 from __future__ import annotations
 
@@ -6,13 +7,19 @@ import logging
 import math
 from typing import List, Optional, Union
 
-from coastline.sdk.constants import Preset
-from coastline.sdk.exceptions import NoPredictionError
+from coastline.sdk.constants import DEFAULT_GOAL, preset_key
+from coastline.sdk.exceptions import NoFeasibleGPUCountError, NoPredictionError
 from coastline.sdk.models.context import SystemContext
 from coastline.sdk.models.recommendation import Prediction, Recommendation
 from coastline.sdk.models.workload import WorkloadSpec
 from coastline.sdk.pipeline.feasibility import FeasibilityChecker, create_feasibility_checker
-from coastline.sdk.pipeline.grid import GridConfig, generate_candidates, grid_config_from_dict
+from coastline.sdk.pipeline.grid import (
+    GridConfig,
+    generate_candidates,
+    grid_config_from_dict,
+    job_total_batch,
+    min_gpu_candidates,
+)
 from coastline.sdk.pipeline.parallel import (
     RUNTIME_SECTION,
     WORKERS_KEY,
@@ -25,6 +32,7 @@ from coastline.sdk.pipeline.selection import (
     EvaluatedCandidate,
     NormalizationMode,
     SelectionPolicy,
+    check_selection_policy,
     normalize_candidates,
     rank_candidates,
 )
@@ -110,7 +118,12 @@ def simulate_chunk(
 
 
 class GridWorkflowPipeline:
-    """Grid, feasibility, simulation and policy selection, shared by all strategies."""
+    """The recommendation workflow shared by all strategies.
+
+    The weighted policies (balanced, performance, energy) search the grid: feasibility, then
+    simulation of every feasible candidate, then ranking. The min_gpu policy follows the thesis
+    algorithm instead (see :meth:`_recommend_min_gpu`).
+    """
 
     def __init__(
         self,
@@ -133,7 +146,8 @@ class GridWorkflowPipeline:
         self.power_predictor = power_predictor
         self.feasibility_checker = feasibility_checker
         self.grid_config = grid_config
-        self.selection_policy = selection_policy
+        # Checked here, so a bad policy fails before any candidate is checked or simulated.
+        self.selection_policy = check_selection_policy(selection_policy)
         self.strategy_name = strategy_name
         self.alpha = alpha
         self.beta = beta
@@ -142,6 +156,12 @@ class GridWorkflowPipeline:
         # Optional cap on how much slower than the fastest feasible config a recommendation may
         # be (None = off; see recommend()).
         self.runtime_guard_k = check_runtime_guard_k(runtime_guard_k)
+        if self.runtime_guard_k is not None and self.selection_policy == SelectionPolicy.MIN_GPU:
+            logger.warning(
+                "min_gpu ignores max_slowdown (runtime_guard_k=%s): it picks by feasibility alone and "
+                "simulates only the configurations it returns.",
+                self.runtime_guard_k,
+            )
         # Worker processes per stage; 1 runs in this process (the library default). Workers
         # rebuild the checker from predictor_config, since a loaded AutoGluon model cannot be
         # pickled.
@@ -152,16 +172,20 @@ class GridWorkflowPipeline:
     def _resolve_weights(
         strategy_cfg: dict, preset: Optional[str], alpha: Optional[float], beta: Optional[float]
     ) -> tuple[float, float]:
-        """Normalized (alpha, beta): from the arguments, else the preset, else the config, else balanced."""
+        """Normalized (alpha, beta): from the arguments, else the preset, else the config, else the
+        default goal's preset (performance).
+
+        alpha is the runtime weight and beta the energy weight.
+        """
         if alpha is None or beta is None:
-            if preset and preset in PRESET_WEIGHTS:
-                a, b = PRESET_WEIGHTS[preset]
+            if preset and preset_key(preset) in PRESET_WEIGHTS:
+                a, b = PRESET_WEIGHTS[preset_key(preset)]
             else:
                 a, b = strategy_cfg.get("alpha"), strategy_cfg.get("beta")
                 if a is not None and b is not None:
                     a, b = float(a), float(b)
                 else:
-                    a, b = PRESET_WEIGHTS.get(Preset.BALANCED.value, (0.5, 0.5))
+                    a, b = PRESET_WEIGHTS[DEFAULT_GOAL]
             alpha = a if alpha is None else alpha
             beta = b if beta is None else beta
         total = alpha + beta
@@ -240,6 +264,9 @@ class GridWorkflowPipeline:
         workload: WorkloadSpec,
         context: SystemContext,
     ) -> List[Recommendation]:
+        if self.selection_policy == SelectionPolicy.MIN_GPU:
+            return self._recommend_min_gpu(workload, context)
+
         logger.info(
             "Workflow (%s): %s - grid -> feasibility -> simulate -> %s",
             self.strategy_name,
@@ -325,9 +352,7 @@ class GridWorkflowPipeline:
         # Normalize throughput/power scores across the whole feasible set.
         normalize_candidates(evaluated, self.normalization)
 
-        # top_k applies to every policy; min_gpu already sorts by (total_gpus, -throughput),
-        # so top_k>1 gives a ranked shortlist.
-        top_k = self.grid_config.top_k
+        top_k = self.grid_config.top_k_for(self.selection_policy)
         ranked = rank_candidates(
             evaluated,
             self.selection_policy,
@@ -338,14 +363,114 @@ class GridWorkflowPipeline:
 
         return [self._to_recommendation(row, rank=i + 1) for i, row in enumerate(ranked)]
 
-    def _no_prediction_message(self, variant: WorkloadSpec, context: SystemContext, n_survivors: int) -> str:
+    def _recommend_min_gpu(self, workload: WorkloadSpec, context: SystemContext) -> List[Recommendation]:
+        """The thesis min-GPU algorithm, as in IBM AutoConf's min-GPU recommender.
+
+        The job's total batch is its per-device batch times its GPUs (1 GPU when the workload gives
+        no layout). For g = 1, 2, 4, ... while g <= ``context.max_gpus``, the candidate is the
+        workload with g GPUs in total and that total split evenly over them
+        (:func:`min_gpu_candidates`). The first feasible candidate is the pick; with ``top_k`` > 1
+        the first ``top_k`` feasible ones are returned, in that order. Without a top_k, one is
+        returned. The grid's batch sizes and GPU counts, the runtime guard and the score
+        normalization do not apply.
+
+        No simulation decides the pick. Only the picks are simulated, to report their throughput,
+        runtime and power. A pick the predictor cannot predict is dropped, and the others keep
+        their order; if none is left, this raises NoPredictionError. No feasible candidate raises
+        NoFeasibleGPUCountError.
+        """
+        logger.info(
+            "Workflow (%s): %s, first feasible GPU count in 1, 2, 4, ...",
+            self.strategy_name,
+            workload.llm_model,
+        )
+        top_k = self.grid_config.top_k_for(self.selection_policy)
+        candidates = min_gpu_candidates(workload, context)
+        picked: List[tuple[WorkloadSpec, dict]] = []
+        for variant in candidates:
+            feasible, feas_meta = self.feasibility_checker.is_feasible(variant)
+            if feasible:
+                picked.append((variant, feas_meta))
+                if len(picked) == top_k:
+                    break
+
+        if not picked:
+            raise NoFeasibleGPUCountError(
+                self.strategy_name, job_total_batch(workload), [c.total_gpus for c in candidates]
+            )
+
+        variants = [variant for variant, _ in picked]
+        predictions = simulate_chunk(self.throughput_predictor, self.power_predictor, variants, context)
+        predicted = [
+            (variant, feas_meta, prediction)
+            for (variant, feas_meta), prediction in zip(picked, predictions)
+            if prediction is not None
+        ]
+        if not predicted:
+            plural = "s" if len(variants) > 1 else ""
+            raise NoPredictionError(
+                self._no_prediction_message(
+                    variants[0], context, len(variants), subject=f"the feasible configuration{plural} min_gpu picked"
+                )
+            )
+        if len(predicted) < len(picked):
+            logger.warning(
+                "Workflow (%s): dropped %d of %d picks with no usable prediction",
+                self.strategy_name,
+                len(picked) - len(predicted),
+                len(picked),
+            )
+        return [
+            self._min_gpu_recommendation(variant, feas_meta, prediction, rank=i + 1)
+            for i, (variant, feas_meta, prediction) in enumerate(predicted)
+        ]
+
+    def _min_gpu_recommendation(
+        self,
+        variant: WorkloadSpec,
+        feas_meta: dict,
+        prediction: tuple[float, float, Optional[float]],
+        rank: int,
+    ) -> Recommendation:
+        """One min-GPU pick with its predictions.
+
+        min_gpu has no weighted score: the scores are None and ``combined_score`` is
+        1/total_gpus, the order of the picks.
+        """
+        throughput, power, runtime = prediction
+        metadata = {
+            "predicted_power_watts": power,
+            "combined_score": 1.0 / variant.total_gpus,
+            "rank": rank,
+            "selection_policy": self.selection_policy,
+            "tokens_per_watt": throughput / power,  # simulate_one keeps only positive power
+            "throughput_score": None,
+            "power_score": None,
+            "feasibility": feas_meta,
+            "batch_size": variant.batch_size,
+            "workflow": "min_gpu_doubling_feasibility_simulate",
+        }
+        return Recommendation(
+            gpus_per_node=variant.gpus_per_node or 1,
+            number_of_nodes=variant.number_of_nodes or 1,
+            total_gpus=variant.total_gpus,
+            strategy=self.strategy_name,
+            predicted_throughput=throughput,
+            predicted_runtime_seconds=runtime,
+            metadata=metadata,
+        )
+
+    def _no_prediction_message(
+        self, variant: WorkloadSpec, context: SystemContext, n_survivors: int, subject: Optional[str] = None
+    ) -> str:
         """The error text when every candidate that passed feasibility got no usable prediction.
 
         The simulation stage keeps only the numbers, so the predictors are asked once more, for
         one of those candidates, in the order ``simulate_one`` asks them: the throughput
         predictor, then the power predictor when the throughput was usable. The message names
         the one that gave nothing and the reason it reports (Kavier puts it in
-        ``metadata['error_detail']``). This runs only on the failure path.
+        ``metadata['error_detail']``). This runs only on the failure path. ``subject`` names the
+        candidates in the message; by default, the ones that passed the feasibility check.
         """
         config = self.predictor_config or {}
         name, predictor = config.get("performance"), self.throughput_predictor
@@ -360,18 +485,15 @@ class GridWorkflowPipeline:
         reason = metadata.get("error_detail") or metadata.get("error")
         if prediction is None and not reason:
             reason = getattr(predictor, "MISS_REASON", None)
-        message = (
-            f"Workflow ({self.strategy_name}): {label} gave no usable prediction for any of the "
-            f"{n_survivors} configurations that passed the feasibility check"
-        )
+        if subject is None:
+            subject = f"any of the {n_survivors} configurations that passed the feasibility check"
+        message = f"Workflow ({self.strategy_name}): {label} gave no usable prediction for {subject}"
         return f"{message}: {reason}" if reason else f"{message}."
 
     def _to_recommendation(self, row: EvaluatedCandidate, rank: int) -> Recommendation:
-        # min_gpu has no score, so 1/total_gpus stands in for it; other policies use combined_score.
-        score = 1.0 / max(row.total_gpus, 1) if self.selection_policy == SelectionPolicy.MIN_GPU else row.combined_score
         metadata = {
             "predicted_power_watts": row.power,
-            "combined_score": score,
+            "combined_score": row.combined_score,
             "rank": rank,
             "selection_policy": self.selection_policy,
             "tokens_per_watt": row.throughput / row.power if row.power > 0 else 0,

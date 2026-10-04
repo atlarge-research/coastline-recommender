@@ -31,11 +31,12 @@ CONTEXT = SystemContext(
     constraints=Constraints(max_gpus=128, gpus_per_node=8, max_nodes=16),
 )
 
+# (name, preset, alpha, beta): alpha weights runtime and beta energy, as in PRESET_WEIGHTS.
 POLICIES = [
     ("min_gpu", None, None, None),
     ("balanced", "balanced", 0.5, 0.5),
-    ("performance", "performance", 0.2, 0.8),
-    ("energy", "energy", 0.8, 0.2),
+    ("performance", "performance", 0.8, 0.2),
+    ("energy", "energy", 0.2, 0.8),
 ]
 
 

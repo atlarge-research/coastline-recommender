@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import List, Optional
 
 # Defined in sdk/constants.py and re-exported for callers.
@@ -53,6 +54,25 @@ def tie_break_key(candidate: "EvaluatedCandidate") -> tuple:
     )
 
 
+#: The policies rank_candidates ranks. A tuple, so a plain string such as "balanced" matches too.
+WEIGHTED_POLICIES: tuple[SelectionPolicy, ...] = (
+    SelectionPolicy.ENERGY,
+    SelectionPolicy.BALANCED,
+    SelectionPolicy.PERFORMANCE,
+)
+
+
+def check_selection_policy(policy: object) -> SelectionPolicy:
+    """The SelectionPolicy for ``policy`` in any letter case; ValueError listing the policies
+    for any other value."""
+    value = policy.value if isinstance(policy, Enum) else policy
+    key = str(value).strip().lower()
+    if key not in {p.value for p in SelectionPolicy}:
+        choices = ", ".join(p.value for p in SelectionPolicy)
+        raise ValueError(f"unknown selection policy {policy!r}; choose from {choices}")
+    return SelectionPolicy(key)
+
+
 def rank_candidates(
     candidates: List[EvaluatedCandidate],
     policy: SelectionPolicy,
@@ -61,20 +81,26 @@ def rank_candidates(
     beta: float = 0.5,
     top_k: int = 3,
 ) -> List[EvaluatedCandidate]:
-    """Sort feasible candidates by policy. The energy, balanced and performance policies share
-    one weighted-sum score (alpha weights power, beta weights time)."""
+    """Sort feasible candidates on the weighted score of the energy, balanced and performance
+    policies: ``alpha * throughput_score + beta * power_score``, the thesis score
+    S = alpha * s_r + beta * s_e, with alpha the runtime weight and beta the energy weight.
+
+    Any other policy raises ValueError. The min_gpu policy ranks no grid: the pipeline takes the
+    first feasible GPU count.
+    """
+    if policy == SelectionPolicy.MIN_GPU:
+        raise ValueError(
+            "rank_candidates ranks energy, balanced or performance; min_gpu picks the first feasible GPU count"
+        )
+    if policy not in WEIGHTED_POLICIES:
+        raise ValueError(f"unknown policy {policy!r}; choose from energy, balanced, performance")
     if not candidates:
         return []
 
     pool = [c for c in candidates if not c.dominated] or candidates  # drop dominated candidates before ranking
 
-    if policy == SelectionPolicy.MIN_GPU:
-        # Fewest GPUs first, then the shared tie-break.
-        ranked = sorted(pool, key=lambda c: (c.total_gpus, *tie_break_key(c)))
-        return ranked[: max(1, min(top_k, len(ranked)))]
-
     for c in pool:
-        c.combined_score = alpha * c.power_score + beta * c.throughput_score
+        c.combined_score = alpha * c.throughput_score + beta * c.power_score
     ranked = sorted(pool, key=lambda c: c.combined_score, reverse=True)
     # Candidates within TIE_EPS of the top score count as tied and are ordered by the shared
     # tie-break (highest throughput, fewest GPUs, smallest batch).
@@ -100,7 +126,8 @@ def normalize_candidates(
     candidates: List["EvaluatedCandidate"],
     mode: NormalizationMode = NormalizationMode.GRID,
 ) -> None:
-    """Set throughput_score and power_score in [0, 1], where higher is better.
+    """Set throughput_score (the runtime score) and power_score (the energy score) in [0, 1],
+    where higher is better.
 
     Axes: power = per-GPU watts x total_gpus; time = 1/throughput (the work cancels).
     mode ``grid``: min-max over all feasible candidates; ``frontier``: drop dominated ones first.

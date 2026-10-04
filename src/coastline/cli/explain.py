@@ -9,8 +9,8 @@ from __future__ import annotations
 import sys
 from typing import Any, Optional, Sequence
 
-from coastline.cli._shared import FriendlyParser, positive_int, report_errors
-from coastline.sdk.constants import PRESET_WEIGHTS, FeasibilityMode
+from coastline.cli._shared import FriendlyParser, name_type, positive_int, report_errors
+from coastline.sdk.constants import DEFAULT_GOAL, FeasibilityMode, normalize_preset
 
 
 def _build_parser() -> FriendlyParser:
@@ -25,23 +25,37 @@ def _build_parser() -> FriendlyParser:
     p.add_argument("--method", required=True, help="Fine-tuning method: full | lora | qlora.")
     p.add_argument("--gpu-model", required=True, help="GPU model, e.g. NVIDIA-A100-SXM4-80GB.")
     p.add_argument("--tokens", type=positive_int, required=True, help="Tokens per sample (sequence length).")
-    p.add_argument("--batch-size", type=positive_int, required=True, help="Per-device batch size.")
+    p.add_argument(
+        "--batch-size",
+        type=positive_int,
+        required=True,
+        help="Per-device batch size. min_gpu takes it as the total batch of a 1-GPU job.",
+    )
     p.add_argument(
         "--strategy",
         default="multi_objective",
         choices=["multi_objective", "min_gpu"],
-        help="Recommendation policy (default: multi_objective).",
+        help="Recommendation policy (default: multi_objective). min_gpu returns the first GPU count in "
+        "1, 2, 4, ... up to --max-gpus at which the batch, split over the GPUs, is feasible.",
     )
-    # choices= rejects a typo at parse time and lists the presets in the usage error.
+    # normalize_preset rejects a typo at parse time and lists the presets in the usage error. Any
+    # letter case and alias is accepted.
     p.add_argument(
         "--preset",
-        default="balanced",
-        choices=sorted(PRESET_WEIGHTS),
-        help="Weight preset for multi_objective (the -frontier variants rank only over the "
-        "non-dominated Pareto frontier). Ignored by min_gpu.",
+        default=DEFAULT_GOAL,
+        type=name_type(normalize_preset),
+        help="Weight preset for multi_objective: performance (default; alpha 0.8, beta 0.2), balanced "
+        "(0.5, 0.5) or energy (0.2, 0.8; also energy-saver), where alpha weights runtime and beta "
+        "energy. The -frontier variants rank only over the non-dominated Pareto frontier. Ignored by "
+        "min_gpu.",
     )
     p.add_argument("--max-gpus", type=positive_int, default=8, help="Largest GPU count to consider (default: 8).")
-    p.add_argument("--top-k", type=int, default=5, help="How many ranked candidates to show (default: 5).")
+    p.add_argument(
+        "--top-k",
+        type=int,
+        default=None,
+        help="How many ranked candidates to show (default: 5, and 1 for min_gpu).",
+    )
     p.add_argument(
         "--predictor",
         default="kavier",
@@ -75,15 +89,18 @@ def _render(recs: list, args: Any) -> str:
     ]
     if is_min_gpu:
         # min_gpu has no weighted score: workflow.py sets combined_score to 1/total_gpus for
-        # ordering and leaves preset, alpha and beta out of the metadata.
-        lines.append("policy    min_gpu  (fewest GPUs among feasible candidates; no weighted score)")
+        # ordering, leaves the scores empty and leaves preset, alpha and beta out of the metadata.
+        lines.append(
+            "policy    min_gpu  (first feasible GPU count in 1, 2, 4, ... for the job's total batch; no weighted score)"
+        )
     else:
         alpha, beta = meta.get("alpha"), meta.get("beta")
-        weights = "" if alpha is None or beta is None else f"  (alpha={alpha:.2f} power, beta={beta:.2f} time)"
+        weights = "" if alpha is None or beta is None else f"  (alpha={alpha:.2f} runtime, beta={beta:.2f} energy)"
         lines.append(f"policy    {policy}  preset={meta.get('preset', args.preset)}{weights}")
-    # Under min_gpu, combined_score is only the 1/total_gpus ordering key, so the column is left out.
-    header = "rank  gpus  batch   thr(tok/s)     P(W)  p_score  t_score"
-    lines += ["", header if is_min_gpu else header + "  combined"]
+    # min_gpu has no scores, so its table has only the predictions. r_score is the runtime score
+    # (alpha's) and e_score the energy score (beta's), in the order of the score line below.
+    header = "rank  gpus  batch   thr(tok/s)     P(W)"
+    lines += ["", header if is_min_gpu else header + "  r_score  e_score  combined"]
 
     for index, rec in enumerate(recs, start=1):
         rec_meta = rec.metadata or {}
@@ -91,12 +108,14 @@ def _render(recs: list, args: Any) -> str:
         row = (
             f"{index:>4}  {layout:>4}  {str(rec_meta.get('batch_size', '-')):>5}  "
             f"{_fmt(rec.predicted_throughput, 10, 1)}  "
-            f"{_fmt(rec_meta.get('predicted_power_watts'), 7, 1)}  "
-            f"{_fmt(rec_meta.get('power_score'), 7, 2)}  "
-            f"{_fmt(rec_meta.get('throughput_score'), 7, 2)}"
+            f"{_fmt(rec_meta.get('predicted_power_watts'), 7, 1)}"
         )
         if not is_min_gpu:
-            row += f"  {_fmt(rec_meta.get('combined_score'), 8, 3)}"
+            row += (
+                f"  {_fmt(rec_meta.get('throughput_score'), 7, 2)}"
+                f"  {_fmt(rec_meta.get('power_score'), 7, 2)}"
+                f"  {_fmt(rec_meta.get('combined_score'), 8, 3)}"
+            )
         lines.append(row)
 
     from coastline.sdk.recommend import engine
@@ -108,13 +127,13 @@ def _render(recs: list, args: Any) -> str:
         f"why       {engine.recommendation_rationale(recs, {'preset': meta.get('preset'), 'strategy_name': policy})}",
     ]
     if not is_min_gpu and meta.get("alpha") is not None:
-        # The weighted sum the policy computed: alpha * power_score + beta * throughput_score.
+        # The weighted sum the policy computed: alpha * runtime score + beta * energy score.
         power_score, throughput_score = meta.get("power_score"), meta.get("throughput_score")
         if power_score is not None and throughput_score is not None:
             alpha, beta = meta["alpha"], meta["beta"]
             lines.append(
-                f"score     {alpha:.2f} x {power_score:.2f} (power) + {beta:.2f} x "
-                f"{throughput_score:.2f} (time) = {alpha * power_score + beta * throughput_score:.3f}"
+                f"score     {alpha:.2f} x {throughput_score:.2f} (runtime) + {beta:.2f} x "
+                f"{power_score:.2f} (energy) = {alpha * throughput_score + beta * power_score:.3f}"
             )
     feasibility = meta.get("feasibility") or {}
     lines.append(f"feas      {args.feasibility}: {feasibility.get('reason', 'feasible')}")

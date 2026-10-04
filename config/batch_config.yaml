@@ -7,10 +7,12 @@
 # From Python: coastline.recommend_csv(config, input_csv, output_csv)
 
 strategy:
-  name: multi_objective    # ranking policy; or min_gpu (fewest feasible GPUs)
-  preset: balanced         # weight of throughput against energy; or performance, energy
+  name: multi_objective    # ranking policy; or min_gpu (first feasible GPU count in 1, 2, 4, ...
+                           # for the row's total batch, without the grid)
+  preset: performance      # alpha (runtime) 0.8, beta (energy) 0.2; or balanced (0.5, 0.5),
+                           # energy or energy-saver (0.2, 0.8)
   max_slowdown: 2.0        # drop configs more than 2x slower than the fastest feasible one;
-                           # omit for no limit
+                           # omit for no limit. min_gpu ignores it.
 
 predictors:
   performance: kavier      # analytical model; or tabpfn, catboost, ... (need the [ml] extra)

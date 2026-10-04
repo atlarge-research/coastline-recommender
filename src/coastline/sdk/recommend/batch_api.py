@@ -11,6 +11,7 @@ from typing import Any, Optional, Union
 
 import pandas as pd
 
+from coastline.sdk.constants import DEFAULT_GOAL, Strategy
 from coastline.sdk.pipeline.grid import check_top_k
 from coastline.sdk.policies import normalize_predictor
 from coastline.sdk.recommend import engine
@@ -19,8 +20,8 @@ from coastline.sdk.recommend._goals import goal_to_label
 Batch = Union[pd.DataFrame, list, dict]
 
 # Batch column and the ``engine`` answers key it fills. Workload columns are the WorkloadSpec
-# field names, with no synonyms; the other columns configure the search. ``max_slowdown`` is
-# handled separately.
+# field names, with no synonyms; the other columns configure the search. ``max_slowdown`` and the
+# layout columns are handled separately.
 _COLUMN_TO_ANSWER = {
     "llm_model": "llm_model",
     "fine_tuning_method": "fine_tuning_method",
@@ -35,6 +36,9 @@ _COLUMN_TO_ANSWER = {
     "lookup": "lookup",
 }
 _INT_COLUMNS = ("tokens_per_sample", "batch_size", "max_gpus")
+# The job's own layout. Only min_gpu reads it, for the job's total batch, so the weighted goals
+# skip these columns and a layout cell they would not use cannot fail a row.
+_LAYOUT_COLUMNS = ("gpus_per_node", "number_of_nodes")
 # Kept as positive floats: epochs may be fractional (HF num_train_epochs is a float), and only
 # the total token count is rounded (engine.run_pipeline).
 _POSITIVE_NUMBER_COLUMNS = ("dataset_size", "epochs")
@@ -124,6 +128,23 @@ def _missing_required(row: dict[str, Any], kwargs: dict[str, Any]) -> Optional[s
     return None
 
 
+def _positive_int(column: str, value: Any) -> int:
+    """``value`` as an int of at least 1; ValueError naming ``column`` otherwise.
+
+    A whole number written as a float is accepted: a pandas CSV export writes a column with
+    blanks as '8.0'.
+    """
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = math.nan
+    if not number.is_integer():
+        raise ValueError(f"{column} must be a whole number, got {value!r}")
+    if number < 1:
+        raise ValueError(f"{column} must be >= 1, got {value!r}")
+    return int(number)
+
+
 def _positive_number(column: str, value: Any) -> float:
     """``value`` as a finite float above zero; ValueError naming ``column`` otherwise."""
     number = float(value)
@@ -144,13 +165,19 @@ def _answers_for(
         if value is None:
             continue
         if column in _INT_COLUMNS:
-            value = int(value)
+            value = _positive_int(column, value)
         elif column in _POSITIVE_NUMBER_COLUMNS:
             # A zero or negative token count would make the runtime fall back to the
             # predictor's own (historical) runtime.
             value = _positive_number(column, value)
         answers[answer_key] = value
     answers["goal_label"] = _resolve_goal(answers["goal_label"])
+    strategy_name, _ = engine.GOALS[answers["goal_label"]]
+    if strategy_name == Strategy.MIN_GPU:
+        for column in _LAYOUT_COLUMNS:
+            value = _pick(row, column)
+            if value is not None:
+                answers[column] = _positive_int(column, value)
     if answers.get("predictor") is not None:
         # An unknown predictor fails the row; the normalized key makes 'XGBoost' run xgboost.
         answers["predictor"] = normalize_predictor(answers["predictor"])
@@ -194,7 +221,7 @@ def recommend(
     batch: Batch,
     *,
     top_k: int = 1,
-    goal: str = "balanced",
+    goal: str = DEFAULT_GOAL,
     predictor: str = "kavier",
     max_gpus: Optional[int] = None,
     max_slowdown: Optional[float] = None,
@@ -212,11 +239,16 @@ def recommend(
     Returns a ``pandas.DataFrame``: the input rows with the chosen configuration and its
     predictions, one row per ranked pick. Per-row columns override the keyword arguments, and a
     bad row gets ``feasible=False`` without stopping the others. ``recommended_batch_size`` is
-    the recommended per-device batch, empty on a failed row.
+    the recommended per-device batch, empty on a failed row. An integer column takes a whole
+    number of at least 1, also written as a float such as ``8.0``; a blank cell is missing.
 
-    goal, predictor: same values as in ``Coastline.recommend``; ``goal`` is ``"balanced"``,
-        ``"performance"``, ``"energy"`` or ``"min_gpu"``.
-    max_slowdown: keep configs within k times the fastest (finite k >= 1).
+    goal, predictor: same values as in ``Coastline.recommend``; ``goal`` is ``"performance"``
+        (the default), ``"balanced"``, ``"energy"`` or ``"min_gpu"``.
+    max_slowdown: keep configs within k times the fastest (finite k >= 1). ``min_gpu`` ignores
+        it, as it does ``batch_sizes``: it keeps each row's total batch, ``batch_size`` times the
+        row's ``gpus_per_node`` x ``number_of_nodes`` (1 GPU when the row gives no layout), and
+        tries 1, 2, 4, ... GPUs with that total split over them. The other goals do not read the
+        layout columns.
     dataset_size, epochs: positive; ``epochs`` may be fractional.
     feasibility: OOM checker, ``autoconf``, ``rules`` or ``none``. ``rules`` only checks for a
         positive GPU count and a per-device batch of at least 1 and needs no AutoConf install.

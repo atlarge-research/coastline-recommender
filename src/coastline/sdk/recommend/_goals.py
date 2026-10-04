@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from coastline.sdk.constants import GOAL_ALIASES, goal_key
+
 
 @dataclass(frozen=True)
 class Goal:
@@ -44,24 +46,14 @@ GOAL_SPECS: tuple[Goal, ...] = (
 GOALS: tuple[str, ...] = tuple(g.canonical for g in GOAL_SPECS)
 _BY_CANONICAL: dict[str, Goal] = {g.canonical: g for g in GOAL_SPECS}
 
-# Other accepted spellings of the canonical goals. Canonical names are accepted as well.
-_ALIASES: dict[str, str] = {
-    "runtime": "performance",
-    "lowest_runtime": "performance",
-    "throughput": "performance",
-    "energy_saver": "energy",
-    "min-gpu": "min_gpu",
-    "min_gpus": "min_gpu",
-    "fewest": "min_gpu",
-}
+# Other spellings of the goals are in constants.GOAL_ALIASES, which the presets share.
 
 
 def normalize_goal(goal: str) -> str:
     """The canonical goal for an accepted spelling; ValueError listing the options otherwise."""
-    key = str(goal).strip().lower().replace(" ", "_")
-    key = _ALIASES.get(key, key)
+    key = goal_key(goal)
     if key not in GOALS:
-        raise ValueError(f"unknown goal {goal!r}; choose from {list(GOALS)} (aliases: {sorted(_ALIASES)})")
+        raise ValueError(f"unknown goal {goal!r}; choose from {list(GOALS)} (aliases: {sorted(GOAL_ALIASES)})")
     return key
 
 
@@ -84,6 +76,6 @@ def goal_to_label(goal: str) -> str:
 def rationale_phrase(key: str | None) -> str | None:
     """The rationale phrase for a canonical goal, or None for a key without one (such as the
     ``multi_objective`` strategy name); the caller then uses a generic phrase."""
-    # Presets are case-insensitive, so a config's 'Performance' gets the performance phrase.
-    g = _BY_CANONICAL.get(str(key).strip().lower()) if key else None
+    # Presets are case-insensitive, so a config's 'Performance' or 'Energy-Saver' gets its phrase.
+    g = _BY_CANONICAL.get(goal_key(key)) if key else None
     return g.phrase if g else None

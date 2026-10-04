@@ -115,16 +115,16 @@
             <div class="field span-2">
               <label for="rec_strategy">Strategy</label>
               <select id="rec_strategy">
-                <option value="multi_objective" selected>Multi-objective: throughput vs. power</option>
+                <option value="multi_objective" selected>Multi-objective: runtime vs. power</option>
                 <option value="min_gpu">Minimum GPUs</option>
               </select>
             </div>
             <div class="field span-2" id="presetField">
-              <label for="rec_preset">Preset</label>
+              <label for="rec_preset">Preset (alpha / beta)</label>
               <select id="rec_preset">
-                <option value="balanced" selected>Balanced (0.5 / 0.5)</option>
-                <option value="performance">Performance (0.2 / 0.8)</option>
-                <option value="energy">Energy-saver (0.8 / 0.2)</option>
+                <option value="balanced">Balanced (0.5 / 0.5)</option>
+                <option value="performance" selected>Performance (0.8 / 0.2)</option>
+                <option value="energy">Energy-saver (0.2 / 0.8)</option>
               </select>
             </div>
             <p class="policy-note span-2" id="policyNote"></p>
@@ -366,9 +366,9 @@
       </div>
       <div class="usage-body">
         <h3>Recommend</h3>
-        <p>Set the workload: model, fine-tuning method, sequence length, batch, epochs and dataset size. Set the hardware budget as <em>Total GPUs</em> or as <em>Nodes x GPUs / node</em>. Pick a policy: <b>Multi-objective</b> ranks candidates by a weighted mix of throughput and power (presets Balanced, Performance and Energy-saver), and <b>Minimum GPUs</b> returns the fewest GPUs that pass the feasibility check.</p>
+        <p>Set the workload: model, fine-tuning method, sequence length, batch, epochs and dataset size. Set the hardware budget as <em>Total GPUs</em> or as <em>Nodes x GPUs / node</em>. Pick a policy: <b>Multi-objective</b> ranks candidates by alpha x runtime score + beta x energy score (presets Performance 0.8 / 0.2, the default, Balanced 0.5 / 0.5 and Energy-saver 0.2 / 0.8), and <b>Minimum GPUs</b> tries 1, 2, 4, ... GPUs with your batch split evenly over them and returns the first count that passes the feasibility check.</p>
         <p>The <em>Prediction model</em> estimates throughput and power for each candidate: <b>Kavier</b> (analytical) or one of 10 data-driven models. <em>Cache lookup</em> returns the measured run that matches the workload, and nothing when no run matches.</p>
-        <p><b>Recommend configuration</b> builds a grid of feasible candidates, predicts each one, ranks them and shows the top results.</p>
+        <p><b>Recommend configuration</b> builds a grid of feasible candidates, predicts each one, ranks them and shows the top results. Minimum GPUs returns one configuration unless the config sets top_k, and predicts only the ones it returns.</p>
 
         <h3>Schedule</h3>
         <p>The <b>Schedule</b> button on a row adds that configuration to the workload queue, with Kavier's per-GPU power for the workload. The energy totals use that power.</p>
