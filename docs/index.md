@@ -49,7 +49,7 @@ tasks[^tabpfn]. The weights are licensed under the Prior Labs License v1.2; a co
 @software{coastline,
   author = {Nicolae, Radu and Lotito, Daniele and Iosup, Alexandru},
   title  = {Coastline: Exploring the impact of multi-objective, context-aware recommenders on performance and
-            sustainability of datacenters under LLM fine-tuning workloads},
+            sustainability of datacenters under LLM fine-tuning workloads -- Software artifacts},
   year   = {2026},
   doi    = {10.5281/zenodo.23119267},
   url    = {https://github.com/atlarge-research/coastline-recommender}
