@@ -3,7 +3,7 @@ message: If you use Coastline, please cite it as below.
 title: >-
   Coastline: Exploring the impact of multi-objective, context-aware
   recommenders on performance and sustainability of datacenters under LLM
-  fine-tuning workloads
+  fine-tuning workloads -- Software artifacts
 abstract: >-
   LLM fine-tuning workloads are complex and, until now, unpredictable,
   making it difficult to estimate computational demands. Coastline is a
@@ -11,9 +11,9 @@ abstract: >-
   infrastructure constraints, workload demands, and user objectives, and
   recommends best-fit configurations as part of an LLM fine-tuning ecosystem.
 type: software
-version: 0.2.3
+version: 0.3.0
 doi: 10.5281/zenodo.23119267
-date-released: "2026-10-03"
+date-released: "2026-10-11"
 license: MIT
 repository-code: "https://github.com/atlarge-research/coastline-recommender"
 url: "https://atlarge-research.github.io/coastline-recommender/"

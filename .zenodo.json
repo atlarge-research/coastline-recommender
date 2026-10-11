@@ -1,8 +1,8 @@
 {
   "upload_type": "software",
-  "title": "Coastline: Exploring the impact of multi-objective, context-aware recommenders on performance and sustainability of datacenters under LLM fine-tuning workloads",
+  "title": "Coastline: Exploring the impact of multi-objective, context-aware recommenders on performance and sustainability of datacenters under LLM fine-tuning workloads -- Software artifacts",
   "description": "LLM fine-tuning workloads are complex and, until now, unpredictable, making it difficult to estimate computational demands. Coastline is a context-aware recommender system for fine-tuning LLMs. It accounts for infrastructure constraints, workload demands, and user objectives, and recommends best-fit configurations as part of an LLM fine-tuning ecosystem.",
-  "version": "0.2.3",
+  "version": "0.3.0",
   "license": "MIT",
   "access_right": "open",
   "creators": [

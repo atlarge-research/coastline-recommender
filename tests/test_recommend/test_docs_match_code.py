@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import re
+import tomllib
 from importlib import resources
 from pathlib import Path
 
@@ -23,14 +24,16 @@ _REPO = Path(__file__).resolve().parents[2]
 _CONFIG_DIRS = (_REPO / "config", _REPO / "src" / "coastline" / "sdk" / "io")
 
 
-def _unreleased() -> str:
+def _release_notes() -> str:
+    """The CHANGELOG section of the version in pyproject.toml."""
+    version = tomllib.loads((_REPO / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
     text = (_REPO / "CHANGELOG.md").read_text(encoding="utf-8")
-    return text.split("## [Unreleased]", 1)[1].split("\n## [", 1)[0]
+    return text.split(f"## [{version}]", 1)[1].split("\n## [", 1)[0]
 
 
 def _bullets() -> list[str]:
-    """The [Unreleased] bullets, each on one line."""
-    return [" ".join(item.split()) for item in re.split(r"\n- ", _unreleased())[1:]]
+    """The bullets of that section, each on one line."""
+    return [" ".join(item.split()) for item in re.split(r"\n- ", _release_notes())[1:]]
 
 
 def _config(name: str) -> Path:
@@ -64,7 +67,7 @@ def test_the_changelog_names_the_explain_column_rename():
 
 
 def test_the_changelog_names_the_max_gpus_check():
-    assert "max_gpus must be >= 1" in _unreleased()
+    assert "max_gpus must be >= 1" in _release_notes()
     out = coastline.recommend(
         [
             {

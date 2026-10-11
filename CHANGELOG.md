@@ -8,6 +8,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The version is se
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-11
+
 ### Added
 
 - The Zenodo DOI (10.5281/zenodo.23119267, all versions) in the README, `CITATION.cff` and the docs.
@@ -22,6 +24,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The version is se
 
 ### Changed
 
+- The citation title in `CITATION.cff`, `.zenodo.json` and the docs ends with "-- Software artifacts", as on
+  Zenodo.
 - The default goal is `performance` on every entry point: `coastline.recommend`, `coastline(...).recommend`,
   `explain`, `recommend-trace`, `recommend-job`, `recommend_csv`, the bundled configs and the dashboard. A config
   without a preset ranks with it, and the rationale names it.
@@ -165,6 +169,7 @@ The thesis freeze: the state of Coastline used for the MSc thesis experiments, t
   expects the total effective batch, so on more than one GPU it judged a batch smaller by a factor
   of the GPU count. The AutoConf boundary now multiplies the batch by the GPU count.
 
-[Unreleased]: https://github.com/atlarge-research/coastline-recommender/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/atlarge-research/coastline-recommender/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/atlarge-research/coastline-recommender/compare/v0.2.3...v0.3.0
 [0.2.3]: https://github.com/atlarge-research/coastline-recommender/compare/v0.2.2-thesis...v0.2.3
 [0.2.2]: https://github.com/atlarge-research/coastline-recommender/releases/tag/v0.2.2-thesis
